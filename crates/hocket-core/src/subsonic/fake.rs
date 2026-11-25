@@ -54,6 +54,9 @@ pub struct FakeState {
     next_id: u32,
     /// How long each file download takes (tests of in-flight fetches).
     download_delay: Option<std::time::Duration>,
+    /// How long each call to an endpoint takes (tests of requests still
+    /// running), by endpoint.
+    delays: HashMap<String, std::time::Duration>,
 }
 
 /// The fake server. Cheap to clone (shared state).
@@ -248,6 +251,23 @@ impl FakeServer {
     /// Make each file download take [delay] (after it is counted).
     pub fn set_download_delay(&self, delay: Option<std::time::Duration>) {
         self.state.lock().download_delay = delay;
+    }
+
+    /// Make each call to `endpoint` (`search3`, `getLyricsBySongId`) take
+    /// [delay] (after it is counted).
+    pub fn set_delay(&self, endpoint: &str, delay: Option<std::time::Duration>) {
+        let mut st = self.state.lock();
+        match delay {
+            Some(d) => st.delays.insert(endpoint.into(), d),
+            None => st.delays.remove(endpoint),
+        };
+    }
+
+    async fn delay(&self, endpoint: &str) {
+        let delay = self.state.lock().delays.get(endpoint).copied();
+        if let Some(d) = delay {
+            tokio::time::sleep(d).await;
+        }
     }
 
     pub fn calls(&self) -> Vec<String> {
@@ -731,6 +751,7 @@ impl SubsonicApi for FakeServer {
         let query = query.to_lowercase();
         Box::pin(async move {
             self.gate("search3")?;
+            self.delay("search3").await;
             let st = self.state.lock();
             let m = |s: &str| query.is_empty() || s.to_lowercase().contains(&query);
             Ok(SearchResult3 {
@@ -766,6 +787,7 @@ impl SubsonicApi for FakeServer {
         let id = id.to_string();
         Box::pin(async move {
             self.gate("getLyricsBySongId")?;
+            self.delay("getLyricsBySongId").await;
             Ok(self
                 .state
                 .lock()

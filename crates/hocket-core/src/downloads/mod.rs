@@ -164,6 +164,37 @@ pub enum DownloadError {
     Cancelled,
 }
 
+impl DownloadError {
+    /// A failure trying again unasked can't fix: the server said no (not
+    /// found, forbidden, any other 4xx but a timeout or rate limit, an answer
+    /// that isn't media) or the track isn't known. Network trouble, 5xx, a
+    /// sign-in that may be renewed and local trouble may pass.
+    pub fn is_permanent(&self) -> bool {
+        match self {
+            DownloadError::Server(e) => match e {
+                SubsonicError::NotFound(_)
+                | SubsonicError::Forbidden(_)
+                | SubsonicError::Protocol(_)
+                | SubsonicError::Unsupported(_) => true,
+                SubsonicError::Server { code, .. } => {
+                    (400..500).contains(code) && *code != 408 && *code != 429
+                }
+                SubsonicError::Auth(_) | SubsonicError::Network(_) | SubsonicError::Io(_) => false,
+            },
+            DownloadError::UnknownTrack(_) | DownloadError::UnknownAlbumTracks(_) => true,
+            DownloadError::Db(_)
+            | DownloadError::Io(_)
+            | DownloadError::OutOfSpace { .. }
+            | DownloadError::NotPinned(_)
+            | DownloadError::Cancelled => false,
+        }
+    }
+}
+
+/// Failed attempts after which a track is no longer retried unasked (the
+/// user's retry still fetches it).
+pub const MAX_AUTO_RETRY_FAILURES: i64 = 5;
+
 impl From<DownloadError> for JobError {
     fn from(e: DownloadError) -> Self {
         match e {
@@ -969,17 +1000,29 @@ impl Downloads {
         target: &PinTarget,
         transcode: bool,
     ) -> Result<Option<JobSpec>, DownloadError> {
+        self.plan_rows(server_id, target, transcode, "state IN ('wanted','failed')")
+    }
+
+    /// [`plan`](Self::plan) for the pin's rows matching `rows` (SQL over
+    /// `pin_tracks`).
+    fn plan_rows(
+        &self,
+        server_id: &str,
+        target: &PinTarget,
+        transcode: bool,
+        rows: &str,
+    ) -> Result<Option<JobSpec>, DownloadError> {
         let missing: Vec<String> = self.inner.db.with_conn(|c| {
-            let mut st = c.prepare_cached(
-                "SELECT track_id FROM pin_tracks WHERE server_id = ?1 AND target_kind = ?2 AND target_id = ?3 AND state IN ('wanted','failed')
+            let mut st = c.prepare_cached(&format!(
+                "SELECT track_id FROM pin_tracks WHERE server_id = ?1 AND target_kind = ?2 AND target_id = ?3 AND {rows}
                  AND track_id NOT IN (
                      SELECT ji.item FROM job_items ji JOIN jobs j ON j.id = ji.job_id
                      WHERE j.kind = 'download' AND j.state IN ('queued','running','paused') AND ji.state = 'pending'
                        AND json_extract(j.payload, '$.serverId') = ?1
                        AND json_extract(j.payload, '$.target.type') = ?2
                        AND json_extract(j.payload, '$.target.data.id') = ?3)
-                 ORDER BY rowid",
-            )?;
+                 ORDER BY rowid"
+            ))?;
             let rows = st.query_map(params![server_id, kind_name(target), target_id(target)], |r| r.get::<_, String>(0))?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })?;
@@ -1011,29 +1054,18 @@ impl Downloads {
     /// (planning and fetching need its tracks, and an account that synced
     /// is signed in); see `restore_v10::REPLAN_PREFIX`.
     pub fn replan_wanted(&self, server_id: &str) -> Result<Vec<JobSpec>, DownloadError> {
-        self.replan_state(server_id, "wanted")
-    }
-
-    /// Fetch jobs for this account's pins with tracks that failed (on a
-    /// network that went away, or a server that wasn't reachable) and no
-    /// unfinished job is fetching: the network is back.
-    pub fn replan_failed(&self, server_id: &str) -> Result<Vec<JobSpec>, DownloadError> {
-        self.replan_state(server_id, "failed")
-    }
-
-    fn replan_state(&self, server_id: &str, state: &str) -> Result<Vec<JobSpec>, DownloadError> {
         let mut out = vec![];
         for pin in self.pins(server_id)? {
             let unplanned: i64 = self.inner.db.with_conn(|c| {
                 Ok(c.query_row(
-                    "SELECT count(*) FROM pin_tracks WHERE server_id = ?1 AND target_kind = ?2 AND target_id = ?3 AND state = ?4
+                    "SELECT count(*) FROM pin_tracks WHERE server_id = ?1 AND target_kind = ?2 AND target_id = ?3 AND state = 'wanted'
                      AND track_id NOT IN (
                          SELECT ji.item FROM job_items ji JOIN jobs j ON j.id = ji.job_id
                          WHERE j.kind = 'download' AND j.state IN ('queued','running','paused') AND ji.state = 'pending'
                            AND json_extract(j.payload, '$.serverId') = ?1
                            AND json_extract(j.payload, '$.target.type') = ?2
                            AND json_extract(j.payload, '$.target.data.id') = ?3)",
-                    params![server_id, kind_name(&pin.target), target_id(&pin.target), state],
+                    params![server_id, kind_name(&pin.target), target_id(&pin.target)],
                     |r| r.get(0),
                 )?)
             })?;
@@ -1041,6 +1073,24 @@ impl Downloads {
                 if let Some(spec) = self.plan(server_id, &pin.target, pin.transcoded)? {
                     out.push(spec);
                 }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Fetch jobs for this account's pins with tracks that failed in a way
+    /// that may pass (on a network that went away, a server that wasn't
+    /// reachable) and no unfinished job is fetching: the account is
+    /// reachable again. Only those tracks: not ones still `wanted` (a job the
+    /// user cancelled stays cancelled), not ones the server refused, nor ones
+    /// that failed [`MAX_AUTO_RETRY_FAILURES`] times.
+    pub fn replan_failed(&self, server_id: &str) -> Result<Vec<JobSpec>, DownloadError> {
+        let rows =
+            format!("state = 'failed' AND permanent = 0 AND failures < {MAX_AUTO_RETRY_FAILURES}");
+        let mut out = vec![];
+        for pin in self.pins(server_id)? {
+            if let Some(spec) = self.plan_rows(server_id, &pin.target, pin.transcoded, &rows)? {
+                out.push(spec);
             }
         }
         Ok(out)
@@ -1347,56 +1397,20 @@ impl Downloads {
         transcode: bool,
         cancel: &CancellationToken,
     ) -> Result<u64, DownloadError> {
-        let track = self
-            .inner
-            .db
-            .track_ref(&api::TrackRef::new(server_id, track_id))?
-            .ok_or_else(|| DownloadError::UnknownTrack(track_id.into()))?;
-        let profile = if transcode {
-            self.profile_for_downloads()
-                .filter(|p| p.format.is_some() || p.max_bit_rate.is_some())
-        } else {
-            None
-        };
-        let needed = track.size_bytes.unwrap_or(0.0);
-        let dir = self.downloads_dir(server_id);
-        std::fs::create_dir_all(&dir)?;
-        if let Some(free) = self.inner.storage.free_bytes(&dir) {
-            if free - needed < MIN_FREE_BYTES {
-                return Err(DownloadError::OutOfSpace { needed, free });
-            }
-        }
-        // The original file when the provider offers one, else its stream
-        // (in the profile, when transcoding).
-        let original = profile
-            .is_none()
-            .then(|| provider.download_url(track_id))
-            .flatten();
-        let stream = match original {
-            Some(url) => ResolvedStream {
-                url,
-                headers: HashMap::new(),
-                expires_at: None,
-                container: track.suffix.clone(),
-                codec: None,
-                gain_db: None,
-                range_capable: true,
-                transcoded: false,
-                max_range: None,
-                content_length: None,
-                variant: String::new(),
-            },
-            None => {
-                provider
-                    .resolve_stream(
-                        track_id,
-                        &StreamRequest {
-                            profile: profile.clone(),
-                            offset_s: None,
-                            suffix: track.suffix.clone(),
-                        },
-                    )
-                    .await?
+        // Failing before the claim (an unknown track, no space, a stream
+        // that wouldn't resolve) leaves nothing claimed: the rows still
+        // waiting are failed here, or the pin would say "downloading" with
+        // nothing fetching it, and a later retry would never see them.
+        let (track, profile, stream) = match self
+            .prepare_fetch(provider, server_id, track_id, transcode)
+            .await
+        {
+            Ok(p) => p,
+            Err(e) => {
+                if let Err(db) = self.fail_unclaimed(server_id, track_id, &e) {
+                    tracing::warn!(error = %db, "marking a download failed");
+                }
+                return Err(e);
             }
         };
         let suffix = stream.container.clone().or(track.suffix.clone());
@@ -1460,7 +1474,7 @@ impl Downloads {
                 let rg = track.replay_gain.as_ref();
                 let kept = self.inner.db.with_conn(|c| {
                     Ok(c.execute(
-                        "UPDATE pin_tracks SET state = 'done', path = ?3, bytes = ?4, suffix = ?5, content_type = ?6, gain_db = COALESCE(gain_db, ?7), peak = COALESCE(peak, ?8), downloaded_at = ?9, error = NULL WHERE server_id = ?1 AND track_id = ?2",
+                        "UPDATE pin_tracks SET state = 'done', path = ?3, bytes = ?4, suffix = ?5, content_type = ?6, gain_db = COALESCE(gain_db, ?7), peak = COALESCE(peak, ?8), downloaded_at = ?9, error = NULL, failures = 0, permanent = 0 WHERE server_id = ?1 AND track_id = ?2",
                         params![
                             server_id,
                             track_id,
@@ -1491,18 +1505,117 @@ impl Downloads {
                 Ok(out.bytes)
             }
             Err(e) => {
-                self.mark_state(
-                    server_id,
-                    track_id,
-                    "failed",
-                    Some(&e.to_string()),
-                    0.0,
-                    None,
-                )?;
-                self.refresh_offline(server_id, track_id)?;
-                Err(e.into())
+                let e = DownloadError::from(e);
+                self.mark_failed(server_id, track_id, &e)?;
+                Err(e)
             }
         }
+    }
+
+    /// What [`fetch_track`](Self::fetch_track) needs before it claims the
+    /// track: the track, the profile it is fetched in and its stream.
+    async fn prepare_fetch(
+        &self,
+        provider: &dyn Provider,
+        server_id: &str,
+        track_id: &str,
+        transcode: bool,
+    ) -> Result<(api::Track, Option<TranscodingProfile>, ResolvedStream), DownloadError> {
+        let track = self
+            .inner
+            .db
+            .track_ref(&api::TrackRef::new(server_id, track_id))?
+            .ok_or_else(|| DownloadError::UnknownTrack(track_id.into()))?;
+        let profile = if transcode {
+            self.profile_for_downloads()
+                .filter(|p| p.format.is_some() || p.max_bit_rate.is_some())
+        } else {
+            None
+        };
+        let needed = track.size_bytes.unwrap_or(0.0);
+        let dir = self.downloads_dir(server_id);
+        std::fs::create_dir_all(&dir)?;
+        if let Some(free) = self.inner.storage.free_bytes(&dir) {
+            if free - needed < MIN_FREE_BYTES {
+                return Err(DownloadError::OutOfSpace { needed, free });
+            }
+        }
+        // The original file when the provider offers one, else its stream
+        // (in the profile, when transcoding).
+        let original = profile
+            .is_none()
+            .then(|| provider.download_url(track_id))
+            .flatten();
+        let stream = match original {
+            Some(url) => ResolvedStream {
+                url,
+                headers: HashMap::new(),
+                expires_at: None,
+                container: track.suffix.clone(),
+                codec: None,
+                gain_db: None,
+                range_capable: true,
+                transcoded: false,
+                max_range: None,
+                content_length: None,
+                variant: String::new(),
+            },
+            None => {
+                provider
+                    .resolve_stream(
+                        track_id,
+                        &StreamRequest {
+                            profile: profile.clone(),
+                            offset_s: None,
+                            suffix: track.suffix.clone(),
+                        },
+                    )
+                    .await?
+            }
+        };
+        Ok((track, profile, stream))
+    }
+
+    /// Fail the track's rows nobody has claimed (still `wanted`, or
+    /// `failed` before): see [`mark_failed`](Self::mark_failed).
+    pub fn fail_unclaimed(
+        &self,
+        server_id: &str,
+        track_id: &str,
+        error: &DownloadError,
+    ) -> DbResult<()> {
+        self.set_failed(
+            server_id,
+            track_id,
+            error,
+            "AND state IN ('wanted','failed')",
+        )
+    }
+
+    /// Fail the track's rows after a fetch that claimed them: the error is
+    /// kept, with whether a retry unasked could help, and the attempt counts
+    /// against [`MAX_AUTO_RETRY_FAILURES`].
+    fn mark_failed(&self, server_id: &str, track_id: &str, error: &DownloadError) -> DbResult<()> {
+        self.set_failed(server_id, track_id, error, "")
+    }
+
+    fn set_failed(
+        &self,
+        server_id: &str,
+        track_id: &str,
+        error: &DownloadError,
+        rows: &str,
+    ) -> DbResult<()> {
+        self.inner.db.with_conn(|c| {
+            c.execute(
+                &format!(
+                    "UPDATE pin_tracks SET state = 'failed', error = ?3, failures = failures + 1, permanent = ?4 WHERE server_id = ?1 AND track_id = ?2 {rows}"
+                ),
+                params![server_id, track_id, error.to_string(), error.is_permanent()],
+            )?;
+            Ok(())
+        })?;
+        self.refresh_offline(server_id, track_id)
     }
 
     /// Keep a complete stream-cache copy as the pin's file: moved into the
@@ -1626,24 +1739,6 @@ impl Downloads {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?)
-        })
-    }
-
-    fn mark_state(
-        &self,
-        server_id: &str,
-        track_id: &str,
-        state: &str,
-        error: Option<&str>,
-        bytes: f64,
-        path: Option<&str>,
-    ) -> DbResult<()> {
-        self.inner.db.with_conn(|c| {
-            c.execute(
-                "UPDATE pin_tracks SET state = ?3, error = ?4, bytes = CASE WHEN ?5 > 0 THEN ?5 ELSE bytes END, path = COALESCE(?6, path) WHERE server_id = ?1 AND track_id = ?2",
-                params![server_id, track_id, state, error, bytes, path],
-            )?;
-            Ok(())
         })
     }
 
@@ -2583,10 +2678,15 @@ impl JobRunner for DownloadRunner {
                 .map_err(|e| JobError::Failed(format!("bad payload: {e}")))?;
             // The pin's account: its provider fetches every track of it.
             let Some(provider) = providers.for_source(&payload.server_id).cloned() else {
-                return Err(JobError::Failed(format!(
-                    "account {} is not signed in",
-                    payload.server_id
-                )));
+                let error = format!("account {} is not signed in", payload.server_id);
+                // Its tracks fail rather than wait as "downloading" for a
+                // job that ended; signing in (the account reachable again)
+                // retries them.
+                let why = DownloadError::Server(SubsonicError::Auth(error.clone()));
+                for it in ctx.pending_items()? {
+                    dl.fail_unclaimed(&payload.server_id, &it.item, &why)?;
+                }
+                return Err(JobError::Failed(error));
             };
             let items = ctx.pending_items()?;
             let total = items.len() as u32;
@@ -3364,6 +3464,133 @@ mod tests {
         let q = JobQueue::new(f.db.clone(), Arc::new(WallClock));
         q.submit(specs[0].clone()).unwrap();
         assert!(f.dl.replan_failed("srv").unwrap().is_empty());
+    }
+
+    fn row(f: &Fixture, track: &str) -> (String, i64, bool) {
+        f.db.with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT state, failures, permanent FROM pin_tracks WHERE server_id = 'srv' AND track_id = ?1",
+                [track],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?)
+        })
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn only_failures_a_retry_may_fix_are_planned_again_unasked() {
+        let f = fixture();
+        let album = PinTarget::Album { id: "al0".into() };
+        // Pinned, its job never run (or cancelled): t0..t2 are `wanted`.
+        f.dl.pin("srv", &album, false).unwrap().unwrap();
+        assert!(
+            f.dl.replan_failed("srv").unwrap().is_empty(),
+            "wanted tracks (a cancelled job) aren't requeued"
+        );
+        let fail = |track: &str, e: DownloadError| f.dl.fail_unclaimed("srv", track, &e).unwrap();
+        fail(
+            "t0",
+            DownloadError::Server(SubsonicError::Network("tunnel".into())),
+        );
+        fail(
+            "t1",
+            DownloadError::Server(SubsonicError::NotFound("http 404".into())),
+        );
+        assert_eq!(row(&f, "t0"), ("failed".into(), 1, false));
+        assert_eq!(row(&f, "t1"), ("failed".into(), 1, true));
+        assert_eq!(row(&f, "t2").0, "wanted");
+        let specs = f.dl.replan_failed("srv").unwrap();
+        assert_eq!(specs.len(), 1);
+        assert_eq!(
+            specs[0].items,
+            vec!["t0"],
+            "not the refused or the wanted one"
+        );
+        // Failing again and again: no longer retried unasked.
+        for _ in 1..MAX_AUTO_RETRY_FAILURES {
+            fail(
+                "t0",
+                DownloadError::Server(SubsonicError::Network("tunnel".into())),
+            );
+        }
+        assert_eq!(row(&f, "t0").1, MAX_AUTO_RETRY_FAILURES);
+        assert!(f.dl.replan_failed("srv").unwrap().is_empty());
+        // The user's own retry (a plan) still fetches all of them, and a
+        // download clears the count.
+        let spec = f.dl.plan("srv", &album, false).unwrap().unwrap();
+        assert_eq!(spec.items, vec!["t0", "t1", "t2"]);
+        let job = run_job(&f, spec).await;
+        assert_eq!(job.state, api::JobState::Done);
+        assert_eq!(row(&f, "t0"), ("done".into(), 0, false));
+        assert_eq!(row(&f, "t1"), ("done".into(), 0, false));
+    }
+
+    #[test]
+    fn what_a_retry_cannot_fix() {
+        let server = |e: SubsonicError| DownloadError::Server(e).is_permanent();
+        let code = |code: u32| {
+            server(SubsonicError::Server {
+                code,
+                message: String::new(),
+            })
+        };
+        assert!(server(SubsonicError::NotFound("x".into())));
+        assert!(server(SubsonicError::Forbidden("x".into())));
+        assert!(server(SubsonicError::Protocol("x".into())));
+        assert!(code(400) && code(410) && code(416));
+        assert!(!code(408) && !code(429) && !code(500) && !code(0));
+        assert!(!server(SubsonicError::Network("x".into())));
+        assert!(!server(SubsonicError::Auth("x".into())));
+        assert!(DownloadError::UnknownTrack("x".into()).is_permanent());
+        assert!(!DownloadError::OutOfSpace {
+            needed: 1.0,
+            free: 0.0
+        }
+        .is_permanent());
+    }
+
+    #[tokio::test]
+    async fn a_failure_before_the_claim_fails_the_track_instead_of_leaving_it_downloading() {
+        let f = fixture();
+        let target = PinTarget::Track { id: "t2".into() };
+        let spec = f.dl.pin("srv", &target, false).unwrap().unwrap();
+        // The track left the mirror before its job ran: nothing to resolve.
+        f.db.with_conn(|c| {
+            c.execute("DELETE FROM tracks WHERE id = 't2'", [])?;
+            Ok(())
+        })
+        .unwrap();
+        let job = run_job(&f, spec).await;
+        assert_eq!(job.failed, 1);
+        assert_eq!(row(&f, "t2"), ("failed".into(), 1, true));
+        assert!(
+            f.dl.replan_failed("srv").unwrap().is_empty(),
+            "unknown: not retried unasked"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_job_for_an_account_not_signed_in_fails_its_tracks() {
+        let f = fixture();
+        let target = PinTarget::Album { id: "al0".into() };
+        let spec = f.dl.pin("srv", &target, false).unwrap().unwrap();
+        let q = JobQueue::new(f.db.clone(), Arc::new(WallClock));
+        q.register(
+            api::JobKind::Download,
+            1,
+            Arc::new(DownloadRunner::new(
+                f.dl.clone(),
+                crate::provider::ProviderSet::new(vec![]),
+            )),
+        );
+        let id = q.submit(spec).unwrap();
+        q.run_until_idle().await.unwrap();
+        assert_eq!(q.job(&id).unwrap().unwrap().state, api::JobState::Failed);
+        for t in ["t0", "t1", "t2"] {
+            assert_eq!(row(&f, t), ("failed".into(), 1, false), "{t}");
+        }
+        // Signed in again: they are planned again.
+        assert_eq!(f.dl.replan_failed("srv").unwrap()[0].items.len(), 3);
     }
 
     #[tokio::test]

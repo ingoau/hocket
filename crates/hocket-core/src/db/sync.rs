@@ -487,7 +487,17 @@ impl LibrarySync {
         f: impl FnOnce(&rusqlite::Transaction) -> DbResult<T>,
     ) -> Result<T, SyncError> {
         self.alive(obs)?;
-        Ok(self.db.with_tx(f)?)
+        // Again under the lock: removing the account may cancel the job
+        // (and delete its rows) while this waits for it.
+        self.db
+            .with_tx(|tx| {
+                if obs.cancelled() {
+                    Ok(None)
+                } else {
+                    f(tx).map(Some)
+                }
+            })?
+            .ok_or(SyncError::Cancelled)
     }
 
     async fn run_provider(
@@ -904,9 +914,10 @@ impl LibrarySync {
             .iter()
             .map(genre_from_body)
             .collect();
-        self.alive(obs)?;
-        self.db.replace_genres(self.server_id(), &genres, gen)?;
-        Ok(())
+        let sid = self.server_id().to_string();
+        self.write(obs, |tx| {
+            super::queries::replace_genres(tx, &sid, &genres, gen)
+        })
     }
 
     /// Mark-and-sweep plus derived counts.

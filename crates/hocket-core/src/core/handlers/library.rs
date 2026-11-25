@@ -1736,7 +1736,7 @@ impl Actor {
         // Fetches for tracks skipped past stop: on a bad link they would
         // otherwise hold the HTTP slots the new track's fetch needs.
         let keep = [current.as_ref(), next.as_ref()];
-        self.lyrics_inflight.retain(|(_, track), (_, task)| {
+        self.lyrics_inflight.retain(|(_, track), (_, _, task)| {
             let wanted = keep.contains(&Some(track));
             if !wanted {
                 task.abort();
@@ -1769,7 +1769,7 @@ impl Actor {
             }
         }
         let key = (sid.clone(), track_id.clone());
-        if let Some((announced, _)) = self.lyrics_inflight.get_mut(&key) {
+        if let Some((announced, _, _)) = self.lyrics_inflight.get_mut(&key) {
             // One fetch per track: its result is announced if any asker
             // wants it.
             *announced |= announce;
@@ -1781,11 +1781,13 @@ impl Actor {
             .settings
             .get_bool(crate::settings::keys::LYRICS_EXTERNAL_ENABLED);
         // A server that didn't answer its last probe would only make the
-        // fetch wait out its timeouts and retries.
-        let server_unreachable = self
-            .accounts
-            .for_source(&sid)
-            .is_some_and(|a| !a.info.reachable && !a.probing);
+        // fetch wait out its timeouts and retries. Asked for (`force`), it
+        // is asked anyway.
+        let server_unreachable = !force
+            && self
+                .accounts
+                .for_source(&sid)
+                .is_some_and(|a| !a.info.reachable && !a.probing);
         let recently_failed = !force && self.lyrics_failed.contains_key(&key);
         if self.is_offline() || recently_failed || (server_unreachable && !external_enabled) {
             // Nothing to ask; the view says there are none for now.
@@ -1806,6 +1808,8 @@ impl Actor {
             caches.lyrics_get(&sid, &track_id, LyricsSource::Server),
             Ok(Some(None))
         ) && !force;
+        self.lyrics_generation += 1;
+        let generation = self.lyrics_generation;
         let task = self.spawn_abortable(async move {
             let mut found: Option<Lyrics> = None;
             let mut failed = false;
@@ -1887,9 +1891,11 @@ impl Actor {
                 track_id,
                 lyrics: found,
                 announce,
+                generation,
             }));
         });
-        self.lyrics_inflight.insert(key, (announce, task));
+        self.lyrics_inflight
+            .insert(key, (announce, generation, task));
     }
 
     pub(crate) fn on_lyrics_fetched(
@@ -1899,10 +1905,18 @@ impl Actor {
         lyrics: Option<Lyrics>,
         announce: bool,
         failed: bool,
+        generation: u64,
     ) {
         let key = (server_id, track_id.clone());
-        let announce = match self.lyrics_inflight.remove(&key) {
-            Some((announced, _)) => announced || announce,
+        let announce = match self.lyrics_inflight.get(&key) {
+            // A fetch since stopped (it had sent this before it was
+            // aborted) whose track is fetched again: the newer one answers,
+            // and its entry (and whoever asked it to announce) stays.
+            Some((_, g, _)) if *g != generation => return,
+            Some(_) => match self.lyrics_inflight.remove(&key) {
+                Some((announced, _, _)) => announced || announce,
+                None => announce,
+            },
             None => announce,
         };
         if failed {
@@ -1989,17 +2003,24 @@ impl Actor {
                 // A newer search replaces the one still asking the servers
                 // (one per keystroke): it stops, and its caller gets its
                 // one server batch, empty.
-                if let Some((old_id, old_query, task)) = self.server_search.take() {
+                // A caller reusing the request id gets only the new
+                // search's batch: two for one id would read as the answer
+                // twice.
+                if let Some((_, old_id, old_query, task)) = self.server_search.take() {
                     task.abort();
-                    self.emit(Event::SearchResults {
-                        results: SearchResults {
-                            request_id: old_id,
-                            query: old_query,
-                            from_server: true,
-                            ..Default::default()
-                        },
-                    });
+                    if old_id != request_id {
+                        self.emit(Event::SearchResults {
+                            results: SearchResults {
+                                request_id: old_id,
+                                query: old_query,
+                                from_server: true,
+                                ..Default::default()
+                            },
+                        });
+                    }
                 }
+                self.server_search_seq += 1;
+                let seq = self.server_search_seq;
                 let tx = self.tx.clone();
                 let db = self.db.clone();
                 let now = self.now();
@@ -2031,9 +2052,9 @@ impl Actor {
                     }
                     // Sent even when every provider failed: the caller is
                     // waiting for exactly one server batch.
-                    let _ = tx.send(ActorMsg::Internal(Internal::ServerSearch { results }));
+                    let _ = tx.send(ActorMsg::Internal(Internal::ServerSearch { seq, results }));
                 });
-                self.server_search = Some((pending.0, pending.1, task));
+                self.server_search = Some((seq, pending.0, pending.1, task));
             }
         } else if include_server {
             self.emit(Event::SearchResults {
@@ -2043,11 +2064,12 @@ impl Actor {
         local
     }
 
-    /// A server search's batch, unless a newer search already answered it
-    /// (empty) when it replaced it.
-    pub(crate) fn on_server_search(&mut self, results: SearchResults) {
+    /// A server search's batch, unless a newer search replaced it (and
+    /// answered it, empty, then): matched by sequence number, not the
+    /// caller's request id, which a newer search may reuse.
+    pub(crate) fn on_server_search(&mut self, seq: u64, results: SearchResults) {
         match &self.server_search {
-            Some((id, _, _)) if *id == results.request_id => self.server_search = None,
+            Some((s, _, _, _)) if *s == seq => self.server_search = None,
             _ => return,
         }
         self.emit(Event::SearchResults { results });

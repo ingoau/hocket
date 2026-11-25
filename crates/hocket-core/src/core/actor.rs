@@ -288,13 +288,21 @@ pub(crate) struct Actor {
     /// Track the last lyrics fetch was announced for (now-playing changes).
     pub lyrics_for: Option<TrackId>,
     /// Lyrics fetches running, by `(source, track)`: whether the result is
-    /// announced, and how to stop it once the track is no longer wanted.
-    pub lyrics_inflight: HashMap<(ServerId, TrackId), (bool, tokio::task::AbortHandle)>,
+    /// announced, the fetch's generation (its `LyricsFetched` carries it: an
+    /// answer from a fetch since replaced is ignored) and how to stop it once
+    /// the track is no longer wanted.
+    pub lyrics_inflight: HashMap<(ServerId, TrackId), (bool, u64, tokio::task::AbortHandle)>,
+    /// The last lyrics fetch generation handed out.
+    pub lyrics_generation: u64,
     /// Lyrics fetches that failed on the network, until when (ms) they are
     /// not tried again.
     pub lyrics_failed: HashMap<(ServerId, TrackId), f64>,
-    /// The server search still running: its request id, query and task.
-    pub server_search: Option<(String, String, tokio::task::AbortHandle)>,
+    /// The server search still running: its sequence number (its
+    /// `ServerSearch` carries it; callers may reuse a request id), request
+    /// id, query and task.
+    pub server_search: Option<(u64, String, String, tokio::task::AbortHandle)>,
+    /// The last server search sequence number handed out.
+    pub server_search_seq: u64,
     pub media_art_pending: Option<(String, u32)>,
     /// When an artwork ask last re-probed an unreachable account (ms).
     pub art_probe_at: f64,
@@ -619,8 +627,10 @@ impl Actor {
             media_art: None,
             lyrics_for: None,
             lyrics_inflight: HashMap::new(),
+            lyrics_generation: 0,
             lyrics_failed: HashMap::new(),
             server_search: None,
+            server_search_seq: 0,
             media_art_pending: None,
             art_probe_at: f64::NEG_INFINITY,
             log_ring: VecDeque::new(),
@@ -782,14 +792,15 @@ impl Actor {
                 picks,
                 generation,
             } => self.on_autoplay_picks(engine, picks, generation),
-            Internal::ServerSearch { results } => self.on_server_search(results),
+            Internal::ServerSearch { seq, results } => self.on_server_search(seq, results),
             Internal::LyricsFetched {
                 server_id,
                 track_id,
                 lyrics,
                 announce,
                 failed,
-            } => self.on_lyrics_fetched(server_id, track_id, lyrics, announce, failed),
+                generation,
+            } => self.on_lyrics_fetched(server_id, track_id, lyrics, announce, failed, generation),
             Internal::TopSongsRefreshed {
                 server_id,
                 artist_id,

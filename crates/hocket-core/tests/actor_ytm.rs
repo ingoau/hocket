@@ -385,3 +385,23 @@ async fn an_expired_sign_in_asks_to_sign_in_again() {
         .iter()
         .all(|a| a.kind != AccountKind::YoutubeMusic));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_catalogue_album_that_fails_to_load_is_an_error_not_missing() {
+    let t = TestCore::start_with_ytm("ytm-album-fail", navidrome(), Arc::new(ytm())).await;
+    add_ytm(&t, None).await;
+    // The fixtures answer nothing for this album: the fetch fails. The page
+    // should offer a retry, which a "no such album" answer wouldn't.
+    let id = "MPREb_unanswered";
+    assert!(t.core.query(Query::Album { id: id.into() }).await.is_err());
+    assert!(t
+        .core
+        .query(Query::AlbumTracks { id: id.into() })
+        .await
+        .is_err());
+    // The core is still there: the next query is answered.
+    assert!(matches!(
+        t.query(Query::Accounts).await,
+        QueryResult::Accounts(_)
+    ));
+}

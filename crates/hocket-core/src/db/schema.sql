@@ -431,6 +431,7 @@ CREATE TABLE IF NOT EXISTS pin_tracks (
     peak          REAL,
     downloaded_at REAL,
     error         TEXT,
+    -- (0016 adds `failures` and `permanent`: see that migration)
     PRIMARY KEY (server_id, target_kind, target_id, track_id)
 );
 CREATE INDEX IF NOT EXISTS idx_pin_tracks_track ON pin_tracks(server_id, track_id);

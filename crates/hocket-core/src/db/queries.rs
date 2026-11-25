@@ -1171,17 +1171,7 @@ impl Db {
     }
 
     pub fn replace_genres(&self, server_id: &str, genres: &[Genre], sync_gen: i64) -> DbResult<()> {
-        self.with_tx(|tx| {
-            let mut st = tx.prepare_cached(
-                "INSERT INTO genres(server_id, name, song_count, album_count, sync_gen) VALUES (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT(server_id, name) DO UPDATE SET song_count = excluded.song_count, album_count = excluded.album_count, sync_gen = excluded.sync_gen",
-            )?;
-            for g in genres {
-                st.execute(params![server_id, g.name, g.song_count, g.album_count, sync_gen])?;
-            }
-            tx.execute("DELETE FROM genres WHERE server_id = ?1 AND sync_gen < ?2", params![server_id, sync_gen])?;
-            Ok(())
-        })
+        self.with_tx(|tx| replace_genres(tx, server_id, genres, sync_gen))
     }
 
     // -- playlists ----------------------------------------------------------
@@ -1712,6 +1702,33 @@ impl Db {
             Ok(())
         })
     }
+}
+
+/// Replace `server_id`'s genres with `genres` (one sync's, `sync_gen`).
+pub(crate) fn replace_genres(
+    tx: &rusqlite::Transaction,
+    server_id: &str,
+    genres: &[Genre],
+    sync_gen: i64,
+) -> DbResult<()> {
+    let mut st = tx.prepare_cached(
+        "INSERT INTO genres(server_id, name, song_count, album_count, sync_gen) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(server_id, name) DO UPDATE SET song_count = excluded.song_count, album_count = excluded.album_count, sync_gen = excluded.sync_gen",
+    )?;
+    for g in genres {
+        st.execute(params![
+            server_id,
+            g.name,
+            g.song_count,
+            g.album_count,
+            sync_gen
+        ])?;
+    }
+    tx.execute(
+        "DELETE FROM genres WHERE server_id = ?1 AND sync_gen < ?2",
+        params![server_id, sync_gen],
+    )?;
+    Ok(())
 }
 
 fn track_where(server_id: &str, filter: &Option<WhereClause>) -> (String, Vec<Value>) {
