@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -264,9 +265,48 @@ private fun ProfileEditor(title: String, networkId: String) {
     val bitrates = listOf(null, 96, 128, 192, 320).map { b -> b to (b?.let { stringResource(R.string.settings_bitrate_kbps, it) } ?: stringResource(R.string.settings_bitrate_unlimited)) }
     SettingRow(stringResource(R.string.settings_max_bitrate), tag = "transcoding.bitrate")
     ChoiceRow(bitrates, isSelected = { profile.maxBitRate?.toInt() == it }, onSelect = { push(profile.copy(maxBitRate = it?.toUInt())) }, modifier = Modifier.padding(horizontal = 16.dp))
-    var cannot by remember(profile) { mutableStateOf(profile.cannotDecode.joinToString(", ")) }
-    OutlinedTextField(value = cannot, onValueChange = { cannot = it }, label = { Text(stringResource(R.string.settings_cannot_decode)) }, singleLine = true, modifier = Modifier.fillMaxWidth().settingAnchor("transcoding.cannotDecode").testTag(settingTag("transcoding.cannotDecode")).padding(horizontal = 16.dp),
-        trailingIcon = { TextButton(onClick = { push(profile.copy(cannotDecode = cannot.split(",").map { it.trim().lowercase() }.filter { it.isNotEmpty() })) }) { Text(stringResource(R.string.action_save)) } })
+    SettingRow(stringResource(R.string.settings_cannot_decode), stringResource(R.string.settings_cannot_decode_body), tag = "transcoding.cannotDecode")
+    CannotDecodeEditor(profile.cannotDecode) { push(profile.copy(cannotDecode = it)) }
+}
+
+/** File types players commonly stumble on, offered as chips for the "always transcode" list. */
+private val KNOWN_CODECS = listOf("flac", "alac", "wav", "aiff", "ape", "wv", "dsf", "dff", "tak", "shn", "opus", "ogg", "mp3", "m4a", "aac", "wma")
+
+/**
+ * The "always transcode" list as chips: the known file types and any others already on the list,
+ * each toggled on a tap and saved at once; a field adds a type the chips don't offer.
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun CannotDecodeEditor(selected: List<String>, onChange: (List<String>) -> Unit) {
+    val chosen = selected.map { it.trim().lowercase() }.filter { it.isNotEmpty() }
+    androidx.compose.foundation.layout.FlowRow(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp).testTag("transcoding.cannotDecode.chips"),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        (KNOWN_CODECS + chosen.filter { it !in KNOWN_CODECS }).forEach { c ->
+            val on = c in chosen
+            androidx.compose.material3.FilterChip(
+                selected = on, onClick = { onChange(if (on) chosen - c else chosen + c) },
+                label = { Text(c.uppercase()) },
+                leadingIcon = if (on) ({ Icon(HocketIcons.Filled.Check, null, Modifier.size(androidx.compose.material3.FilterChipDefaults.IconSize)) }) else null,
+                modifier = Modifier.testTag("transcoding.cannotDecode.$c"),
+            )
+        }
+    }
+    var other by remember { mutableStateOf("") }
+    fun add() {
+        val c = other.trim().trimStart('.').lowercase()
+        if (c.isNotEmpty() && c !in chosen) onChange(chosen + c)
+        other = ""
+    }
+    OutlinedTextField(
+        value = other, onValueChange = { other = it }, label = { Text(stringResource(R.string.settings_cannot_decode_other)) }, singleLine = true,
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done),
+        keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { add() }),
+        trailingIcon = { TextButton(onClick = ::add, enabled = other.isNotBlank()) { Text(stringResource(R.string.settings_cannot_decode_add)) } },
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 4.dp, bottom = 8.dp).testTag("transcoding.cannotDecode.other"),
+    )
 }
 
 /**

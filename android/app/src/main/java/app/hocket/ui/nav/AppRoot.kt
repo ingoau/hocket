@@ -681,6 +681,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                             { id -> sharedArtwork.prepareDestination(ArtworkShare.album(id)); nav.navigate(Route.Album(id)) },
                             { id -> sharedArtwork.prepareDestination(ArtworkShare.artist(id)); nav.navigate(Route.Artist(id)) },
                             { id -> sharedArtwork.prepareDestination(ArtworkShare.playlist(id)); nav.navigate(Route.Playlist(id)) },
+                            { route, tag -> app.hocket.ui.screens.settings.SettingsJump.request(tag); nav.navigate(route) { launchSingleTop = true } },
                         )
                     }
                     CompositionLocalProvider(app.hocket.ui.LocalDetailNavigator provides contentNavigator) {
@@ -706,6 +707,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                     openAlbum = { id -> sharedArtwork.prepareDestination(ArtworkShare.album(id)); leavePlayer(); nav.navigate(Route.Album(id)) },
                     openArtist = { id -> sharedArtwork.prepareDestination(ArtworkShare.artist(id)); leavePlayer(); nav.navigate(Route.Artist(id)) },
                     openPlaylist = { id -> sharedArtwork.prepareDestination(ArtworkShare.playlist(id)); leavePlayer(); nav.navigate(Route.Playlist(id)) },
+                    openSetting = { route, tag -> app.hocket.ui.screens.settings.SettingsJump.request(tag); leavePlayer(); nav.navigate(route) { launchSingleTop = true } },
                 )
             }
             // The bottom chrome's whole strip (the bar, the gap above it and the margins beside the

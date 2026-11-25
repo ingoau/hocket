@@ -10,9 +10,15 @@ val LocalCoreClient = staticCompositionLocalOf<CoreClient> { error("No CoreClien
 /**
  * Opens library detail screens from anywhere in the tree (list rows' accessibility actions "Go to
  * album" / "Go to artist", the add to playlist sheet's "Open playlist"). Null outside the main
- * shell: the actions are then not offered.
+ * shell: the actions are then not offered. [openSetting] opens a settings screen scrolled to the
+ * setting with that tag (the lyrics page's "Turn on external lyrics").
  */
-class DetailNavigator(val openAlbum: (String) -> Unit, val openArtist: (String) -> Unit, val openPlaylist: ((String) -> Unit)? = null)
+class DetailNavigator(
+    val openAlbum: (String) -> Unit,
+    val openArtist: (String) -> Unit,
+    val openPlaylist: ((String) -> Unit)? = null,
+    val openSetting: ((route: app.hocket.ui.nav.Route, tag: String) -> Unit)? = null,
+)
 val LocalDetailNavigator = staticCompositionLocalOf<DetailNavigator?> { null }
 
 @Composable

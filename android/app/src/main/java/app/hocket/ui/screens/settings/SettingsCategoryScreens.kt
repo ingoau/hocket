@@ -286,7 +286,9 @@ private fun HomeScreenSection() {
 internal val CACHE_BUDGET_CHOICES = listOf(0.5e9, 1e9, 2e9, 4e9, 8e9, 16e9)
 
 /** "500 MB", "4 GB": round choice labels, like the warning threshold's. */
-private fun budgetChoiceLabel(bytes: Double): String = if (bytes < 1e9) "${(bytes / 1e6).toInt()} MB" else "${(bytes / 1e9).toInt()} GB"
+@Composable
+private fun budgetChoiceLabel(bytes: Double): String =
+    if (bytes < 1e9) stringResource(R.string.size_mb_whole, (bytes / 1e6).toInt()) else stringResource(R.string.size_gb_whole, (bytes / 1e9).toInt())
 
 /**
  * Downloads & storage: the downloads screen and the storage warning; the connection (offline mode,
@@ -308,7 +310,7 @@ fun DownloadsSettingsScreen(nav: NavHostController) {
         val warn = storage.warnThresholdBytes
         SettingRow(stringResource(R.string.downloads_threshold), warn?.let { formatBytes(it) } ?: stringResource(R.string.downloads_threshold_none), tag = "storage.warnThreshold")
         val noLimit = stringResource(R.string.downloads_threshold_none)
-        ChoiceRow(listOf(null, 2.0, 4.0, 8.0, 16.0).map { gb -> gb to (gb?.let { "${it.toInt()} GB" } ?: noLimit) }, isSelected = { gb -> (gb?.let { it * 1e9 }) == warn },
+        ChoiceRow(listOf(null, 2.0, 4.0, 8.0, 16.0).map { gb -> gb to (gb?.let { stringResource(R.string.size_gb_whole, it.toInt()) } ?: noLimit) }, isSelected = { gb -> (gb?.let { it * 1e9 }) == warn },
             onSelect = { gb -> client.dispatch(Commands.setStorageWarnThreshold(gb?.let { it * 1e9 })) }, modifier = Modifier.padding(horizontal = 16.dp))
 
         // Metered = mobile data, a hotspot or metered Wi-Fi, as the system reports it.
@@ -342,7 +344,10 @@ fun DownloadsSettingsScreen(nav: NavHostController) {
         SettingRow(stringResource(R.string.settings_data_saved), stringResource(R.string.settings_data_saved_body, formatBytes(storage.servedFromDiskBytes ?: 0.0), formatBytes(storage.fetchedBytes ?: 0.0)), tag = "storage.dataSaved") {
             Text(formatBytes(storage.dataSavedBytes ?: 0.0), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
         }
-        SettingRow(stringResource(R.string.downloads_clear_cache), formatBytes(storage.cacheBytes), onClick = { client.dispatch(Command.ClearStreamCache) }, tag = "storage.clearCache")
+        var clearing by remember { mutableStateOf(false) }
+        SettingRow(stringResource(R.string.downloads_clear_cache), formatBytes(storage.cacheBytes), onClick = { clearing = true }, tag = "storage.clearCache")
+        if (clearing) app.hocket.ui.components.ConfirmDialog(stringResource(R.string.downloads_clear_cache_confirm, formatBytes(storage.cacheBytes)), stringResource(R.string.downloads_clear_cache_action),
+            onConfirm = { client.dispatch(Command.ClearStreamCache) }, onDismiss = { clearing = false })
     }
 }
 

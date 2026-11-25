@@ -187,11 +187,15 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolea
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                 EmptyState(stringResource(R.string.empty_lyrics_title), stringResource(R.string.empty_lyrics_body))
                 val external = settings[SettingKeys.LYRICS_EXTERNAL_ENABLED]?.value?.trim() == "true"
+                // Off: a link to the setting (outside the main shell, where there's nowhere to go, a hint).
+                val openSetting = app.hocket.ui.LocalDetailNavigator.current?.openSetting
                 if (external) TextButton(onClick = { client.dispatch(Commands.fetchLyrics(trackId)) }) { Text(stringResource(R.string.lyrics_fetch)) }
+                else if (openSetting != null) TextButton(onClick = { openSetting(app.hocket.ui.nav.Route.SettingsLyrics, "lyrics.external") }, modifier = Modifier.testTag("lyrics.externalSetting")) { Text(stringResource(R.string.empty_lyrics_external_link)) }
                 else Text(stringResource(R.string.empty_lyrics_external_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             return@Box
         }
+        if (!current.loaded) { LyricsLoading(trackId); return@Box }
         val doc = lyrics ?: return@Box
         var share by remember(doc.trackId) { mutableStateOf<LyricsShareRequest?>(null) }
         Column(Modifier.fillMaxSize()) {
@@ -206,6 +210,27 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolea
         }
     }
 }
+
+/**
+ * While a song's lyrics load: placeholder lines where the lyrics will be. Only after a moment, so
+ * lyrics that are already here don't flash a skeleton first.
+ */
+@Composable
+private fun LyricsLoading(trackId: String) {
+    var shown by remember(trackId) { mutableStateOf(false) }
+    LaunchedEffect(trackId) { kotlinx.coroutines.delay(LYRICS_SKELETON_DELAY_MS); shown = true }
+    if (!shown) return
+    app.hocket.ui.components.ShimmerHost {
+        BoxWithConstraints(Modifier.fillMaxSize().clearAndSetSemantics { }.testTag("lyrics.loading")) {
+            Column(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = maxHeight * LyricsMotion.FOCUS_POSITION), verticalArrangement = Arrangement.spacedBy(22.dp)) {
+                LYRICS_SKELETON_WIDTHS.forEach { w -> app.hocket.ui.components.SkeletonLine(Modifier.fillMaxWidth(w), 26.dp) }
+            }
+        }
+    }
+}
+
+private const val LYRICS_SKELETON_DELAY_MS = 250L
+private val LYRICS_SKELETON_WIDTHS = listOf(0.78f, 0.62f, 0.86f, 0.54f, 0.7f, 0.45f)
 
 /**
  * The lyrics' playhead, kept from stepping back. When the position is re-synced to the player and

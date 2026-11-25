@@ -99,6 +99,7 @@ fun DownloadsScreen(nav: NavHostController) {
     val waiting = if (downloads.any { it.state == JobState.Running }) null
         else downloads.firstNotNullOfOrNull { it.waiting?.takeIf { _ -> it.state == JobState.Queued } }
     var removing by remember { mutableStateOf<Pin?>(null) }
+    var clearing by remember { mutableStateOf(false) }
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val warn = storage.warnThresholdBytes
     Scaffold(
@@ -138,7 +139,13 @@ fun DownloadsScreen(nav: NavHostController) {
                     item { Text(stringResource(R.string.downloads_warn, formatBytes(warn)), color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp)) }
                 }
                 itemsIndexed(pins, key = { _, p -> p.label + p.createdAt }) { i, pin ->
-                    Segment(i, pins.size, Modifier.padding(start = 16.dp, end = 16.dp, top = if (i > 0) ListItemDefaults.SegmentedGap else 0.dp)) {
+                    // An album or playlist opens on a tap; a single song has no page of its own.
+                    val open: (() -> Unit)? = when (val t = pin.target) {
+                        is PinTarget.Album -> ({ nav.navigate(Route.Album(t.data.id)) })
+                        is PinTarget.Playlist -> ({ nav.navigate(Route.Playlist(t.data.id)) })
+                        else -> null
+                    }
+                    Segment(i, pins.size, Modifier.padding(start = 16.dp, end = 16.dp, top = if (i > 0) ListItemDefaults.SegmentedGap else 0.dp).testTag("downloads.pin"), onClick = open) {
                         Row(Modifier.heightIn(min = 72.dp).padding(start = 12.dp, end = 4.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                             Artwork(pin.coverArt, ArtworkSizes.THUMB, null, Modifier.size(48.dp), RoundedCornerShape(14.dp))
                             Spacer(Modifier.width(14.dp))
@@ -166,7 +173,7 @@ fun DownloadsScreen(nav: NavHostController) {
                 }
                 item(key = "tools") {
                     SegmentedGroup(Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp)) {
-                        SegmentedListItem(onClick = { client.dispatch(Command.ClearStreamCache) }, shapes = ListItemDefaults.segmentedShapes(0, 2), colors = segmentedListColors(),
+                        SegmentedListItem(onClick = { clearing = true }, shapes = ListItemDefaults.segmentedShapes(0, 2), colors = segmentedListColors(),
                             leadingContent = { Icon(HocketIcons.Outlined.Delete, null) }, trailingContent = { Text(formatBytes(storage.cacheBytes)) }, modifier = Modifier.testTag("downloads.clearCache"),
                         ) { Text(stringResource(R.string.downloads_clear_cache)) }
                         SegmentedListItem(onClick = { nav.navigate(Route.SettingsDownloads) }, shapes = ListItemDefaults.segmentedShapes(1, 2), colors = segmentedListColors(),
@@ -177,6 +184,7 @@ fun DownloadsScreen(nav: NavHostController) {
             }
         }
     }
+    if (clearing) ConfirmDialog(stringResource(R.string.downloads_clear_cache_confirm, formatBytes(storage.cacheBytes)), stringResource(R.string.downloads_clear_cache_action), onConfirm = { client.dispatch(Command.ClearStreamCache) }, onDismiss = { clearing = false })
     removing?.let { pin -> ConfirmDialog(stringResource(R.string.downloads_remove_confirm, pin.label), stringResource(R.string.action_delete), onConfirm = { client.dispatch(Commands.unpin(pin.target)) }, onDismiss = { removing = null }) }
 }
 

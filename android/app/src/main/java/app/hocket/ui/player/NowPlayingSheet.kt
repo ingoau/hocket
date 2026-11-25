@@ -559,7 +559,15 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                 state.expand()
             }
         }
-        androidx.activity.compose.BackHandler(enabled = panelMode && state.fullScreen && state.isExpanded) { state.exitFullScreen() }
+        // Full screen from the panel: back shrinks the player toward the panel with the gesture.
+        PredictiveBackHandler(enabled = panelMode && state.fullScreen && state.isExpanded) { events ->
+            try {
+                events.collect { ev -> if (!reducedCover) state.cover.snapTo(1f - ev.progress * 0.35f) }
+                state.exitFullScreen()
+            } catch (e: CancellationException) {
+                state.cover.animateTo(1f, Motion.sheet)
+            }
+        }
 
         // Thresholds of the progress, as derived state: composition reacts when one is crossed,
         // never on every frame of a drag.
@@ -708,6 +716,17 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
             if (reducedMotion || !state.isExpanded) modeAnim.snapTo(target) else modeAnim.animateTo(target, Motion.mode)
         }
         hero.modeFraction = { modeAnim.value }
+        // Back from lyrics, the queue or About returns to the artwork before it closes the player:
+        // the artwork starts to grow back with the gesture, then the mode settles either way.
+        // (Registered after the sheet's handler above, so it is asked first.)
+        PredictiveBackHandler(enabled = state.isExpanded && !panelMode && state.mode != PlayerMode.Artwork) { events ->
+            try {
+                events.collect { ev -> if (!reducedMotion) modeAnim.snapTo(1f - ev.progress * 0.25f) }
+                state.mode = PlayerMode.Artwork
+            } catch (e: CancellationException) {
+                if (reducedMotion) modeAnim.snapTo(1f) else modeAnim.animateTo(1f, Motion.mode)
+            }
+        }
         // The lift eases out as the artwork flies to the thumbnail (and is gone in another mode).
         hero.lift = { queuePull.lift() * (1f - modeAnim.value) }
         hero.liftFraction = { queuePull.fraction() * (1f - modeAnim.value) }

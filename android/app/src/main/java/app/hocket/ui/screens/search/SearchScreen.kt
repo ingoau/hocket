@@ -145,6 +145,8 @@ fun SearchScreen(nav: NavHostController) {
                 client.settings.value[SettingKeys.SEARCH_INCLUDE_SERVER]?.value?.trim() != "false"
             val res = (client.query(Queries.search(client.librarySource.value.let { s -> SourceFilter.current(s, SourceFilter.options(client.accounts.value, false)) }, text, 25, includeServer = true, requestId = id)) as? QueryResult.Search)?.data
             local = res
+            // The query itself failed: no server batch is coming for it either.
+            if (res == null && remoteRequest == id) pendingRemote = false
         }
     }
     LaunchedEffect(Unit) {
@@ -237,7 +239,7 @@ fun SearchScreen(nav: NavHostController) {
             ScrollToTopOnReselect(listState)
             BoxWithConstraints(Modifier.fillMaxSize()) {
                 LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = maxWidthListPadding(maxWidth, bottom = BottomContentInset)) {
-                    val serverEmpty = server != null && server.tracks.isEmpty() && server.albums.isEmpty() && server.artists.isEmpty()
+                    val serverEmpty = server != null && server.tracks.isEmpty() && server.albums.isEmpty() && server.artists.isEmpty() && server.playlists.isEmpty()
                     // Nothing here and nothing on the server: one clear "No results", not a lone server footnote.
                     val nothing = kind != SearchKind.Lyrics && empty && !pendingRemote && (server == null || serverEmpty)
                     if (nothing) item { EmptyState(stringResource(R.string.empty_search_none, query), stringResource(R.string.search_none_body)) }
@@ -288,7 +290,9 @@ fun SearchScreen(nav: NavHostController) {
                     }
                     if (show(SearchKind.Albums)) {
                         item(key = "h.albums") { SearchSectionLabel(stringResource(R.string.search_albums), top = 16.dp) }
-                        item(key = "albums") { AlbumStrip(results.albums, Modifier.animateItem()) { a -> rememberQuery(); nav.navigate(Route.Album(a.id)) } }
+                        // Narrowed to albums: a grid, as in the library; with everything else, a strip.
+                        if (kind == SearchKind.Albums) albumGrid(results.albums, "a", maxWidth) { a -> rememberQuery(); nav.navigate(Route.Album(a.id)) }
+                        else item(key = "albums") { AlbumStrip(results.albums, Modifier.animateItem()) { a -> rememberQuery(); nav.navigate(Route.Album(a.id)) } }
                     }
                     if (show(SearchKind.Artists)) {
                         item(key = "h.artists") { SearchSectionLabel(stringResource(R.string.search_artists), top = 16.dp) }
@@ -311,9 +315,18 @@ fun SearchScreen(nav: NavHostController) {
                         val tracks = if (kind == SearchKind.All || kind == SearchKind.Songs) r.tracks else emptyList()
                         val artists = if (kind == SearchKind.All || kind == SearchKind.Artists) r.artists else emptyList()
                         val n = tracks.size + artists.size
-                        itemsIndexed(tracks, key = { _, t -> "rt" + t.id }) { i, t -> TrackRow(t, onClick = { client.dispatch(Commands.playTracks(r.tracks.map { it.ref }, r.tracks.indexOf(t), query)) }, onMore = { songMenu.open(t) }, segment = i to n, modifier = Modifier.segmentItem(i)) }
-                        if (r.albums.isNotEmpty() && (kind == SearchKind.All || kind == SearchKind.Albums)) item(key = "ralbums") { AlbumStrip(r.albums, Modifier.animateItem().padding(vertical = 8.dp)) { a -> nav.navigate(Route.Album(a.id)) } }
-                        itemsIndexed(artists, key = { _, ar -> "rar" + ar.id }) { i, ar -> ArtistRow(ar, onClick = { nav.navigate(Route.Artist(ar.id)) }, segment = (tracks.size + i) to n, modifier = Modifier.segmentItem(tracks.size + i)) }
+                        val playlists = if (kind == SearchKind.All || kind == SearchKind.Playlists) r.playlists else emptyList()
+                        // Server rows look and act like the local ones: subtitle, now-playing mark, and a tap saves the search.
+                        itemsIndexed(tracks, key = { _, t -> "rt" + t.id }) { i, t ->
+                            TrackRow(t, onClick = { rememberQuery(); client.dispatch(Commands.playTracks(r.tracks.map { it.ref }, r.tracks.indexOf(t), query)) }, onMore = { songMenu.open(t) },
+                                nowPlaying = nowPlaying?.track?.id == t.id, segment = i to n, subtitle = listOfNotNull(t.artist, t.album).joinToString(stringResource(R.string.dot_separator)),
+                                modifier = Modifier.segmentItem(i))
+                        }
+                        if (r.albums.isNotEmpty() && kind == SearchKind.Albums) albumGrid(r.albums, "ra", maxWidth) { a -> rememberQuery(); nav.navigate(Route.Album(a.id)) }
+                        else if (r.albums.isNotEmpty() && kind == SearchKind.All) item(key = "ralbums") { AlbumStrip(r.albums, Modifier.animateItem().padding(vertical = 8.dp)) { a -> rememberQuery(); nav.navigate(Route.Album(a.id)) } }
+                        itemsIndexed(artists, key = { _, ar -> "rar" + ar.id }) { i, ar -> ArtistRow(ar, onClick = { rememberQuery(); nav.navigate(Route.Artist(ar.id)) }, segment = (tracks.size + i) to n, modifier = Modifier.segmentItem(tracks.size + i)) }
+                        if (playlists.isNotEmpty()) item(key = "rgap.playlists") { Spacer(Modifier.height(8.dp)) }
+                        itemsIndexed(playlists, key = { _, p -> "rp" + p.id }) { i, p -> PlaylistRow(p, onClick = { rememberQuery(); nav.navigate(Route.Playlist(p.id)) }, segment = i to playlists.size, modifier = Modifier.segmentItem(i)) }
                     }
                 }
             }
@@ -324,6 +337,17 @@ fun SearchScreen(nav: NavHostController) {
 /** What the results can narrow to. */
 private enum class SearchKind(val label: Int) {
     All(R.string.search_kind_all), Songs(R.string.search_songs), Lyrics(R.string.search_lyrics), Albums(R.string.search_albums), Artists(R.string.search_artists), Playlists(R.string.search_playlists)
+}
+
+/** Albums as a grid of cards, a row of cells per list item, as many ~160 dp columns as [width] holds. */
+private fun androidx.compose.foundation.lazy.LazyListScope.albumGrid(albums: List<app.hocket.core.api.Album>, keyPrefix: String, width: androidx.compose.ui.unit.Dp, onClick: (app.hocket.core.api.Album) -> Unit) {
+    val columns = ((width - 20.dp) / 160.dp).toInt().coerceAtLeast(2)
+    itemsIndexed(albums.chunked(columns), key = { _, row -> keyPrefix + "g" + row.first().id }) { _, row ->
+        Row(Modifier.padding(horizontal = 10.dp).testTag("search.albums.grid")) {
+            row.forEach { a -> app.hocket.ui.components.AlbumCard(a, onClick = { onClick(a) }, modifier = Modifier.weight(1f)) }
+            repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
+        }
+    }
 }
 
 /**

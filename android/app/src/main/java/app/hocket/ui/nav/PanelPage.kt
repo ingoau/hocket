@@ -2,7 +2,9 @@ package app.hocket.ui.nav
 
 import app.hocket.core.has
 import app.hocket.core.engaged
-import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -63,9 +65,24 @@ internal fun PanelPageHost(page: PlayerMode?, onClose: () -> Unit, endInset: Dp 
     // The page last shown, so it stays while it fades away.
     var held by remember { mutableStateOf(page) }
     if (page != null) held = page
-    BackHandler(enabled = page != null, onBack = onClose)
+    // Predictive back: the page shrinks and dims with the gesture, then closes or springs back.
+    val back = remember { Animatable(0f) }
+    androidx.compose.runtime.LaunchedEffect(page) { if (page != null) back.snapTo(0f) }
+    PredictiveBackHandler(enabled = page != null) { events ->
+        try {
+            events.collect { ev -> if (!reduced) back.snapTo(ev.progress) }
+            onClose()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            back.animateTo(0f, spring(dampingRatio = 1f, stiffness = 500f))
+        }
+    }
     AnimatedVisibility(
         visible = page != null,
+        modifier = Modifier.graphicsLayer {
+            val p = back.value
+            scaleX = 1f - p * 0.06f; scaleY = 1f - p * 0.06f
+            alpha = 1f - p * 0.2f
+        },
         enter = if (reduced) fadeIn(tween(0)) else fadeIn(tween(200)) + scaleIn(spring(dampingRatio = 1f, stiffness = 500f), initialScale = 0.97f),
         exit = if (reduced) fadeOut(tween(0)) else fadeOut(tween(150)),
     ) {
