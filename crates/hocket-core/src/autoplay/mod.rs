@@ -140,6 +140,7 @@ pub struct AutoplayPick {
 impl AutoplayPick {
     pub fn to_queue_item(&self, key: QueueKey) -> QueueItem {
         QueueItem {
+            settled: false,
             key,
             track: TrackRef::new(self.track.server_id.clone(), self.track.id.clone()),
             source: QueueSource::Autoplay {

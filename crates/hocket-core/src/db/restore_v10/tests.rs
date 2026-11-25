@@ -95,6 +95,7 @@ fn downgrade(v: &mut Value) {
 
 fn item(key: &str, track: &str, index: u32) -> QueueItem {
     QueueItem {
+        settled: false,
         key: key.into(),
         track: TrackRef::new(a(), track),
         source: QueueSource::Context { index },

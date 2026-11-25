@@ -28,7 +28,11 @@ impl Actor {
 
     pub(crate) fn set_transition_settings(&mut self, settings: TransitionSettings) {
         match serde_json::to_value(&settings) {
-            Ok(v) => self.set_setting_value(keys::PLAYBACK_TRANSITIONS, v),
+            Ok(v) => {
+                self.set_setting_value(keys::PLAYBACK_TRANSITIONS, v);
+                // AutoMix just turned on: order what is queued.
+                self.post_order_for_mix();
+            }
             Err(e) => self.error(
                 ErrorKind::Internal,
                 "transition settings",

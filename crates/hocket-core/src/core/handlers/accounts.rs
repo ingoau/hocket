@@ -222,6 +222,9 @@ impl Actor {
             self.unload();
         }
         self.engine = None;
+        // The next engine starts without the coordinator's store until a
+        // Welcome says otherwise; a fetch in flight is never answered.
+        self.on_analysis_store(false);
         self.scope = None;
         self.drop_stash();
         self.drop_snoozes();

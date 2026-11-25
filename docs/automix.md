@@ -252,35 +252,54 @@ With AutoMix on, when the order is Hocket's to choose, the device that owns
 playback biases what plays toward pairs that blend. Decisions (issue #256):
 
 - **Whose order**: entries that are not in the "Next in queue" group, not
-  added by the user (`QueueItem.added`) and either autoplay's (radio and
+  added by the user (`QueueItem.added`), not placed already
+  (`QueueItem.settled`: dragged by the user, or put there by an earlier
+  decision) and either autoplay's (radio and
   "continue playing" are autoplay providers: similar songs, sonic
   similarity, top songs, random) or a shuffled context's (`doc.shuffle`).
   An album, playlist or selection played in order, anything the user
   queued or added, and everything after the first entry that isn't ours
   are never moved. Repeat One and Repeat All turn it off, as do the context
   rules that stop mixing (sleep end-of-track, Cast, exclusive output).
-- **What is chosen**: the entry *after* the next one. The current track's
-  tail start was committed against the next track when it was preloaded
-  (`mix_out_ms`), so the next track is already fixed; the one after it
-  decides the next track's own tail start. Once per next entry and follow-up,
-  so Previous and Next again find the order they left (a revisit decides
-  nothing, even with records that arrived since; a reshuffle or an edit
-  that gives the entry another follow-up decides again).
-  Only once the current track has played `SETTLE_MS` = 15 s (or half the
-  way to its tail's lock-in, when that is sooner), so skipping through
-  tracks moves nothing; and when the next track's record is known (and no
-  record fetch is in flight). Checked on every document change, ownership
-  gain and record arrival; a decision held back by something that passes
-  (not settled, a load pending, a fetch in flight, offline) is asked again
-  on position reports. The pick is a
+- **What is chosen**: the follow-up of each of the first `ORDER_AHEAD` = 10
+  upcoming entries, decided ahead as a chain (the next entry's follow-up,
+  then that follow-up's, and so on), so the top of the queue is settled
+  before the listener gets there: playing a shuffled queue orders its top
+  at once, and in steady play each track decides one new pair, about ten
+  entries down, where a move is out of the way. Each decision marks the
+  follow-up `settled` in the document, also when it stays where it was, so
+  a decided pair stays: Previous and Next again find the order they left,
+  records that would now choose differently change nothing, and a new
+  transport owner (another device, or this one after a restart) doesn't
+  decide it again. A shuffle clears the marks; an edit that gives an entry
+  a follow-up that isn't settled decides that pair again. The reducer
+  refuses a promotion of, or past, an entry the user added or placed, a
+  settled or an unavailable one, and a promotion isn't replayed after a
+  conflict (the owner decides again on the new document), so neither
+  undoes a drag. The next playable entry's follow-up is the one playback
+  depends on: the current track's tail start was committed against the
+  next track when it was preloaded (`mix_out_ms`), and the follow-up
+  decides the next track's own tail start, so that pair isn't decided once
+  the plan has locked in or a mix is running.
+  After a skip nothing is decided until the track has played `SETTLE_MS` =
+  15 s (or half the way to its tail's lock-in, when that is sooner), so a
+  burst of skips moves nothing. The chain waits for a record on its way
+  (the entry's or a candidate's: in a fetch in flight or about to go out,
+  or being analysed here) rather than decide without it; an entry whose own
+  record isn't coming keeps its follow-up undecided, in case it comes
+  later. Checked on every document change, ownership gain, record
+  arrival and AutoMix being turned on; a decision held back by something that passes (a skip just now,
+  a load pending, a record on its way, offline) is asked again on position
+  reports. Each decision is a
   synced `SessionOp::PromoteForMix { key, after }`: the entry moves to
-  directly after `after`, past unqueued entries only, keeping its flags
-  and ordinal, so turning shuffle off still restores the context's order.
+  directly after `after` (or stays there, when it already is), past
+  orderable entries only, keeping its ordinal, so turning shuffle off still
+  restores the context's order, and is marked `settled`.
   The preloaded next source is then replanned against its new follow-up.
-- **How much randomness**: the candidates are the next `ORDER_WINDOW` = 6
-  entries in shuffle (or autoplay) order, which stays the source of
-  randomness. Each is scored by `order::mix_score` from its plan with the
-  next track: beat-matched blends 0.6–0.8 (longer better, stretch costs up
+- **How much randomness**: an entry's candidates are the `ORDER_WINDOW` = 6
+  entries after it in shuffle (or autoplay) order, which stays the source
+  of randomness. Each is scored by `order::mix_score` from its plan with
+  that entry: beat-matched blends 0.6–0.8 (longer better, stretch costs up
   to 0.1), beat-aligned fades 0.3, other fades 0.15, not mixed 0; voices
   apart +0.1 or shaped clash −0.35 (about a beat-aligned fade's worth); Camelot compatible +0.1, unknown +0.03,
   near 0, clash −0.15 (halved for fades). A candidate without a record
@@ -291,9 +310,9 @@ playback biases what plays toward pairs that blend. Decisions (issue #256):
   regardless, so a track that mixes with nothing is delayed, never
   starved. A pick moves at most 5 places.
 - **Records ahead**: phones only read records, so the actor fetches the
-  next eight entries' records (the window plus the next two) in its one
-  batched `AnalysisFetch`; a planner run per candidate is microseconds, and
-  records are a few KB each.
+  records of the next `ORDER_AHEAD + ORDER_WINDOW` = 16 entries (every
+  entry the chain looks at) in batched `AnalysisFetch`es, nearest first; a
+  planner run per candidate is microseconds, and records are a few KB each.
 
 ## Planner (plan.rs)
 
@@ -752,9 +771,10 @@ message types they don't know):
 - `Welcome.analysis_store: bool` (`#[serde(default)]`): the hosted
   coordinator keeps records (`RoomConfig::analysis_store`). LAN rooms never
   set it, and the engine only believes it from the `Coordinator` tier.
-- `AnalysisFetch { track_ids }` → coordinator (≤ `ANALYSIS_FETCH_MAX` = 64
-  ids; more are dropped). Answered with `AnalysisRecords { records:
-  [AnalysisEntry { track_id, record }] }`, in one or more frames of at
+- `AnalysisFetch { wants: [AnalysisWant { track_id, key }] }` → coordinator
+  (≤ `ANALYSIS_FETCH_MAX` = 64; more are dropped). Answered with
+  `AnalysisRecords { records: [AnalysisEntry { track_id, key, record }] }`,
+  in one or more frames of at
   most `ANALYSIS_BATCH_MAX` = 16 records and half the frame cap (4 MB) of
   JSON each, always at least one (possibly empty) frame.
   Only records of the coordinator's `ANALYSIS_VERSION`; misses are left out.
@@ -805,10 +825,12 @@ Client (`core/handlers/analysis_share.rs`):
 
 - With the store advertised for the current server and the mode on
   AutoMix, every 2 s (and when the store appears or an answer arrives) the
-  actor asks for the current track and, of the next eight (two plus
-  AutoMix's order window, see *Order*), those that need a record (none
-  usable, or only a phone's loudness-only one): one `AnalysisFetch` at a
-  time, given up after 15 s. Each track asked is not asked again for
+  actor asks for the current track and, of the next sixteen (as far as
+  AutoMix's order looks, see *Order*), those that need a record (none
+  usable, or only a phone's loudness-only one), nearest first: one
+  `AnalysisFetch` of at most `ANALYSIS_BATCH_MAX` = 16 at a time, so its
+  answer is one frame (an empty one, nothing found, answers it too), given
+  up after 15 s. Each track asked is not asked again for
   30 minutes, answered or not (an unanswered fetch's tracks are freed).
   A miss on the coordinator worker's server gets that track analysed next,
   so the re-ask half an hour later usually finds it.

@@ -235,6 +235,7 @@ mod tests {
                 .collect(),
         });
         d.current = Some(QueueItem {
+            settled: false,
             key: "k0".into(),
             track: "t0".into(),
             source: QueueSource::Context { index: 0 },

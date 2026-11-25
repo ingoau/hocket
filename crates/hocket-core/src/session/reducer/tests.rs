@@ -785,6 +785,79 @@ fn shuffle_reorders_only_after_the_group_and_off_restores() {
     assert_eq!(Flat::of(&o).list, Flat::of(&d).list);
 }
 
+/// AutoMix's order and the user's drags mark the entry they place as
+/// settled; keeping a follow-up where it is marks it without moving it; a
+/// shuffle clears the marks.
+#[test]
+fn placed_entries_are_settled_until_a_shuffle() {
+    let e = DeterministicEntropy::new(7);
+    let d = play(&fresh(), &e, album("a", 8), Some(0), true);
+    let up = upcoming(&d);
+    let settled =
+        |doc: &SessionDocument| -> Vec<bool> { doc.upcoming.iter().map(|i| i.settled).collect() };
+    assert!(settled(&d).iter().all(|s| !s));
+    let (k0, k1, k5) = (key_of(&d, &up[0]), key_of(&d, &up[1]), key_of(&d, &up[5]));
+    // Kept: the follow-up stays where it is, marked.
+    let kept = doc_of(
+        QueueOp::PromoteForMix {
+            key: k1.clone(),
+            after: k0.clone(),
+        },
+        &d,
+        &e,
+    );
+    assert_eq!(upcoming(&kept), up);
+    assert_eq!(settled(&kept)[..3], [false, true, false]);
+    // Promoted, and dragged.
+    let p = doc_of(
+        QueueOp::PromoteForMix {
+            key: k5.clone(),
+            after: k1.clone(),
+        },
+        &kept,
+        &e,
+    );
+    assert!(p.upcoming[2].settled && p.upcoming[2].key == k5);
+    let k6 = key_of(&p, &up[6]);
+    let dragged = doc_of(
+        QueueOp::MoveQueueItem {
+            key: k6.clone(),
+            after: k0.clone(),
+            in_group: false,
+        },
+        &p,
+        &e,
+    );
+    assert!(dragged.upcoming[1].settled && dragged.upcoming[1].key == k6);
+    // Nothing settled moves or is passed over: a promotion replayed after a
+    // drag can't undo it.
+    let promote = |key: &QueueKey, after: &QueueKey| QueueOp::PromoteForMix {
+        key: key.clone(),
+        after: after.clone(),
+    };
+    let k2 = dragged.upcoming[2].key.clone();
+    let k4 = dragged.upcoming[4].key.clone();
+    assert_eq!(err(&dragged, &e, promote(&k2, &k0)), ReduceError::BadMove);
+    assert_eq!(err(&dragged, &e, promote(&k6, &k0)), ReduceError::BadMove);
+    assert_eq!(err(&dragged, &e, promote(&k6, &k1)), ReduceError::BadMove);
+    // Nor anything the user added.
+    // (Play next with the section off: added, not in the group.)
+    let added = doc_of(play_next(&["x"], vec![], false), &dragged, &e);
+    let x = key_of(&added, "x");
+    let current = added.current.as_ref().unwrap().key.clone();
+    assert_eq!(added.upcoming[0].key, x);
+    assert_eq!(err(&added, &e, promote(&x, &current)), ReduceError::BadMove);
+    assert_eq!(
+        err(&added, &e, promote(&k4, &current)),
+        ReduceError::BadMove
+    );
+    // Unshuffling keeps the marks; a reshuffle is a new order, nothing settled.
+    let off = doc_of(QueueOp::SetShuffle { enabled: false }, &dragged, &e);
+    assert!(off.upcoming.iter().any(|i| i.key == k6 && i.settled));
+    let r = doc_of(QueueOp::Reshuffle, &dragged, &e);
+    assert!(settled(&r).iter().all(|s| !s));
+}
+
 #[test]
 fn promote_for_mix_moves_within_the_tail_and_shuffle_off_still_restores() {
     let e = DeterministicEntropy::new(7);

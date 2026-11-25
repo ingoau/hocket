@@ -380,6 +380,7 @@ mod tests {
 
     fn item(key: &str, track: &str, index: u32) -> QueueItem {
         QueueItem {
+            settled: false,
             key: key.into(),
             track: track.into(),
             source: QueueSource::Context { index },

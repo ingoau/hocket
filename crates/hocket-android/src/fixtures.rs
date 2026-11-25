@@ -38,6 +38,7 @@ mod tests {
     fn entry(key: &str, source: QueueSource) -> QueueEntry {
         QueueEntry {
             item: QueueItem {
+                settled: false,
                 key: key.into(),
                 track: TrackRef::new("srv", format!("t-{key}")),
                 source,

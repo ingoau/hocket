@@ -505,7 +505,15 @@ proptest! {
         }
         if !doc.shuffle {
             let off = apply(&toggled, QueueOp::SetShuffle { enabled: false }, &e).0;
-            prop_assert_eq!(Flat::of(&off), Flat::of(&doc));
+            // (A shuffle clears AutoMix's `settled` marks: a new order.)
+            let unsettled = |d: &SessionDocument| {
+                let mut f = Flat::of(d);
+                for i in &mut f.list {
+                    i.settled = false;
+                }
+                f
+            };
+            prop_assert_eq!(unsettled(&off), unsettled(&doc));
         }
     }
 
