@@ -690,7 +690,19 @@ private fun MainShell(snackbar: SnackbarHostState) {
                     }
                     // The panel's Lyrics and Queue take over the main screen beside it (the lyrics'
                     // backdrop runs on behind the panel too).
-                    PanelPageHost(page = if (panelOpen) sheet.panelPage else null, onClose = { sheet.panelPage = null }, endInset = panelRoom)
+                    // Its links (the lyrics' "Turn on external lyrics", a queue row's album) close the
+                    // page first, so what they open shows beside the panel.
+                    val panelNavigator = remember(contentNavigator, sheet) {
+                        app.hocket.ui.DetailNavigator(
+                            { id -> sheet.panelPage = null; contentNavigator.openAlbum(id) },
+                            { id -> sheet.panelPage = null; contentNavigator.openArtist(id) },
+                            { id -> sheet.panelPage = null; contentNavigator.openPlaylist?.invoke(id) },
+                            { route, tag -> sheet.panelPage = null; contentNavigator.openSetting?.invoke(route, tag) },
+                        )
+                    }
+                    CompositionLocalProvider(app.hocket.ui.LocalDetailNavigator provides panelNavigator) {
+                        PanelPageHost(page = if (panelOpen) sheet.panelPage else null, onClose = { sheet.panelPage = null }, endInset = panelRoom)
+                    }
                 }
             }
             // Links inside the full player (album/artist, the "More" sheet's go-to actions, rows'

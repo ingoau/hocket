@@ -23,6 +23,7 @@ import app.hocket.ui.components.askForArtwork
 import app.hocket.ui.components.rememberArtworkReach
 import androidx.compose.runtime.remember
 import app.hocket.ui.components.ArtworkPathCache
+import app.hocket.ui.components.ArtworkMisses
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.BlurredEdgeTreatment
@@ -197,8 +198,9 @@ fun rememberArtworkLayout(coverArt: String?, preference: Preference, dark: Boole
     var fetched by remember(state) { mutableStateOf(state.value != null) }
     LaunchedEffect(state, reach) {
         if (fetched || coverArt == null || never) return@LaunchedEffect
-        val asked = askForArtwork(client, coverArt, ArtworkSizes.GRID, reach) { path ->
-            if (path != null) ArtworkPathCache.put(ArtworkPathCache.key(coverArt, ArtworkSizes.GRID), path)
+        val asked = askForArtwork(client, coverArt, ArtworkSizes.GRID, reach) { path, _ ->
+            val key = ArtworkPathCache.key(coverArt, ArtworkSizes.GRID)
+            if (path != null) { ArtworkPathCache.put(key, path); ArtworkMisses.forget(key) }
             state.value = ImmersiveArtwork.Resolved(path?.let { ImmersiveArtwork.analyse(it, preference, dark) })
             if (path != null) fetched = true
         }

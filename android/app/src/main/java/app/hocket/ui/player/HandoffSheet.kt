@@ -137,7 +137,7 @@ fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpe
                 GroupLabel(stringResource(R.string.handoff_this_device), Modifier.padding(top = 16.dp), color = MaterialTheme.colorScheme.primary)
                 SegmentedGroup {
                     if (outputs.outputs.isEmpty()) {
-                        DeviceRow(0, 1, stringResource(R.string.handoff_this_device), if (heardHere) stringResource(R.string.handoff_playing) else null, HocketIcons.Outlined.PhoneAndroid, heardHere, onClick = { pick(null) })
+                        DeviceRow(0, 1, stringResource(R.string.handoff_device_speaker), if (heardHere) stringResource(R.string.handoff_playing) else null, HocketIcons.Outlined.PhoneAndroid, heardHere, onClick = { pick(null) })
                     } else outputs.outputs.forEachIndexed { i, o ->
                         val on = heardHere && o.id == outputs.current?.id
                         val detail = outputDetail(o)

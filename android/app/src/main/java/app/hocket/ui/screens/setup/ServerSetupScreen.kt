@@ -132,11 +132,14 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
     val sync by client.syncProgress.collectAsStateWithLifecycle()
 
     val loginContext = androidx.compose.ui.platform.LocalContext.current
+    val formAccount by androidx.compose.runtime.rememberUpdatedState(existing?.id)
     LaunchedEffect(client) {
         client.errors.collect { e ->
+            // Another account's background trouble (a server of its gone unreachable) isn't this form's.
+            if (!isSetupError(e.account_id, attempting = connecting || ytmBusy || pairing, formAccount)) return@collect
             connecting = false; ytmBusy = false
             // The server form says what went wrong in words; YouTube Music's step keeps the core's text.
-            error = (if (ytm) null else loginErrorText(e.kind)?.let(loginContext::getString)) ?: e.detail?.let { "${e.message}\n$it" } ?: e.message
+            error = setupErrorText(if (ytm) null else loginErrorText(e.kind)?.let(loginContext::getString), e.message, e.detail)
         }
     }
     LaunchedEffect(existing) { if (existing != null) connecting = false }
@@ -525,6 +528,18 @@ fun CapabilitySummary(server: AccountInfo) {
 }
 
 /** Friendly text for the sign-in failures people hit most, or null to show the core's own. */
+/**
+ * Whether an error about [accountId] belongs on the setup form: any while it is [attempting] (signing
+ * in, adding YouTube Music or pairing: the new account's id isn't known yet), else only one about no
+ * account or about [formAccount], the account the form is for.
+ */
+internal fun isSetupError(accountId: String?, attempting: Boolean, formAccount: String?): Boolean =
+    attempting || accountId == null || accountId == formAccount
+
+/** What the form shows: [friendly] words (else the core's [message]), and the core's [detail] (a certificate's reason, say) under them. */
+internal fun setupErrorText(friendly: String?, message: String, detail: String?): String =
+    listOfNotNull(friendly ?: message, detail?.takeIf { it.isNotBlank() }).joinToString("\n")
+
 private fun loginErrorText(kind: app.hocket.core.api.ErrorKind): Int? = when (kind) {
     app.hocket.core.api.ErrorKind.Auth -> R.string.setup_error_auth
     app.hocket.core.api.ErrorKind.Network -> R.string.setup_error_unreachable

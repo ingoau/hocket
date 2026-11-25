@@ -54,6 +54,20 @@ class ArtworkMissesTest {
     }
 
     @Test
+    fun aCoverThatShowedIsAskedForAgainOfflineAndStartsAfresh() {
+        ArtworkMisses.observe(online)
+        ArtworkMisses.missed("a@320", round = 0, now = 0)
+        // Asked again, its file came and loaded.
+        ArtworkMisses.forget("a@320")
+        assertEquals(0L, ArtworkMisses.waitFor("a@320", online = false, now = 0))
+        assertEquals(0, ArtworkMisses.round("a@320"))
+        // Places still holding the old round don't count a later failure twice.
+        ArtworkMisses.missed("a@320", round = 0, now = 0)
+        ArtworkMisses.missed("a@320", round = 0, now = 0)
+        assertEquals(1, ArtworkMisses.round("a@320"))
+    }
+
+    @Test
     fun aServerComingBackAsksAfresh() {
         ArtworkMisses.observe(ArtworkReach(true, 0))
         ArtworkMisses.missed("a@320", round = 0, now = 0)

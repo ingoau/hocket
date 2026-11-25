@@ -122,7 +122,8 @@ class ArtworkProvider : ContentProvider() {
  *
  * [await] waits [quickMs] for the answer (a cache hit, or the core's immediate "nothing" while
  * offline) with no limit; past that it needs one of [maxWaiting] slots to keep waiting, up to
- * [timeoutMs] in all, and without a slot answers null at once. A cancelled [CancellationSignal]
+ * [timeoutMs] in all, and without a slot answers null at once. At most [maxLookups] lookups run at
+ * once (every open starts one for its cover, kept or not): the rest wait their turn. A cancelled [CancellationSignal]
  * ends the wait with null.
  */
 internal class ArtworkWaits(
@@ -130,21 +131,30 @@ internal class ArtworkWaits(
     private val quickMs: Long = QUICK_MS,
     private val timeoutMs: Long = TIMEOUT_MS,
     maxWaiting: Int = MAX_WAITING,
+    maxLookups: Int = MAX_LOOKUPS,
 ) {
     companion object {
         const val QUICK_MS = 300L
         const val TIMEOUT_MS = 5_000L
         /** Of the process's ~15 binder threads. */
         const val MAX_WAITING = 4
+        /** Core lookups (fetches) running at once, whoever waits for them. */
+        const val MAX_LOOKUPS = 6
     }
 
     private val slots = Semaphore(maxWaiting)
+    private val lookups = kotlinx.coroutines.sync.Semaphore(maxLookups)
     private val inFlight = ConcurrentHashMap<String, Deferred<String?>>()
 
     fun await(key: String, signal: CancellationSignal?, lookup: suspend () -> String?): String? {
         if (signal?.isCanceled == true) return null
         val lookupJob = inFlight.computeIfAbsent(key) {
-            scope.async(start = CoroutineStart.LAZY) { runCatching { lookup() }.getOrNull() }
+            scope.async(start = CoroutineStart.LAZY) {
+                // Only [maxLookups] run at once; the rest queue for a turn, but not past [timeoutMs]
+                // (by then the opens that wanted them have long given up).
+                if (withTimeoutOrNull(timeoutMs) { lookups.acquire() } == null) return@async null
+                try { runCatching { lookup() }.getOrNull() } finally { lookups.release() }
+            }
                 .also { d -> d.invokeOnCompletion { inFlight.remove(key, d) } }
         }
         lookupJob.start()

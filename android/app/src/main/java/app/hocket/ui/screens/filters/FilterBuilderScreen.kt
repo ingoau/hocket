@@ -549,10 +549,15 @@ private fun ValueEditor(value: FilterValue, onChange: (FilterValue) -> Unit) {
 internal fun formatFilterNumber(v: Double): String =
     if (v == kotlin.math.floor(v) && kotlin.math.abs(v) < 1e15) v.toLong().toString() else v.toBigDecimal().stripTrailingZeros().toPlainString()
 
-/** What the user typed into a number field, as the value to keep, or null while it isn't one yet ("", "-", "1e"). */
+/**
+ * What the user typed into a number field, as the value to keep, or null while it isn't one yet ("", "-", "1e").
+ * A decimal comma (the decimal keyboard's separator in many locales: "2,5") reads as a point.
+ */
 internal fun parseFilterNumber(text: String, whole: Boolean): Double? {
     val t = text.trim()
-    return if (whole) t.toUIntOrNull()?.toDouble() else t.toDoubleOrNull()?.takeIf { it.isFinite() }
+    if (whole) return t.toUIntOrNull()?.toDouble()
+    val decimal = if (t.count { it == ',' } == 1 && '.' !in t) t.replace(',', '.') else t
+    return decimal.toDoubleOrNull()?.takeIf { it.isFinite() }
 }
 
 /**

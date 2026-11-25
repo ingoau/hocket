@@ -73,7 +73,7 @@ fun Artwork(
     // Unresolved (null: still asking the core) and resolved-to-nothing both show the id-seeded
     // gradient, so a shared-element remount never flashes an empty white card.
     val startedWithCachedPath = remember(cacheKey) { cacheKey?.let { ArtworkPathCache.get(it) } != null }
-    val state = remember(cacheKey) { mutableStateOf(cacheKey?.let { ArtworkPathCache.get(it) }?.let { Resolved(it) }) }
+    val state = remember(cacheKey) { mutableStateOf(cacheKey?.let { k -> ArtworkPathCache.get(k)?.let { Resolved(it, ArtworkMisses.round(k)) } }) }
     val reach = rememberArtworkReach(client)
     // A file that failed to load asks again (bounded by the shared schedule).
     var reload by remember(cacheKey) { mutableIntStateOf(0) }
@@ -81,13 +81,13 @@ fun Artwork(
         // A stand-in size (the core answers with what it has when the server can't be reached) is
         // asked for again on a network or server change, and never remembered as this size's file.
         if (state.value?.let { it.path != null && isExactArtwork(it.path, requested) } == true) return@LaunchedEffect
-        if (coverArt == null || cacheKey == null) { state.value = Resolved(null); return@LaunchedEffect }
-        val asked = askForArtwork(client, coverArt, requested, reach) { path ->
+        if (coverArt == null || cacheKey == null) { state.value = Resolved(null, 0); return@LaunchedEffect }
+        val asked = askForArtwork(client, coverArt, requested, reach) { path, round ->
             if (path != null && isExactArtwork(path, requested)) ArtworkPathCache.put(cacheKey, path)
-            state.value = Resolved(path)
+            state.value = Resolved(path, round)
         }
         // Nothing asked (offline with a miss known, or out of retries): unresolved is a miss now.
-        if (!asked && state.value == null) state.value = Resolved(null)
+        if (!asked && state.value == null) state.value = Resolved(null, 0)
     }
     val resolved = state.value
     val platformContext = LocalPlatformContext.current
@@ -135,11 +135,17 @@ fun Artwork(
                 contentDescription = contentDescription,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
-                onSuccess = { loaded = true },
+                onSuccess = {
+                    loaded = true
+                    // This size shows: its misses are over, so offline it is asked for again later.
+                    if (cacheKey != null && isExactArtwork(path, requested)) ArtworkMisses.forget(cacheKey)
+                },
                 // Asked again (the core fetches afresh a file that has gone), a bounded number of times.
+                // The miss counts against the round this path was handed out in, so every place
+                // showing the same cover failing together is one miss, not one each.
                 onError = {
-                    cacheKey?.let { ArtworkPathCache.remove(it); ArtworkMisses.missed(it, ArtworkMisses.round(it), System.currentTimeMillis()) }
-                    state.value = Resolved(null)
+                    cacheKey?.let { ArtworkPathCache.remove(it); ArtworkMisses.missed(it, r?.round ?: 0, System.currentTimeMillis()) }
+                    state.value = Resolved(null, 0)
                     reload++
                 },
             )
@@ -147,7 +153,8 @@ fun Artwork(
     }
 }
 
-private class Resolved(val path: String?)
+/** [path] as handed out in [round] of its cover's misses ([ArtworkMisses.round]). */
+private class Resolved(val path: String?, val round: Int)
 
 /** The core's cache sizes ("<id>_<size>.img"); a request snaps up to the nearest. */
 private val CORE_ARTWORK_SIZES = intArrayOf(64, 160, 320, 640, 1280)
@@ -187,11 +194,11 @@ fun rememberArtworkReach(client: CoreClient = LocalCoreClient.current): ArtworkR
 
 /**
  * Asks the core for [coverArt] at [size] on the shared schedule ([ArtworkMisses]), handing each
- * answer to [onAnswer]: at once, or when the cover's next retry is due, and again after each miss
- * until the retries run out. Offline, a cover already missed is not asked for at all. Returns once
+ * answer to [onAnswer] with the round it was asked in ([ArtworkMisses.round]): at once, or when the
+ * cover's next retry is due, and again after each miss until the retries run out. Offline, a cover already missed is not asked for at all. Returns once
  * a file came or no more asks are due; false when it asked nothing.
  */
-internal suspend fun askForArtwork(client: CoreClient, coverArt: String, size: Int, reach: ArtworkReach, onAnswer: suspend (String?) -> Unit): Boolean {
+internal suspend fun askForArtwork(client: CoreClient, coverArt: String, size: Int, reach: ArtworkReach, onAnswer: suspend (path: String?, round: Int) -> Unit): Boolean {
     val key = ArtworkPathCache.key(coverArt, size)
     ArtworkMisses.observe(reach)
     var asked = false
@@ -201,7 +208,7 @@ internal suspend fun askForArtwork(client: CoreClient, coverArt: String, size: I
         if (wait > 0) delay(wait)
         val path = client.artworkPath(coverArt, size)
         asked = true
-        onAnswer(path)
+        onAnswer(path, round)
         if (path != null) return true
         ArtworkMisses.missed(key, round, System.currentTimeMillis())
     }
@@ -262,6 +269,13 @@ internal object ArtworkMisses {
             map[key] = Miss(misses, now + (ARTWORK_RETRY_MS shl (misses - 1).coerceAtMost(ARTWORK_RETRIES - 1)))
         }
     }
+
+    /**
+     * [key]'s file showed: its misses are forgotten, so a later miss starts the schedule afresh and,
+     * offline, the cover is still asked for (the core may have it). Forgotten on a file that loads
+     * rather than on any answer with a path, so a file the loader can't read still runs out of retries.
+     */
+    fun forget(key: String) { synchronized(map) { map.remove(key) } }
 
     internal fun clear() { synchronized(map) { map.clear(); last = null } }
 }

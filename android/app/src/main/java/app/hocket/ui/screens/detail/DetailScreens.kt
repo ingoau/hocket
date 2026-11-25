@@ -717,6 +717,9 @@ internal data class PlaylistEntry(val key: String, val track: Track)
 
 /** Rows per playlist query: big enough that most playlists are one, small enough to show the first quickly. */
 private const val PLAYLIST_PAGE = 1000u
+/** Asks for a failing page of a playlist, 1 s then 2 s apart. */
+private const val PLAYLIST_PAGE_TRIES = 3
+private const val PLAYLIST_PAGE_RETRY_MS = 1_000L
 
 /** Keys by id plus occurrence ("id#0", "id#1" for a track listed twice), never by position. */
 internal fun playlistEntries(tracks: List<Track>): List<PlaylistEntry> {
@@ -746,6 +749,9 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
     // Set once the core answered without the playlist, or couldn't answer: the page says so.
     var unavailable by remember(id) { mutableStateOf<DetailUnavailable?>(null) }
     var attempt by remember(id) { mutableIntStateOf(0) }
+    // A page of tracks failed (after retries) with no whole list to show: the page says so, rather
+    // than showing a playlist cut short.
+    var incomplete by remember(id) { mutableStateOf(false) }
     LaunchedEffect(id, libraryGen, attempt) {
         val startedAt = commits
         val res = client.query(Queries.playlist(id))
@@ -755,16 +761,29 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
         // a list already on screen is only replaced once this has caught up, so it never shrinks.
         val loaded = ArrayList<Track>()
         var failed = false
+        var total: Int? = null
         while (true) {
-            val page = (client.query(Queries.playlistTracks(id, Page(loaded.size.toUInt(), PLAYLIST_PAGE))) as? QueryResult.Tracks)?.data
+            // A page that fails is asked again a couple of times before the load gives up.
+            var page: app.hocket.core.api.TrackPage? = null
+            for (tries in 0 until PLAYLIST_PAGE_TRIES) {
+                if (tries > 0) delay(PLAYLIST_PAGE_RETRY_MS * tries)
+                page = (client.query(Queries.playlistTracks(id, Page(loaded.size.toUInt(), PLAYLIST_PAGE))) as? QueryResult.Tracks)?.data
+                if (page != null) break
+            }
             if (page == null) { failed = true; break }
+            total = page.total.toInt()
             loaded += page.items
             if (page.items.isEmpty() || loaded.size >= page.total.toInt()) break
             if (dragKey == null && commits == startedAt && loaded.size >= (entries?.size ?: 0)) entries = playlistEntries(loaded)
         }
         // Never under the finger: a drag in progress keeps its rows until it's dropped.
         snapshotFlow { dragKey }.first { it == null }
-        if (commits == startedAt) entries = if (failed) entries ?: playlistEntries(loaded) else playlistEntries(loaded)
+        if (commits == startedAt) {
+            val shown = entries
+            if (!failed) entries = playlistEntries(loaded)
+            // A list already whole (from before) stays; one cut short, or none at all, is a failure.
+            incomplete = failed && (shown == null || (total != null && shown.size < total))
+        }
     }
     val p = playlist
     val haptics = LocalHapticFeedback.current
@@ -801,9 +820,14 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
     if (selecting) selectMode = false
     val choosing = selecting || selectMode
     androidx.activity.compose.BackHandler(enabled = selectMode) { selectMode = false }
-    if (p == null) {
-        val why = unavailable
-        if (why != null) UnavailableDetail(nav, embedded, flyingCover, shareKey, immersive = false, why, R.string.playlist_missing_body, R.string.playlist_failed_title, onRetry = { unavailable = null; attempt++ })
+    if (p == null || incomplete) {
+        val why = unavailable ?: DetailUnavailable.Failed.takeIf { incomplete }
+        if (why != null) UnavailableDetail(nav, embedded, flyingCover, shareKey, immersive = false, why, R.string.playlist_missing_body, R.string.playlist_failed_title, onRetry = {
+            unavailable = null
+            // The part-list goes too: the retry shows the load from the start, not the same cut.
+            if (incomplete) { incomplete = false; entries = null }
+            attempt++
+        })
         else DetailScaffold(nav, embedded, null, flyingCover, immersive = false, shareKey = shareKey, loading = true, listState = listState) {}
         return
     }

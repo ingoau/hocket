@@ -339,9 +339,12 @@ private enum class SearchKind(val label: Int) {
     All(R.string.search_kind_all), Songs(R.string.search_songs), Lyrics(R.string.search_lyrics), Albums(R.string.search_albums), Artists(R.string.search_artists), Playlists(R.string.search_playlists)
 }
 
-/** Albums as a grid of cards, a row of cells per list item, as many ~160 dp columns as [width] holds. */
+/**
+ * Albums as a grid of cards, a row of cells per list item, as many ~160 dp columns as the list's
+ * rows hold in a screen [width] wide (they stop at [app.hocket.ui.components.ContentMaxWidth], centred).
+ */
 private fun androidx.compose.foundation.lazy.LazyListScope.albumGrid(albums: List<app.hocket.core.api.Album>, keyPrefix: String, width: androidx.compose.ui.unit.Dp, onClick: (app.hocket.core.api.Album) -> Unit) {
-    val columns = ((width - 20.dp) / 160.dp).toInt().coerceAtLeast(2)
+    val columns = ((minOf(width, app.hocket.ui.components.ContentMaxWidth) - 20.dp) / 160.dp).toInt().coerceAtLeast(2)
     itemsIndexed(albums.chunked(columns), key = { _, row -> keyPrefix + "g" + row.first().id }) { _, row ->
         Row(Modifier.padding(horizontal = 10.dp).testTag("search.albums.grid")) {
             row.forEach { a -> app.hocket.ui.components.AlbumCard(a, onClick = { onClick(a) }, modifier = Modifier.weight(1f)) }

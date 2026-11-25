@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import app.hocket.core.Commands
 import app.hocket.core.api.Command
 import app.hocket.core.api.NetworkKind
@@ -31,7 +32,7 @@ import java.security.MessageDigest
  * A network counts as online only when it can reach anything: not behind a captive portal, and
  * validated unless it is a local one (Wi-Fi or Ethernet), where a self-hosted server can still be
  * reachable without internet access ([usable]). Changes after the first report settle for
- * [debounceMs] before they're published, so a handover that briefly has no default network (Wi-Fi
+ * [debounceMs] before they're published (at most twice that while it keeps changing), so a handover that briefly has no default network (Wi-Fi
  * lost, mobile data a moment later) or a network that validates right after connecting reports
  * only where it ends up, not an `Offline` blip that resets recovery and artwork retries.
  */
@@ -55,6 +56,10 @@ class NetworkMonitor(
     private var heard = false
     /** A state waiting out [debounceMs] before it's published. */
     private var pending: NetworkState? = null
+    /** When [pending] started waiting (uptime ms). */
+    private var pendingSince = 0L
+    /** The longest a change waits however often it changes again. */
+    private val maxWait = debounceMs * 2
     private val flush = Runnable { flushPending() }
 
     // Capabilities always follow onAvailable (API 26+), so only they, the blocked status and onLost
@@ -186,9 +191,21 @@ class NetworkMonitor(
             emit(state)
             return
         }
+        // Back where it was reported: nothing to publish. The same state again (capability noise
+        // that changes nothing reported): the wait already running stands rather than starting over.
+        if (state == last) {
+            handler.removeCallbacks(flush)
+            pending = null
+            return
+        }
+        if (state == pending) return
+        // Each different state waits [debounceMs] afresh, but never past [maxWait] since the first:
+        // a network that keeps changing is still reported.
+        val now = SystemClock.uptimeMillis()
+        if (pending == null) pendingSince = now
         pending = state
         handler.removeCallbacks(flush)
-        handler.postDelayed(flush, debounceMs)
+        handler.postDelayed(flush, (pendingSince + maxWait - now).coerceIn(0L, debounceMs))
     }
 
     @Synchronized

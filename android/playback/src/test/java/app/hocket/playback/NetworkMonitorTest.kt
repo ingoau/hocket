@@ -119,6 +119,55 @@ class NetworkMonitorTest {
     }
 
     @Test
+    fun steadyCapabilityNoiseDoesNotHoldBackAChange() {
+        val cm = context.getSystemService(ConnectivityManager::class.java)
+        val sent = mutableListOf<NetworkState>()
+        val m = NetworkMonitor(context, { c -> if (c is Command.SetNetworkState) sent += c.data.state })
+        m.start()
+        val callback = shadowOf(cm).networkCallbacks.single()
+        val wifi = ShadowNetwork.newInstance(1)
+        val cell = ShadowNetwork.newInstance(2)
+        callback.onAvailable(wifi)
+        callback.onCapabilitiesChanged(wifi, caps(NetworkCapabilities.TRANSPORT_WIFI, NetworkCapabilities.NET_CAPABILITY_NOT_METERED))
+        ShadowLooper.idleMainLooper(NetworkMonitor.DEBOUNCE_MS, TimeUnit.MILLISECONDS)
+        val before = sent.size
+        // Mobile data takes over, then repeats the same capabilities every few hundred ms.
+        callback.onAvailable(cell)
+        repeat(3) {
+            callback.onCapabilitiesChanged(cell, caps(NetworkCapabilities.TRANSPORT_CELLULAR))
+            ShadowLooper.idleMainLooper(NetworkMonitor.DEBOUNCE_MS * 2 / 5, TimeUnit.MILLISECONDS)
+        }
+        assertEquals(listOf(NetworkState(NetworkKind.Cellular, true, null)), sent.drop(before))
+        m.stop()
+    }
+
+    @Test
+    fun aNetworkThatKeepsChangingIsStillReported() {
+        val cm = context.getSystemService(ConnectivityManager::class.java)
+        val sent = mutableListOf<NetworkState>()
+        val m = NetworkMonitor(context, { c -> if (c is Command.SetNetworkState) sent += c.data.state })
+        m.start()
+        val callback = shadowOf(cm).networkCallbacks.single()
+        val wifi = ShadowNetwork.newInstance(1)
+        val cell = ShadowNetwork.newInstance(2)
+        callback.onAvailable(wifi)
+        callback.onCapabilitiesChanged(wifi, caps(NetworkCapabilities.TRANSPORT_WIFI, NetworkCapabilities.NET_CAPABILITY_NOT_METERED))
+        ShadowLooper.idleMainLooper(NetworkMonitor.DEBOUNCE_MS, TimeUnit.MILLISECONDS)
+        val before = sent.size
+        callback.onAvailable(cell)
+        // Metered and unmetered in turn, each before the last has settled.
+        repeat(6) { i ->
+            val c = if (i % 2 == 0) caps(NetworkCapabilities.TRANSPORT_CELLULAR)
+            else caps(NetworkCapabilities.TRANSPORT_CELLULAR, NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+            callback.onCapabilitiesChanged(cell, c)
+            ShadowLooper.idleMainLooper(NetworkMonitor.DEBOUNCE_MS / 2, TimeUnit.MILLISECONDS)
+        }
+        // Reported within twice the debounce of the first change, not held back by the rest.
+        assertEquals(NetworkKind.Cellular, sent.drop(before).first().kind)
+        m.stop()
+    }
+
+    @Test
     fun followsTheDefaultNetworkCallbackAndSkipsRepeats() {
         val cm = context.getSystemService(ConnectivityManager::class.java)
         val sent = mutableListOf<NetworkState>()

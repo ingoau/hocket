@@ -84,6 +84,30 @@ class ArtworkWaitsTest {
     }
 
     @Test
+    fun onlyAFewLookupsRunAtOnceAndTheRestWaitTheirTurn() {
+        val waits = ArtworkWaits(scope, quickMs = 20, timeoutMs = 5_000, maxWaiting = 0, maxLookups = 2)
+        val running = AtomicInteger()
+        val most = AtomicInteger()
+        val calls = AtomicInteger()
+        val release = CompletableDeferred<String?>()
+        // Five covers asked for and given up on (no waiting slots): their lookups go on, two at a time.
+        (1..5).forEach { i ->
+            assertNull(waits.await("320/$i", null) {
+                calls.incrementAndGet()
+                most.accumulateAndGet(running.incrementAndGet(), ::maxOf)
+                try { release.await() } finally { running.decrementAndGet() }
+            })
+        }
+        Thread.sleep(200)
+        assertEquals(2, calls.get())
+        release.complete(null)
+        val deadline = System.currentTimeMillis() + 2_000
+        while (calls.get() < 5 && System.currentTimeMillis() < deadline) Thread.sleep(10)
+        assertEquals(5, calls.get())
+        assertEquals(2, most.get())
+    }
+
+    @Test
     fun aCancelledOpenIsLetGo() {
         val waits = ArtworkWaits(scope, quickMs = 20, timeoutMs = 30_000, maxWaiting = 4)
         val signal = CancellationSignal()

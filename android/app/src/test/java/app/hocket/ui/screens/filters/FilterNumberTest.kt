@@ -24,6 +24,16 @@ class FilterNumberTest {
     }
 
     @Test
+    fun aDecimalCommaReadsAsAPoint() {
+        assertEquals(2.5, parseFilterNumber("2,5", whole = false)!!, 0.0)
+        assertEquals(1.0, parseFilterNumber("1,", whole = false)!!, 0.0)
+        assertEquals(-0.25, parseFilterNumber("-0,25", whole = false)!!, 0.0)
+        assertNull(parseFilterNumber("1,2,3", whole = false))
+        assertNull(parseFilterNumber("1,000.5", whole = false))
+        assertNull(parseFilterNumber("2,5", whole = true))
+    }
+
+    @Test
     fun valuesShowAsTyped() {
         assertEquals("0", formatFilterNumber(0.0))
         assertEquals("1990", formatFilterNumber(1990.0))
