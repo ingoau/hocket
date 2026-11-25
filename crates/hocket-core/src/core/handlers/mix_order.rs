@@ -44,10 +44,6 @@ use crate::core::handlers::transitions::MixFacts;
 
 #[derive(Debug, Default)]
 pub(crate) struct MixOrderState {
-    /// Entries whose follow-up was decided here, with the follow-up chosen.
-    /// While an entry still has it, it is not decided again (even when a
-    /// room's document lacks the `settled` mark).
-    decided: HashMap<QueueKey, QueueKey>,
     /// A decision may be due but was held back by something that passes (a
     /// skip just now, a load pending, a record on its way, offline):
     /// position reports ask again.
@@ -157,7 +153,6 @@ impl Actor {
                 }
                 return;
             }
-            self.mix_order.decided.insert(anchor, key);
             for k in passed {
                 *self.mix_order.passes.entry(k).or_default() += 1;
             }
@@ -176,10 +171,7 @@ impl Actor {
         let mut steps = vec![];
         for j in 0..ORDER_AHEAD.min(list.len()) {
             let anchor = list[j];
-            if (Some(j) == next && plan_fixed)
-                || anchor.unavailable
-                || self.mix_order.decided.get(&anchor.key) == list.get(j + 1).map(|i| &i.key)
-            {
+            if (Some(j) == next && plan_fixed) || anchor.unavailable {
                 continue;
             }
             let run: Vec<&QueueItem> = list[j + 1..]
@@ -248,27 +240,12 @@ impl Actor {
         (steps, false)
     }
 
-    /// Forget decisions about entries no longer in the queue, and passes of
-    /// entries no longer ahead.
+    /// Forget the passes of entries no longer ahead.
     fn prune_mix_order(&mut self) {
         let Some(doc) = self.doc() else {
             return;
         };
-        let in_queue: HashSet<&QueueKey> = doc
-            .history
-            .iter()
-            .chain(doc.current.as_ref())
-            .chain(doc.upcoming.iter())
-            .map(|i| &i.key)
-            .collect();
         let ahead: HashSet<&QueueKey> = doc.upcoming.iter().map(|i| &i.key).collect();
-        let gone: Vec<QueueKey> = self
-            .mix_order
-            .decided
-            .keys()
-            .filter(|k| !in_queue.contains(k))
-            .cloned()
-            .collect();
         let behind: Vec<QueueKey> = self
             .mix_order
             .passes
@@ -276,9 +253,6 @@ impl Actor {
             .filter(|k| !ahead.contains(k))
             .cloned()
             .collect();
-        for k in gone {
-            self.mix_order.decided.remove(&k);
-        }
         for k in behind {
             self.mix_order.passes.remove(&k);
         }

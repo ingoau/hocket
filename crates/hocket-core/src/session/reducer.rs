@@ -181,7 +181,9 @@ pub enum QueueOp {
     /// Unlike a drag the entry keeps its ordinal and flags, so turning
     /// shuffle off still restores the context's order; it is marked
     /// `settled`. An entry already directly after `after` stays put and is
-    /// only marked (the order kept the follow-up it had).
+    /// only marked (the order kept the follow-up it had). Never moves or
+    /// passes over an entry the user added or placed, a settled one or an
+    /// unavailable one.
     PromoteForMix {
         key: QueueKey,
         after: QueueKey,
@@ -1547,7 +1549,14 @@ impl Reducer<'_, '_> {
     /// places, so shuffling never changes what is in the group.
     fn shuffle_tail(&mut self) {
         let seed = self.ctx.entropy.next_seed();
-        self.reorder_tail(|items| shuffle_in_place(items, seed));
+        self.reorder_tail(|items| {
+            for i in items.iter_mut() {
+                // A new order: nothing in it is placed. (Unshuffling keeps
+                // the marks: a dragged entry keeps its place in that order.)
+                i.settled = false;
+            }
+            shuffle_in_place(items, seed)
+        });
         self.doc.shuffle = true;
     }
 
@@ -1568,10 +1577,6 @@ impl Reducer<'_, '_> {
         let fixed: Vec<bool> = tail.iter().map(|i| i.queued).collect();
         let (mut queued, mut movable): (Vec<QueueItem>, Vec<QueueItem>) =
             tail.into_iter().partition(|i| i.queued);
-        for i in &mut movable {
-            // A new order: nothing in it was placed.
-            i.settled = false;
-        }
         f(&mut movable);
         queued.reverse();
         movable.reverse();
@@ -1738,7 +1743,15 @@ impl Reducer<'_, '_> {
             || a < self.q.ptr
             || i <= a
             || a + 1 < self.q.group_end()
-            || self.q.list[a + 1..=i].iter().any(|e| e.queued)
+            // Never the user's entries or placed ones, nor past them: a
+            // promotion replayed on a newer document can't undo a drag.
+            || self.q.list[a + 1..=i].iter().any(|e| {
+                e.queued
+                    || e.added
+                    || e.settled
+                    || e.unavailable
+                    || matches!(e.source, QueueSource::Inserted)
+            })
         {
             return Err(ReduceError::BadMove);
         }

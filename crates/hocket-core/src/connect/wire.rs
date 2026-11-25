@@ -777,13 +777,12 @@ impl SessionOp {
     /// Edits addressed by queue key whose intent survives someone else's op
     /// committing first, and which are harmless if the room also took the
     /// original: they are replayed after a conflict instead of dropped, so a
-    /// reorder on one device is not lost to a skip on another.
+    /// reorder on one device is not lost to a skip on another. (AutoMix's
+    /// `PromoteForMix` isn't: the owner decides again on the new document.)
     pub fn replays_after_conflict(&self) -> bool {
         matches!(
             self,
-            SessionOp::MoveQueueItem { .. }
-                | SessionOp::RemoveQueueItems { .. }
-                | SessionOp::PromoteForMix { .. }
+            SessionOp::MoveQueueItem { .. } | SessionOp::RemoveQueueItems { .. }
         )
     }
 

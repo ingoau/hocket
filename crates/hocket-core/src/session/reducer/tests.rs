@@ -829,7 +829,31 @@ fn placed_entries_are_settled_until_a_shuffle() {
         &e,
     );
     assert!(dragged.upcoming[1].settled && dragged.upcoming[1].key == k6);
-    // A reshuffle: a new order, nothing settled.
+    // Nothing settled moves or is passed over: a promotion replayed after a
+    // drag can't undo it.
+    let promote = |key: &QueueKey, after: &QueueKey| QueueOp::PromoteForMix {
+        key: key.clone(),
+        after: after.clone(),
+    };
+    let k2 = dragged.upcoming[2].key.clone();
+    let k4 = dragged.upcoming[4].key.clone();
+    assert_eq!(err(&dragged, &e, promote(&k2, &k0)), ReduceError::BadMove);
+    assert_eq!(err(&dragged, &e, promote(&k6, &k0)), ReduceError::BadMove);
+    assert_eq!(err(&dragged, &e, promote(&k6, &k1)), ReduceError::BadMove);
+    // Nor anything the user added.
+    // (Play next with the section off: added, not in the group.)
+    let added = doc_of(play_next(&["x"], vec![], false), &dragged, &e);
+    let x = key_of(&added, "x");
+    let current = added.current.as_ref().unwrap().key.clone();
+    assert_eq!(added.upcoming[0].key, x);
+    assert_eq!(err(&added, &e, promote(&x, &current)), ReduceError::BadMove);
+    assert_eq!(
+        err(&added, &e, promote(&k4, &current)),
+        ReduceError::BadMove
+    );
+    // Unshuffling keeps the marks; a reshuffle is a new order, nothing settled.
+    let off = doc_of(QueueOp::SetShuffle { enabled: false }, &dragged, &e);
+    assert!(off.upcoming.iter().any(|i| i.key == k6 && i.settled));
     let r = doc_of(QueueOp::Reshuffle, &dragged, &e);
     assert!(settled(&r).iter().all(|s| !s));
 }

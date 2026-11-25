@@ -848,7 +848,7 @@ pub struct QueueItem {
     pub queued: bool,
     /// Its place is settled: the user dragged it there, or AutoMix's order chose it to follow
     /// the entry before it (`PromoteForMix`). AutoMix's order never moves it or passes it over.
-    /// Rides with the entry; a shuffle clears it.
+    /// Rides with the entry; a shuffle clears it (turning shuffle off keeps it).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[typeshare(skip)]
     pub settled: bool,

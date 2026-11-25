@@ -272,10 +272,11 @@ playback biases what plays toward pairs that blend. Decisions (issue #256):
   records that would now choose differently change nothing, and a new
   transport owner (another device, or this one after a restart) doesn't
   decide it again. A shuffle clears the marks; an edit that gives an entry
-  a follow-up that isn't settled decides that pair again. The owner also
-  remembers the pairs it decided (in memory), so a room that drops the
-  marks (a coordinator older than them) can't make it decide forever. The
-  next playable entry's follow-up is the one playback
+  a follow-up that isn't settled decides that pair again. The reducer
+  refuses a promotion of, or past, an entry the user added or placed, a
+  settled or an unavailable one, and a promotion isn't replayed after a
+  conflict (the owner decides again on the new document), so neither
+  undoes a drag. The next playable entry's follow-up is the one playback
   depends on: the current track's tail start was committed against the
   next track when it was preloaded (`mix_out_ms`), and the follow-up
   decides the next track's own tail start, so that pair isn't decided once
@@ -292,7 +293,7 @@ playback biases what plays toward pairs that blend. Decisions (issue #256):
   reports. Each decision is a
   synced `SessionOp::PromoteForMix { key, after }`: the entry moves to
   directly after `after` (or stays there, when it already is), past
-  unqueued entries only, keeping its ordinal, so turning shuffle off still
+  orderable entries only, keeping its ordinal, so turning shuffle off still
   restores the context's order, and is marked `settled`.
   The preloaded next source is then replanned against its new follow-up.
 - **How much randomness**: an entry's candidates are the `ORDER_WINDOW` = 6

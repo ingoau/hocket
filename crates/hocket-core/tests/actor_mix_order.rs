@@ -408,10 +408,10 @@ async fn the_decided_top_is_settled_in_the_document() {
         again.iter().map(|i| &i.key).collect::<Vec<_>>(),
         up.iter().map(|i| &i.key).collect::<Vec<_>>()
     );
-    // (A pair this device decided before, that the reshuffle happened to
-    // form again, counts as decided.)
-    let settled = again[1..=ORDER_AHEAD].iter().filter(|i| i.settled).count();
-    assert!(settled >= ORDER_AHEAD - 1, "{again:?}");
+    assert!(
+        again[1..=ORDER_AHEAD].iter().all(|i| i.settled),
+        "{again:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
