@@ -242,6 +242,8 @@ async function main(): Promise<void> {
       if (!pageVisible.has(contents.id)) {
         contents.once("destroyed", () => {
           pageVisible.delete(contents.id);
+          // Quitting destroys every window after the core has shut down: nothing to tell it then.
+          if (shuttingDown) return;
           pushVisibility(windows.main?.isFocused() ?? false);
         });
       }
