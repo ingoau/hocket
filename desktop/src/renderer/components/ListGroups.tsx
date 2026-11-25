@@ -5,7 +5,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ActionTarget, Album, Artist, PlayHistoryEntry } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
-import { useQuery } from "../store/queries";
+import { useLibraryVersion, useQuery } from "../store/queries";
+import { ALBUM_DEPS, ARTIST_DEPS } from "../store/library-changes";
 import { bridge } from "../core/bridge";
 import { usePins, useResolvedPins, type ResolvedPin } from "../lib/use-pins";
 import type { PinKind } from "../lib/library-pins";
@@ -114,7 +115,7 @@ export function useRecentHistory(): PlayHistoryEntry[] | undefined {
 /** Albums or artists by id, in that order (the core has no batch query for them). */
 export function useDetails<K extends "album" | "artist">(kind: K, ids: string[]): (K extends "album" ? Album : Artist)[] {
   const key = ids.join(",");
-  const libraryVersion = useApp((s) => s.libraryVersion);
+  const libraryVersion = useLibraryVersion(kind === "album" ? ALBUM_DEPS : ARTIST_DEPS, () => ids);
   const [state, setState] = useState<{ key: string; items: (Album | Artist)[] }>({ key: "", items: [] });
   useEffect(() => {
     if (!ids.length) return;

@@ -4,8 +4,8 @@
 // size on a wash of its own colour that fades into the page under the actions
 // (Small); with none, an accent gradient (None).
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { ARTWORK_SIZES } from "@shared/constants";
 import { resolveArtwork } from "./Artwork";
+import { useLargeArtworkSize } from "../lib/artwork-size";
 import { Icon } from "./Icon";
 import { extractAccent } from "../lib/accent";
 import { heroWash } from "../lib/contrast";
@@ -33,11 +33,12 @@ export function heroMode(natural: { width: number; height: number } | undefined,
 export function DetailHead({ coverArt, round = false, icon = "music", onContextMenu, children, actions, testId }: { coverArt: string | undefined; round?: boolean; icon?: string; onContextMenu?: (e: React.MouseEvent) => void; children: ReactNode; actions?: ReactNode; testId?: string }) {
   // null while resolving; undefined when there is no cover (or it could not be fetched).
   const [resolved, setResolved] = useState<{ id: string; url: string | undefined } | undefined>(undefined);
+  const size = useLargeArtworkSize();
   useEffect(() => {
     let alive = true;
-    if (coverArt) void resolveArtwork(coverArt, ARTWORK_SIZES.full).then((u) => alive && setResolved({ id: coverArt, url: u }));
+    if (coverArt) void resolveArtwork(coverArt, size).then((u) => alive && setResolved({ id: coverArt, url: u }));
     return () => { alive = false; };
-  }, [coverArt]);
+  }, [coverArt, size]);
   const url = !coverArt ? undefined : resolved?.id === coverArt ? resolved.url : null;
   const [natural, setNatural] = useState<{ width: number; height: number } | undefined>(undefined);
   const [width, setWidth] = useState(0);

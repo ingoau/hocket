@@ -59,7 +59,8 @@ function fetchArtistCover(key: string, id: string, version: number): void {
 /** The pictures of [ids] on [serverId] (a lookup), and a tick that moves whenever one arrives. */
 function useArtistCovers(serverId: string, ids: readonly string[]): [(id: string) => string | undefined, number] {
   const [tick, setTick] = useState(0);
-  const libraryVersion = useApp((s) => s.libraryVersion);
+  // The cache is shared, so its entries carry the store-wide change count (a local mirror read).
+  const libraryVersion = useApp((s) => s.libraryChanges.seq);
   useEffect(() => {
     const listener = () => setTick((n) => n + 1);
     artistListeners.add(listener);

@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import type { Album, SortOrder } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
+import { ALBUM_DEPS } from "../store/library-changes";
 import { bridge } from "../core/bridge";
 import { AlbumGrid, type GridItem } from "../components/AlbumGrid";
 import { openContextMenu } from "../components/ContextMenu";
@@ -27,7 +28,7 @@ export function Albums({ artistId, genre, title }: { artistId?: string; genre?: 
     if (r.type !== "albums") throw new Error("bad result");
     return { items: r.data.items, total: r.data.total };
   }, [source, artistId, genre, sort, desc]);
-  const { rows, total, onNeedRange } = usePagedGrid<Album>(fetchPage, [source, artistId, genre, sort, desc], 120);
+  const { rows, total, onNeedRange } = usePagedGrid<Album>(fetchPage, [source, artistId, genre, sort, desc], ALBUM_DEPS, 120);
   const items: (GridItem | undefined)[] = rows.map((a) => (a ? { id: a.id, title: a.name, subtitle: [a.artist, a.year].filter(Boolean).join(" · "), coverArt: a.coverArt, badge: a.offline === "downloaded" ? "download" : undefined } : undefined));
   const playAlbum = (id: string, label: string) => bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "album", data: { id } }, label, sort: "default", tracks: [] }, shuffle: false, saveOutgoing: true } } });
   const sorter = <SortMenu list="albums" value={order} onChange={(v) => { setOrder(v); saveListSort("albums", v); }} testId="albums-sort" />;

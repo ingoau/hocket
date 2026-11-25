@@ -29,7 +29,8 @@ export interface IpcDeps {
   credentialStorage: () => Promise<CredentialStorage>;
   /** Observers of commands on their way to the core (credential capture, mirrored settings). */
   onCommand: (command: Command) => void;
-  onVisibilityReport: (visible: boolean) => void;
+  /** A window's page visibility (document.visibilityState), with the window's contents it is for. */
+  onVisibilityReport: (visible: boolean, contents: Electron.WebContents) => void;
   onNetworkReport: (online: boolean) => void;
   prefs: { get(): AppPrefs; set(patch: Partial<AppPrefs>): AppPrefs };
   credentials: { passwordFor(url: string, username: string): string | undefined };
@@ -233,7 +234,7 @@ export function installIpc(deps: IpcDeps): void {
   });
 
   ipcMain.on(IPC.visibility, (e, visible: unknown) => {
-    if (isOurs(windows, e.sender)) deps.onVisibilityReport(!!visible);
+    if (isOurs(windows, e.sender)) deps.onVisibilityReport(!!visible, e.sender);
   });
 
   ipcMain.on(IPC.network, (e, online: unknown) => {

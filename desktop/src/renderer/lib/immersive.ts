@@ -8,6 +8,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ArtworkEdge, ArtworkLayout, ImmersiveArtwork } from "@core/api";
 import { bridge } from "../core/bridge";
 import { resolveArtwork } from "../components/Artwork";
+import { useApp } from "../store/app";
+import { largeArtworkSize } from "./artwork-size";
 import { BLACK, composite, contrast, mix, roundRgb, WHITE, type Rgb } from "./contrast";
 
 /** What the classifier gets: the cover at this side (it resamples to 128 itself). */
@@ -86,7 +88,8 @@ const KEEP = 3;
 
 /** The scene for `coverArt`, prepared once and cached (call it ahead of time for the next track). */
 export function prepareScene(coverArt: string, preference: ImmersiveArtwork, dark: boolean): Promise<Scene> {
-  const key = `${coverArt}|${preference}|${dark}`;
+  const size = largeArtworkSize(useApp.getState().batterySaver);
+  const key = `${coverArt}|${preference}|${dark}|${size}`;
   let p = scenes.get(key);
   if (p) {
     scenes.delete(key);
@@ -94,7 +97,7 @@ export function prepareScene(coverArt: string, preference: ImmersiveArtwork, dar
     return p;
   }
   p = Promise.all([
-    resolveArtwork(coverArt, 1000).then(async (url) => ({ url, img: url ? await loadImage(url) : undefined })),
+    resolveArtwork(coverArt, size).then(async (url) => ({ url, img: url ? await loadImage(url) : undefined })),
     resolveArtwork(coverArt, 300).then((url) => (url ? classify(url, preference, dark) : undefined)),
   ]).then(([{ url, img }, layout]) => {
     const scene = { coverArt, url, img, layout };

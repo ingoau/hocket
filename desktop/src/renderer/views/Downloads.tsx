@@ -4,6 +4,7 @@
 import { useCallback } from "react";
 import { t } from "@shared/strings";
 import { useApp, useSetting } from "../store/app";
+import { TRACKS_DEPS } from "../store/library-changes";
 import { SK } from "@shared/settings-keys";
 import { Select } from "../components/controls";
 import { GIB, warnChoices } from "../lib/storage-warn";
@@ -150,7 +151,7 @@ function AvailableOffline() {
     if (r.type !== "tracks") throw new Error("bad result");
     return { items: r.data.items, total: r.data.total };
   }, [filter.sort, filter.descending]);
-  const { rows, total, onNeedRange } = usePagedTracks(fetchPage, [serverId, "offline", filter.sort, filter.descending]);
+  const { rows, total, onNeedRange } = usePagedTracks(fetchPage, [serverId, "offline", filter.sort, filter.descending], TRACKS_DEPS);
   const play = (startIndex: number) => bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "filter", data: { filter } }, label: t("downloads.tab.offline"), sort: filter.sort, tracks: [] }, startIndex, shuffle: false, saveOutgoing: true } } });
   return (
     <div className="view-body no-pad" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }} data-testid="available-offline">

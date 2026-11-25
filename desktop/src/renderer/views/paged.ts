@@ -1,16 +1,18 @@
 // Paged loading for virtualised grids/lists over Query results with `total`.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useApp } from "../store/app";
+import { useLibraryVersion } from "../store/queries";
+import type { LibraryDeps } from "../store/library-changes";
 import { evictPages, materializePages } from "../lib/paged-window";
 
-export function usePagedGrid<T>(fetchPage: (offset: number, limit: number) => Promise<{ items: T[]; total: number }>, deps: unknown[], pageSize = 100) {
+export function usePagedGrid<T extends { id: string }>(fetchPage: (offset: number, limit: number) => Promise<{ items: T[]; total: number }>, deps: unknown[], library?: LibraryDeps, pageSize = 100) {
   const [rows, setRows] = useState<(T | undefined)[]>([]);
   const [total, setTotal] = useState(0);
   const loading = useRef(new Set<number>());
   const gen = useRef(0);
   const pages = useRef(new Map<number, T[]>());
   const around = useRef(0);
-  const libraryVersion = useApp((s) => s.libraryVersion);
+  // Refetched when a library change touches what the grid reads (`library`, anything by default).
+  const libraryVersion = useLibraryVersion(library, () => [...pages.current.values()].flatMap((p) => p.map((x) => x.id)));
   const load = useCallback((page: number) => {
     if (loading.current.has(page) || pages.current.has(page)) return;
     loading.current.add(page);

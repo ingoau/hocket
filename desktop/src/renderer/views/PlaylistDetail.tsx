@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { useQuery } from "../store/queries";
+import { queryLibraryDeps } from "../store/library-changes";
 import { bridge } from "../core/bridge";
 import { TrackTable, usePagedTracks } from "../components/TrackTable";
 import { DetailHead } from "../components/DetailHead";
@@ -23,7 +24,7 @@ export function PlaylistDetail({ id }: { id: string }) {
     if (r.type !== "tracks") throw new Error("bad result");
     return { items: r.data.items, total: r.data.total };
   }, [id]);
-  const { rows, total, onNeedRange } = usePagedTracks(fetchPage, [id]);
+  const { rows, total, onNeedRange } = usePagedTracks(fetchPage, [id], queryLibraryDeps({ type: "playlistTracks", data: { id, page: { offset: 0, limit: 0 } } }));
   const p = pl.data;
   // Resting on a play button primes that track's start (the album primer, per track).
   const primer = usePlayIntent(`playlist:${id}`);
