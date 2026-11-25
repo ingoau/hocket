@@ -18,6 +18,8 @@ import app.hocket.core.Commands
 import app.hocket.core.api.MediaSessionAction
 import app.hocket.core.api.MediaSessionState
 import java.io.File
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 /**
  * What the home-screen widget shows: the session's track and, while another Connect device plays it,
@@ -62,7 +64,8 @@ data class WidgetState(
  * not this one), and previous / play-pause / next. Tapping it opens the app.
  *
  * [PlaybackService] pushes every change through [update]; the provider itself only redraws the stored
- * state when the launcher asks. Buttons go to [WidgetActionReceiver] (not exported), which forwards
+ * state when the launcher asks. Covers are decoded, and views built and sent, on one background
+ * thread ([worker]), in the order the changes came: never on the main thread. Buttons go to [WidgetActionReceiver] (not exported), which forwards
  * them to the running core, or starts the service for a play while it is stopped.
  */
 class NowPlayingWidget : AppWidgetProvider() {
@@ -70,21 +73,29 @@ class NowPlayingWidget : AppWidgetProvider() {
         private const val TAG = "NowPlayingWidget"
         /** Covers are decoded down to about this size: a widget bitmap travels over binder. */
         private const val ART_PX = 256
-        private var last: WidgetState? = null
-        /** What the placed widgets last received in full (or merged since); null when unknown. */
-        private var drawn: WidgetState? = null
+        @Volatile private var last: WidgetState? = null
+        /** What the placed widgets last received in full (or merged since); null when unknown. [worker] only. */
+        @Volatile private var drawn: WidgetState? = null
         /** The last cover decoded, by path: play/pause and device changes do not read it again. */
-        private var art: Pair<String, Bitmap?>? = null
+        @Volatile private var art: Pair<String, Bitmap?>? = null
+
+        /** Where widget updates are drawn: one at a time, in order, off the main thread. */
+        private val worker: ExecutorService = Executors.newSingleThreadExecutor { r -> Thread(r, "hocket-widget").apply { isDaemon = true } }
 
         /**
-         * Stores [state] and redraws every placed widget when it changed. Main thread. A change of
-         * play state alone is a partial update (the button): the cover is neither decoded again nor
-         * sent over binder again.
+         * Stores [state] and redraws every placed widget when it changed. Main thread; the drawing
+         * happens on [worker]. A change of play state alone is a partial update (the button): the
+         * cover is neither decoded again nor sent over binder again.
          */
         fun update(context: Context, state: WidgetState) {
             if (state == last) return
             last = state
             state.save(context)
+            val app = context.applicationContext
+            worker.execute { draw(app, state) }
+        }
+
+        private fun draw(context: Context, state: WidgetState) {
             val manager = AppWidgetManager.getInstance(context) ?: return
             val ids = manager.getAppWidgetIds(ComponentName(context, NowPlayingWidget::class.java))
             if (ids.isEmpty()) { drawn = null; return }
@@ -115,7 +126,7 @@ class NowPlayingWidget : AppWidgetProvider() {
             PendingIntent.getActivity(context, 0, launch, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         }
 
-        /** [decode] of [path], remembered for the last path asked for. Main thread. */
+        /** [decode] of [path], remembered for the last path asked for. Not on the main thread: it may read the file. */
         internal fun cover(path: String): Bitmap? {
             art?.let { (p, bitmap) -> if (p == path && bitmap?.isRecycled != true) return bitmap }
             return decode(path).also { art = path to it }
@@ -166,9 +177,19 @@ class NowPlayingWidget : AppWidgetProvider() {
     }
 
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
-        // A newly placed widget may be all the launcher has drawn: the next change is a full update.
-        drawn = null
-        appWidgetManager.updateAppWidget(appWidgetIds, views(context, shown(last ?: WidgetState.load(context))))
+        val app = context.applicationContext
+        // The cover is decoded on the worker, after any update already queued there.
+        val pending = goAsync()
+        worker.execute {
+            try {
+                // A newly placed widget may be all the launcher has drawn: the next change is a full update.
+                drawn = null
+                runCatching { appWidgetManager.updateAppWidget(appWidgetIds, views(app, shown(last ?: WidgetState.load(app)))) }
+                    .onFailure { Log.w(TAG, "widget redraw failed: ${it.message}") }
+            } finally {
+                pending.finish()
+            }
+        }
     }
 }
 

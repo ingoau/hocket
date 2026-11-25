@@ -53,7 +53,9 @@ import java.io.File
  *
  * A size the core could not fetch (a network drop: it answers "no file" for a failed fetch as for a
  * missing image; it remembers a 404, so asking again costs nothing then) or a file the loader cannot
- * read is asked for again, a few times with a growing wait, afresh on every network change, and meanwhile a smaller copy already fetched for
+ * read is asked for again, a few times with a growing wait, on one schedule per cover and size
+ * however many places show it ([ArtworkMisses], [askForArtwork]); not while offline, and afresh
+ * when the network comes back or a server does. Meanwhile a smaller copy already fetched for
  * another place (the mini player's) stands in for the gradient.
  */
 @Composable
@@ -72,24 +74,20 @@ fun Artwork(
     // gradient, so a shared-element remount never flashes an empty white card.
     val startedWithCachedPath = remember(cacheKey) { cacheKey?.let { ArtworkPathCache.get(it) } != null }
     val state = remember(cacheKey) { mutableStateOf(cacheKey?.let { ArtworkPathCache.get(it) }?.let { Resolved(it) }) }
-    val network by client.network.collectAsStateWithLifecycleCompat()
-    val accounts by client.accounts.collectAsStateWithLifecycleCompat()
-    // Which accounts answer: a server coming back on the same network changes it.
-    val reachable = accounts.count { it.reachable }
-    // A fresh run of retries on each network change (the link may take a moment to carry traffic)
-    // and each time a server comes back or goes away.
-    var attempt by remember(cacheKey, network, reachable) { mutableIntStateOf(0) }
-    LaunchedEffect(cacheKey, attempt, network, reachable) {
+    val reach = rememberArtworkReach(client)
+    // A file that failed to load asks again (bounded by the shared schedule).
+    var reload by remember(cacheKey) { mutableIntStateOf(0) }
+    LaunchedEffect(cacheKey, reach, reload) {
         // A stand-in size (the core answers with what it has when the server can't be reached) is
         // asked for again on a network or server change, and never remembered as this size's file.
         if (state.value?.let { it.path != null && isExactArtwork(it.path, requested) } == true) return@LaunchedEffect
-        val path = client.artworkPath(coverArt, requested)
-        if (cacheKey != null && path != null && isExactArtwork(path, requested)) ArtworkPathCache.put(cacheKey, path)
-        state.value = Resolved(path)
-        if (path == null && coverArt != null && attempt < ARTWORK_RETRIES) {
-            delay(ARTWORK_RETRY_MS shl attempt)
-            attempt++
+        if (coverArt == null || cacheKey == null) { state.value = Resolved(null); return@LaunchedEffect }
+        val asked = askForArtwork(client, coverArt, requested, reach) { path ->
+            if (path != null && isExactArtwork(path, requested)) ArtworkPathCache.put(cacheKey, path)
+            state.value = Resolved(path)
         }
+        // Nothing asked (offline with a miss known, or out of retries): unresolved is a miss now.
+        if (!asked && state.value == null) state.value = Resolved(null)
     }
     val resolved = state.value
     val platformContext = LocalPlatformContext.current
@@ -140,9 +138,9 @@ fun Artwork(
                 onSuccess = { loaded = true },
                 // Asked again (the core fetches afresh a file that has gone), a bounded number of times.
                 onError = {
-                    cacheKey?.let { ArtworkPathCache.remove(it) }
+                    cacheKey?.let { ArtworkPathCache.remove(it); ArtworkMisses.missed(it, ArtworkMisses.round(it), System.currentTimeMillis()) }
                     state.value = Resolved(null)
-                    if (attempt < ARTWORK_RETRIES) attempt++
+                    reload++
                 },
             )
         }
@@ -165,9 +163,108 @@ internal fun isExactArtwork(path: String, size: Int): Boolean {
 }
 
 private const val ARTWORK_CROSSFADE_MS = 120
-/** Asks after a failed one, 2 s, 4 s, 8 s then 16 s apart (and on each network change after). */
+/** Asks after a failed one, 2 s, 4 s, 8 s then 16 s apart (and afresh once back online). */
 internal const val ARTWORK_RETRIES = 4
 internal const val ARTWORK_RETRY_MS = 2_000L
+
+/**
+ * What decides whether covers are worth asking for: [online] (the core's network isn't offline) and
+ * how many servers are [reachable]. Metered or network-id changes don't change it, so they don't
+ * restart lookups.
+ */
+@androidx.compose.runtime.Immutable
+data class ArtworkReach(val online: Boolean, val reachable: Int)
+
+@Composable
+fun rememberArtworkReach(client: CoreClient = LocalCoreClient.current): ArtworkReach {
+    val network by client.network.collectAsStateWithLifecycleCompat()
+    val accounts by client.accounts.collectAsStateWithLifecycleCompat()
+    val online = network?.kind != app.hocket.core.api.NetworkKind.Offline
+    // Which accounts answer: a server coming back on the same network changes it.
+    val reachable = accounts.count { it.reachable }
+    return remember(online, reachable) { ArtworkReach(online, reachable) }
+}
+
+/**
+ * Asks the core for [coverArt] at [size] on the shared schedule ([ArtworkMisses]), handing each
+ * answer to [onAnswer]: at once, or when the cover's next retry is due, and again after each miss
+ * until the retries run out. Offline, a cover already missed is not asked for at all. Returns once
+ * a file came or no more asks are due; false when it asked nothing.
+ */
+internal suspend fun askForArtwork(client: CoreClient, coverArt: String, size: Int, reach: ArtworkReach, onAnswer: suspend (String?) -> Unit): Boolean {
+    val key = ArtworkPathCache.key(coverArt, size)
+    ArtworkMisses.observe(reach)
+    var asked = false
+    while (true) {
+        val round = ArtworkMisses.round(key)
+        val wait = ArtworkMisses.waitFor(key, reach.online, System.currentTimeMillis()) ?: return asked
+        if (wait > 0) delay(wait)
+        val path = client.artworkPath(coverArt, size)
+        asked = true
+        onAnswer(path)
+        if (path != null) return true
+        ArtworkMisses.missed(key, round, System.currentTimeMillis())
+    }
+}
+
+/**
+ * Process-wide memory of covers the core had no file for ("id@size"), so every place showing one
+ * cover (the mini player, a queue row, the now-playing page, mirrored pairs) follows one retry
+ * schedule rather than each its own, and a row scrolled back into view doesn't ask again for a
+ * cover just missed. Cleared when the network comes back from offline or a server comes back;
+ * a cover out of retries is asked again after [EXHAUSTED_TTL_MS].
+ */
+internal object ArtworkMisses {
+    private const val MAX = 1024
+    private const val EXHAUSTED_TTL_MS = 5 * 60_000L
+
+    private class Miss(val misses: Int, val retryAt: Long)
+
+    private val map = object : LinkedHashMap<String, Miss>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Miss>?): Boolean = size > MAX
+    }
+    private var last: ArtworkReach? = null
+
+    /** Back online, or a server back: every miss is asked for afresh. */
+    fun observe(reach: ArtworkReach) {
+        synchronized(map) {
+            val was = last
+            if (was != null && ((reach.online && !was.online) || reach.reachable > was.reachable)) map.clear()
+            last = reach
+        }
+    }
+
+    /** Milliseconds to wait before asking for [key] (0: now), or null not to ask. */
+    fun waitFor(key: String, online: Boolean, now: Long): Long? = synchronized(map) {
+        val miss = map[key] ?: return 0L
+        if (!online) return null
+        if (miss.misses > ARTWORK_RETRIES) {
+            if (now - miss.retryAt < EXHAUSTED_TTL_MS) return null
+            map.remove(key)
+            return 0L
+        }
+        (miss.retryAt - now).coerceAtLeast(0L)
+    }
+
+    /** How many misses [key] has had: what an ask passes to [missed]. */
+    fun round(key: String): Int = synchronized(map) { map[key]?.misses ?: 0 }
+
+    /**
+     * The core had no file for [key] (or its file didn't load) on an ask made in [round]. Several
+     * places sharing one answer count as one miss: only the first to report a round moves the
+     * schedule on.
+     */
+    fun missed(key: String, round: Int, now: Long) {
+        synchronized(map) {
+            val miss = map[key]
+            if ((miss?.misses ?: 0) != round) return
+            val misses = round + 1
+            map[key] = Miss(misses, now + (ARTWORK_RETRY_MS shl (misses - 1).coerceAtMost(ARTWORK_RETRIES - 1)))
+        }
+    }
+
+    internal fun clear() { synchronized(map) { map.clear(); last = null } }
+}
 
 /**
  * Process-wide memory of `Query.Artwork` answers ("id@size" to a file path), bounded LRU. Only

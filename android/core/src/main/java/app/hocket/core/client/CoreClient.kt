@@ -572,10 +572,35 @@ class CoreClient(
     /** Ask the core to re-emit everything. Call on (re)attach. */
     fun requestSnapshot() = dispatch(Command.RequestSnapshot)
 
-    /** Resolves artwork at one of the fixed sizes to a local path, or null. */
+    /** One `Query.Artwork` in flight, shared by everyone asking for its cover and size meanwhile. */
+    private class ArtworkLookup(val result: Deferred<String?>) { var waiters = 0 }
+    private val artworkLookups = HashMap<String, ArtworkLookup>()
+
+    /**
+     * Resolves artwork at one of the fixed sizes to a local path, or null. Concurrent asks for the
+     * same cover and size (the mini player, a queue row and the now-playing page all showing one
+     * cover) share one query; it is cancelled, and the core drops its fetch, only once every asker
+     * has left.
+     */
     suspend fun artworkPath(id: String?, size: Int): String? {
         if (id.isNullOrEmpty()) return null
-        return (query(Queries.artwork(id, size)) as? QueryResult.Path)?.data
+        val key = "$id@$size"
+        val lookup = synchronized(artworkLookups) {
+            artworkLookups.getOrPut(key) {
+                ArtworkLookup(scope.async(start = kotlinx.coroutines.CoroutineStart.LAZY) { (query(Queries.artwork(id, size)) as? QueryResult.Path)?.data })
+            }.also { it.waiters++ }
+        }
+        lookup.result.start()
+        try {
+            return lookup.result.await()
+        } finally {
+            synchronized(artworkLookups) {
+                if (--lookup.waiters == 0) {
+                    if (artworkLookups[key] === lookup) artworkLookups.remove(key)
+                    if (!lookup.result.isCompleted) lookup.result.cancel()
+                }
+            }
+        }
     }
 
     suspend fun actions(surface: String, target: ActionTarget): List<ActionDescriptor> =

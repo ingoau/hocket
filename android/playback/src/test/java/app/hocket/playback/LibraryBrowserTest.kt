@@ -10,6 +10,9 @@ import app.hocket.core.CoreHandle
 import app.hocket.core.QuickPlay
 import app.hocket.core.api.Command
 import app.hocket.core.api.ContextKind
+import app.hocket.core.api.FilterField
+import app.hocket.core.api.FilterNode
+import app.hocket.core.api.OfflineState
 import app.hocket.core.api.MediaSessionAction
 import app.hocket.core.api.Query
 import app.hocket.core.api.QueryResult
@@ -50,6 +53,39 @@ class LibraryBrowserTest {
         assertEquals(listOf("albums", "artists", "playlists", "genres"), sections.map { it.mediaId })
         assertTrue(sections.all { it.mediaMetadata.isBrowsable == true && it.mediaMetadata.isPlayable == false })
         assertEquals("Albums", sections[0].mediaMetadata.title.toString())
+    }
+
+    @Test
+    fun rootTabsCarryIcons() = runBlocking {
+        val sections = browser.children(MediaId.ROOT, 0, 100)!!
+        for (s in sections) {
+            val uri = s.mediaMetadata.artworkUri
+            assertEquals(s.mediaId, "android.resource", uri?.scheme)
+            assertEquals("browse_${s.mediaId}", uri?.lastPathSegment)
+        }
+        assertEquals("browse_recent", browser.recentRoot().mediaMetadata.artworkUri?.lastPathSegment)
+        assertEquals("browse_suggested", browser.suggestedRoot().mediaMetadata.artworkUri?.lastPathSegment)
+    }
+
+    @Test
+    fun offlineTheRootLeadsWithWhatPlaysOffline() = runBlocking {
+        browser.offline = true
+        val sections = browser.children(MediaId.ROOT, 0, 100)!!
+        assertEquals(listOf("offline", "albums", "artists", "playlists"), sections.map { it.mediaId })
+        val available = fake.library.tracks.filter { it.offline == OfflineState.Downloaded || it.offline == OfflineState.Cached }
+        val tracks = browser.children("offline", 0, 1000)!!
+        assertEquals(available.size, tracks.size)
+        assertTrue(tracks.isNotEmpty())
+        assertEquals(available.map { it.id }.toSet(), tracks.map { browser.trackIdFor(it.mediaId) }.toSet())
+        // A track there plays everything available offline, from that track.
+        assertTrue(browser.playNow(listOf(tracks[2].mediaId), 0))
+        val play = sent.last() as Command.PlayContext
+        assertEquals(2u, play.data.args.startIndex)
+        val kind = play.data.args.context.kind as ContextKind.Filter
+        assertEquals(FilterField.AvailableOffline, ((kind.data.filter.root as FilterNode.All).data.first() as FilterNode.Rule).data.field)
+        assertEquals(tracks[2].mediaMetadata.title, browser.item(tracks[2].mediaId)?.mediaMetadata?.title)
+        browser.offline = false
+        assertEquals(listOf("albums", "artists", "playlists", "genres"), browser.children(MediaId.ROOT, 0, 100)!!.map { it.mediaId })
     }
 
     @Test
@@ -163,6 +199,18 @@ class LibraryBrowserTest {
         ArtworkProvider.allow("com.google.android.projection.gearhead")
         assertTrue(ArtworkProvider.isAllowed("com.google.android.projection.gearhead", app.packageName))
         assertEquals("content://${app.packageName}.artwork/320/al%2F1", ArtworkProvider.uri(app, "al/1").toString())
+    }
+
+    @Test
+    fun theNowPlayingCoverIsAContentUriForTheCoreFile() {
+        val uri = ArtworkProvider.fileUri(app, "file:///data/cache/art/640/abc.jpg")
+        assertEquals("content", uri.scheme)
+        assertEquals("${app.packageName}.artwork", uri.authority)
+        assertEquals("file", uri.pathSegments[0])
+        // Stable per file, so Media3 sees the same URI and loads nothing again.
+        assertEquals(uri, ArtworkProvider.fileUri(app, "/data/cache/art/640/abc.jpg"))
+        assertEquals("/data/cache/art/640/abc.jpg", ArtworkProvider.fileFor(uri.lastPathSegment!!))
+        assertNull(ArtworkProvider.fileFor("unknown"))
     }
 
     @Test

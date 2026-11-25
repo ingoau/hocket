@@ -6,6 +6,7 @@
     <string name="browse_artists">Artists</string>
     <string name="browse_playlists">Playlists</string>
     <string name="browse_genres">Genres</string>
+    <string name="browse_offline">Offline</string>
     <string name="browse_recent">Recent</string>
     <string name="browse_suggested">Suggested</string>
     <!-- Library-wide plays: launcher shortcuts and the browser's suggestions (the queue's name too). -->

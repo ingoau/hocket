@@ -2002,11 +2002,22 @@ class FakeCore(
         val artists = if (needle.isEmpty()) emptyList() else library.artists.filter { it.name.lowercase().contains(needle) }.take(limit)
         val playlists = if (needle.isEmpty()) emptyList() else library.playlists.filter { it.name.lowercase().contains(needle) }.take(limit)
         val local = SearchResults(q.request_id, q.query, tracks.map { it.toSummary() }, albums, artists, playlists, false, lyricHits(needle, limit))
-        if (q.include_server && needle.isNotEmpty() && timers) scope.launch {
-            delay(700)
-            // "Server" results: a handful of extra matches the mirror wouldn't have yet.
-            val extra = library.tracks.filter { it.album?.lowercase()?.contains(needle) == true && it !in tracks }.take(6)
-            emit(Event.SearchResults(EventSearchResultsInner(SearchResults(q.request_id, q.query, extra.map { it.toSummary() }, emptyList(), emptyList(), emptyList(), true))))
+        // Like the core: a request asking for server results gets exactly one server batch, empty
+        // when the server isn't asked (setting off, blank query, local results already full,
+        // offline, data saver on a metered network), so the caller can stop waiting.
+        if (q.include_server) {
+            val wanted = settings[SettingKeys.SEARCH_INCLUDE_SERVER]?.value?.trim() == "true" &&
+                needle.isNotEmpty() && tracks.size < limit &&
+                network?.kind != NetworkKind.Offline &&
+                !(settings[SettingKeys.NETWORK_DATA_SAVER]?.value?.trim() == "true" && network?.metered == true)
+            scope.launch {
+                // "Server" results: a handful of extra matches the mirror wouldn't have yet.
+                val extra = if (wanted) {
+                    if (timers) delay(700)
+                    library.tracks.filter { it.album?.lowercase()?.contains(needle) == true && it !in tracks }.take(6)
+                } else emptyList()
+                emit(Event.SearchResults(EventSearchResultsInner(SearchResults(q.request_id, q.query, extra.map { it.toSummary() }, emptyList(), emptyList(), emptyList(), true))))
+            }
         }
         return QueryResult.Search(local)
     }

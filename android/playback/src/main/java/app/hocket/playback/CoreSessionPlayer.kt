@@ -54,6 +54,11 @@ class CoreSessionPlayer(
     private val now: () -> Double = { System.currentTimeMillis().toDouble() },
     private val media: MediaRequests? = null,
     private val artwork: (TrackSummary) -> Uri? = { null },
+    /**
+     * The URI for the now-playing cover the core resolved (a local file path). Controllers in other
+     * apps can't read a `file://` URI, so the service hands out [ArtworkProvider.fileUri]s.
+     */
+    private val sessionArtwork: (String) -> Uri = { Uri.fromFile(java.io.File(it.removePrefix("file://"))) },
 ) : SimpleBasePlayer(looper) {
     /** What the player does with media ids a controller sets or adds ([LibraryBrowser]). */
     interface MediaRequests {
@@ -245,7 +250,7 @@ class CoreSessionPlayer(
                 .setIsBrowsable(false)
                 .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
                 .setUserRating(androidx.media3.common.HeartRating(meta.loved))
-                .apply { meta.artworkPath?.let { setArtworkUri(if (it.startsWith("file:") || it.startsWith("content:")) Uri.parse(it) else Uri.fromFile(java.io.File(it))) } }
+                .apply { meta.artworkPath?.let { setArtworkUri(if (it.startsWith("content:")) Uri.parse(it) else sessionArtwork(it)) } }
                 .build()
             val seekable = MediaSessionAction.Seek in s.actions
             val durationUs = Util.msToUs(meta.durationMs.toLong())

@@ -96,6 +96,7 @@ class PlaybackService : MediaLibraryService() {
         private set
     private lateinit var backend: ExoBackend
     private lateinit var bridge: MediaSessionBridge
+    private lateinit var browser: LibraryBrowser
     private lateinit var network: NetworkMonitor
     private lateinit var battery: BatterySaverMonitor
     lateinit var pebble: PebbleBridge
@@ -124,8 +125,8 @@ class PlaybackService : MediaLibraryService() {
         PlaybackLog.i("service created")
         backend = ExoBackend(this, scope, ::dispatch)
         val launch = packageManager.getLaunchIntentForPackage(packageName)
-        val browser = LibraryBrowser(this, { core }, { serverId }, scope)
-        val player = CoreSessionPlayer(Looper.getMainLooper(), ::dispatch, media = browser, artwork = { t -> t.coverArt?.let { ArtworkProvider.uri(this, it) } })
+        browser = LibraryBrowser(this, { core }, { serverId }, scope)
+        val player = CoreSessionPlayer(Looper.getMainLooper(), ::dispatch, media = browser, artwork = { t -> t.coverArt?.let { ArtworkProvider.uri(this, it) } }, sessionArtwork = { ArtworkProvider.fileUri(this, it) })
         bridge = MediaSessionBridge(this, player, ::dispatch, launch, browser, scope, ExternalControl(this), ::holdForResumption)
         addSession(bridge.session)
         network = NetworkMonitor(this, ::dispatch, onConnectivity = { online -> main.post { backend.onConnectivityChanged(online) } })
@@ -187,6 +188,7 @@ class PlaybackService : MediaLibraryService() {
             is Event.AccountsChanged -> serverId = event.data.accounts.firstOrNull()?.id
             is Event.LibraryChanged -> scheduleLibraryNotify()
             is Event.ConnectionChanged -> clockOffsetMs = event.data.state.clockOffsetMs
+            is Event.NetworkChanged -> applyNetwork(event.data.network)
             is Event.Started -> applySnapshot(event.data.snapshot)
             is Event.Snapshot -> applySnapshot(event.data.snapshot)
             is Event.AudioSettingsChanged -> backend.onAudioSettings(event.data.settings)
@@ -274,6 +276,7 @@ class PlaybackService : MediaLibraryService() {
         ConnectRoutes.onDevices(snapshot.devices)
         ConnectRoutes.onTransport(snapshot.transport)
         applySession(snapshot.mediaSession)
+        applyNetwork(snapshot.network)
         bridge.setExternalControl(snapshot.settings.firstOrNull { it.key == SettingKeys.MEDIA_EXTERNAL_CONTROL }?.value?.trim() == "true")
     }
 
@@ -286,6 +289,14 @@ class PlaybackService : MediaLibraryService() {
         val casting = casting != null && remote == null
         bridge.apply(state, clockOffsetMs, remote = remote != null || casting, remoteVolume = routes.remoteVolume != null || casting)
         NowPlayingWidget.update(this, WidgetState.of(state, remote?.name))
+    }
+
+    /** Offline, the browse root leads with what plays offline ([LibraryBrowser.rootSections]). */
+    private fun applyNetwork(network: app.hocket.core.api.NetworkState?) {
+        val offline = network?.kind == app.hocket.core.api.NetworkKind.Offline
+        if (browser.offline == offline) return
+        browser.offline = offline
+        bridge.rootChanged()
     }
 
     private fun scheduleLibraryNotify() {

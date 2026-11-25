@@ -345,6 +345,11 @@ class MediaSessionBridge(
         for (section in LibrarySection.entries) session.notifyChildrenChanged(section.id, Int.MAX_VALUE, null)
     }
 
+    /** The root's sections changed (offline or back): subscribed browsers refetch it. */
+    fun rootChanged() {
+        session.notifyChildrenChanged(MediaId.ROOT, LibraryBrowser.rootSections(browser.offline).size, null)
+    }
+
     /** Push a new state to the player and refresh the custom layout. Main thread. */
     fun apply(state: MediaSessionState, clockOffsetMs: Double, remote: Boolean = player.isRemote, remoteVolume: Boolean = false) {
         val sameSurface = player.state.sameUiSurface(state)

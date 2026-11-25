@@ -12,13 +12,15 @@ import java.net.URLEncoder
  * (Auto keeps its own history). Segments are URL-encoded and joined with `/`, so a genre named
  * "Drum/Bass" or an id with a colon round-trips.
  *
- * - `root`, `albums`, `artists`, `playlists`, `genres`
+ * - `root`, `albums`, `artists`, `playlists`, `genres`, `offline`
  * - `album/<server>/<id>` (browsable, playable: the album), `album/<server>/<id>/<index>` (a track,
  *   playing the album from there; the index is into `Query.AlbumTracks`, as the UI's)
  * - `artist/<server>/<id>` (its albums; playable: the artist)
  * - `playlist/<server>/<id>`, `playlist/<server>/<id>/<index>` (the index is into `PlaylistTracks`)
  * - `genre/<server>/<name>` (its albums; playable: the genre)
  * - `track/<server>/<id>` (a lone track: search results)
+ * - `offline/<server>/<index>` (a track in the `offline` section, playing what is available offline
+ *   from there; the index is into `Query.Tracks` with the "Available offline" filter)
  * - `queue/<key>` (a queue entry in the session's timeline)
  * - `recent` (the root for "recent" browsers: the session to resume), `suggested` (the root for
  *   "suggested" browsers: recently played albums and quick plays)
@@ -34,6 +36,7 @@ sealed class MediaId {
     data class PlaylistTrack(val serverId: String, val playlistId: String, val index: Int) : MediaId()
     data class Genre(val serverId: String, val name: String) : MediaId()
     data class Track(val serverId: String, val id: String) : MediaId()
+    data class OfflineTrack(val serverId: String, val index: Int) : MediaId()
     data class QueueItem(val key: String) : MediaId()
     data object Recent : MediaId()
     data object Suggested : MediaId()
@@ -49,6 +52,7 @@ sealed class MediaId {
         is PlaylistTrack -> join("playlist", serverId, playlistId, index.toString())
         is Genre -> join("genre", serverId, name)
         is Track -> join("track", serverId, id)
+        is OfflineTrack -> join("offline", serverId, index.toString())
         is QueueItem -> join("queue", key)
         Recent -> RECENT
         Suggested -> SUGGESTED
@@ -84,6 +88,7 @@ sealed class MediaId {
                 "artist" -> if (parts.size == 3) Artist(parts[1], parts[2]) else null
                 "genre" -> if (parts.size == 3) Genre(parts[1], parts[2]) else null
                 "track" -> if (parts.size == 3) Track(parts[1], parts[2]) else null
+                "offline" -> if (parts.size == 3) parts[2].toIntOrNull()?.takeIf { it >= 0 }?.let { OfflineTrack(parts[1], it) } else null
                 "queue" -> if (parts.size == 2) QueueItem(parts[1]) else null
                 "shuffle" -> if (parts.size == 3) ShuffleKind.entries.firstOrNull { it.id == parts[2] }?.let { Shuffle(parts[1], it) } else null
                 else -> null
@@ -94,12 +99,17 @@ sealed class MediaId {
     }
 }
 
-/** The top-level categories under the root (Auto shows up to four of them as tabs). */
+/**
+ * The top-level categories under the root (Auto shows up to four of them as tabs). [Offline] is
+ * what plays with no network (the "Available offline" filter); the root lists it only while offline
+ * ([LibraryBrowser.rootSections]).
+ */
 enum class LibrarySection(val id: String) {
     Albums("albums"),
     Artists("artists"),
     Playlists("playlists"),
     Genres("genres"),
+    Offline("offline"),
 }
 
 /** The library-wide shuffles a [MediaId.Shuffle] plays ([app.hocket.core.QuickPlay]). */
