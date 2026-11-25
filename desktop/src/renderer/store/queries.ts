@@ -4,7 +4,7 @@ import type { ActionDescriptor, ActionTarget, Query, QueryResult } from "@core/a
 import { expectResult, type ResultData } from "@shared/core-handle";
 import { bridge } from "../core/bridge";
 import { useApp } from "./app";
-import { changesSince, queryLibraryDeps, shownIds, touchesAny, type LibraryDeps } from "./library-changes";
+import { changesSince, queryLibraryDeps, settledIds, shownIds, showsLibrary, touchesAny, type LibraryDeps } from "./library-changes";
 
 export interface QueryState<T> {
   data: T | undefined;
@@ -17,14 +17,15 @@ type Keys = QueryResult["type"];
 
 /**
  * A number that moves when a LibraryChanged touches `deps` (see `library-changes.ts`). While the
- * page is hidden (the window in the tray, minimised) changes wait: one refetch when it is shown.
- * `null` deps never move. `shownIds` lists the track rows on screen, for `rows` deps.
+ * window is hidden (in the tray, minimised) changes wait: one refetch when it is shown.
+ * `null` deps never move. `shownIds` lists the rows on screen, for `rows` deps (`undefined` while
+ * they are loading: anything matches then, see `settledIds`).
  */
 export function useLibraryVersion(deps: LibraryDeps | null, shownIds?: () => Iterable<string> | undefined): number {
   // -1 while there is nothing to refetch: no re-render per change, and no catching up afterwards
   // (whatever made the deps non-null fetches anyway).
   const seq = useApp((s) => (deps === null ? -1 : s.libraryChanges.seq));
-  const visible = useApp((s) => s.pageVisible);
+  const visible = useApp(showsLibrary);
   const [version, setVersion] = useState(0);
   const seen = useRef(seq);
   const latest = useRef({ deps, shownIds });
@@ -56,17 +57,21 @@ export function useQuery<K extends Keys>(make: () => Query | null, result: K, de
   const q = make();
   const dataRef = useRef(data);
   dataRef.current = data;
-  // Nothing loaded (yet, or it failed) has no rows a track's change could touch.
-  const libraryVersion = useLibraryVersion(opts.static || !q ? null : queryLibraryDeps(q), () => (dataRef.current === undefined ? [] : shownIds(dataRef.current)));
+  // Set when a query is sent, cleared when its answer (or error) lands: until then the rows on
+  // screen aren't the ones the answer will show, so any row matches.
+  const waiting = useRef(false);
+  const libraryVersion = useLibraryVersion(opts.static || !q ? null : queryLibraryDeps(q), () => settledIds(waiting.current, () => (dataRef.current === undefined ? [] : shownIds(dataRef.current))));
   const seq = useRef(0);
   const [nonce, setNonce] = useState(0);
   const refetch = useCallback(() => setNonce((n) => n + 1), []);
   useEffect(() => {
     if (!q) {
+      waiting.current = false;
       setData(undefined);
       return;
     }
     const mine = ++seq.current;
+    waiting.current = true;
     setLoading(true);
     bridge()
       .query(q)
@@ -81,7 +86,9 @@ export function useQuery<K extends Keys>(make: () => Query | null, result: K, de
         if (!opts.keep) setData(undefined);
       })
       .finally(() => {
-        if (mine === seq.current) setLoading(false);
+        if (mine !== seq.current) return;
+        waiting.current = false;
+        setLoading(false);
       });
   }, [...deps, libraryVersion, nonce]);
   return { data, loading, error, refetch };

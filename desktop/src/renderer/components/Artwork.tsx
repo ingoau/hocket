@@ -51,10 +51,17 @@ export function resolveArtwork(id: string | undefined, size: number): Promise<st
 }
 
 /**
- * How long a cover the renderer hasn't asked for yet waits before it is asked for. A fast scroll
- * mounts (and unmounts) hundreds of rows, and a core query, once sent, can't be called back.
+ * How long a cover in a virtualised list (`dwell`) the renderer hasn't asked for yet waits before
+ * it is asked for. A fast scroll mounts (and unmounts) hundreds of rows, and a core query, once
+ * sent, can't be called back. Everything else (the player, the mini player, the now-playing
+ * sidebar) asks at once: a wait there is a placeholder flashing on every track change.
  */
 export const ARTWORK_DWELL_MS = 150;
+
+/** Whether a cover waits `ARTWORK_DWELL_MS` before it is asked for: only in a list that asked to, and only for one not asked for yet. */
+export function artworkWaits(dwell: boolean, id: string | undefined, asked: boolean): boolean {
+  return dwell && !!id && !asked;
+}
 
 function useResolvedArtwork(id: string | undefined, size: number, dwell: boolean): { url: string | undefined; onError: () => void } {
   const key = `${id}@${size}`;
@@ -74,7 +81,7 @@ function useResolvedArtwork(id: string | undefined, size: number, dwell: boolean
   useEffect(() => {
     let alive = true;
     const ask = () => void resolveArtwork(id, size).then((u) => alive && setResolved({ key, url: u }));
-    if (!dwell || !id || cache.has(key)) {
+    if (!artworkWaits(dwell, id, cache.has(key))) {
       ask();
       return () => {
         alive = false;
@@ -103,8 +110,9 @@ export function useArtwork(id: string | undefined, size: number): string | undef
   return useResolvedArtwork(id, size, false).url;
 }
 
-export function Artwork({ id, size = ARTWORK_SIZES.grid, className = "art", alt = "", round = false }: { id: string | undefined; size?: number; className?: string; alt?: string; round?: boolean }) {
-  const { url, onError } = useResolvedArtwork(id, size, true);
+/** `dwell`: for virtualised rows and grids, see `ARTWORK_DWELL_MS`. */
+export function Artwork({ id, size = ARTWORK_SIZES.grid, className = "art", alt = "", round = false, dwell = false }: { id: string | undefined; size?: number; className?: string; alt?: string; round?: boolean; dwell?: boolean }) {
+  const { url, onError } = useResolvedArtwork(id, size, dwell);
   const cls = `${className}${round ? " round" : ""}`;
   if (!url) return <div className={`${cls} placeholder`} aria-hidden="true"><Icon name="music" size={size > 100 ? 28 : 14} /></div>;
   // A new element per url: one handed a new src keeps showing the old image until it decodes.

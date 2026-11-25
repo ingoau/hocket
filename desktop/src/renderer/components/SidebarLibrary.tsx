@@ -302,7 +302,7 @@ const LibraryRow = memo(function LibraryRow({ entry: e, index, count, tabStop, o
         {...libraryDragProps(target, e.title, { allowControls: true })}
         {...(e.kind === "playlist" ? playlistDropZone(e.id, e.title) : {})}
         data-testid="sidebar-library-item" data-entry={key}>
-        <span className={`lib-thumb ${e.kind}`} aria-hidden="true"><Artwork id={e.coverArt} size={96} round={e.kind === "artist"} /></span>
+        <span className={`lib-thumb ${e.kind}`} aria-hidden="true"><Artwork id={e.coverArt} size={96} round={e.kind === "artist"} dwell /></span>
         <span className="lib-text">
           <span className="lib-title">{e.title}</span>
           <span className="lib-sub">{sub}</span>

@@ -181,3 +181,20 @@ export function shownIds(data: unknown): string[] | undefined {
   }
   return undefined;
 }
+
+/**
+ * The rows on screen, for `rows` deps, once what is on screen is settled: `undefined` (anything
+ * matches) while an answer is still on its way. A change that lands then may already be past the
+ * core's answer, and matched against the rows before it (none, on a first load) it would be dropped.
+ */
+export function settledIds(waiting: boolean, ids: () => Iterable<string> | undefined): Iterable<string> | undefined {
+  return waiting ? undefined : ids();
+}
+
+/**
+ * Whether the window shows the library, so changes are acted on now rather than held for later.
+ * Electron's shown/minimised counts: Chromium can call an unfocused fullscreen window hidden (#45).
+ */
+export function showsLibrary(s: { pageVisible: boolean; windowState: { visible: boolean } }): boolean {
+  return s.pageVisible || s.windowState.visible;
+}

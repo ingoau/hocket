@@ -22,7 +22,7 @@ import { deepLinkFromArgv, registerDeepLinks } from "./deep-link";
 import { installIpc } from "./ipc";
 import { MediaSessionHost } from "./media-session";
 import { installAppMenu, type AppMenuState } from "./menu";
-import { linkWatcher, networkReporter } from "./network";
+import { linkWatcher, networkReporter, wakeLookups } from "./network";
 import { StoreFile } from "./store-file";
 import { AppTray, appIcon } from "./tray";
 import { installUpdater } from "./updater";
@@ -347,12 +347,14 @@ async function main(): Promise<void> {
   powerMonitor.on("on-battery", applyBattery);
   powerMonitor.on("on-ac", applyBattery);
   powerMonitor.on("suspend", () => core.dispatch({ type: "setVisibility", data: { visible: false, focused: false } }));
+  // The network may have changed while asleep (same addresses, another Wi-Fi): look again now, and
+  // once more when Wi-Fi has had a few seconds to join again (the first look often finds none of it).
+  const lookAfterWake = wakeLookups(() => reportNetwork(net.isOnline(), true));
   powerMonitor.on("resume", () => {
     pushVisibility(windows.main?.isFocused() ?? false);
-    // The network may have changed while asleep (same addresses, another Wi-Fi): look again now.
-    reportNetwork(net.isOnline(), true);
+    lookAfterWake();
   });
-  powerMonitor.on("unlock-screen", () => reportNetwork(net.isOnline(), true));
+  powerMonitor.on("unlock-screen", lookAfterWake);
 
   // Network: the renderer reports online/offline transitions; main polls as a backstop and looks
   // the link up (kind, id, metered) when the interfaces change. Only changes reach the core.

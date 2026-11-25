@@ -6,8 +6,10 @@
 // - macOS: `route -n get default`, `networksetup -listallhardwareports` and `arp -n`. Never metered
 //   (Low Data Mode isn't readable from here).
 // - Windows: none of it (kind "unknown", no id, never metered); that needs WinRT's connection profile.
-// The network id is a hash of the gateway's MAC (its address when the MAC is unknown), so a laptop
-// that sleeps on one Wi-Fi and wakes on another reports a new network and the core reconnects.
+// The network id is a hash of the gateway's MAC, so a laptop that sleeps on one Wi-Fi and wakes on
+// another reports a new network and the core reconnects. Never its address: every other home router
+// is 192.168.1.1. Right after link-up or resume the ARP table often has no MAC for the gateway yet;
+// that lookup is `pending` and is made again next time (see `linkWatcher`).
 // Offline mode (network.offlineMode) is the core's to apply on top of this.
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
@@ -20,6 +22,10 @@ export interface LinkInfo {
   kind: NetworkKind;
   metered: boolean;
   networkId?: string;
+  /** The default route's gateway address: tells a pending lookup whether it is still the same gateway. */
+  gateway?: string;
+  /** A gateway was found but not its MAC (yet), so there is no id: look again next time. */
+  pending?: boolean;
 }
 
 export const UNKNOWN_LINK: LinkInfo = { kind: "unknown", metered: false };
@@ -42,11 +48,16 @@ export function networkReporter(push: (state: NetworkState) => void): (online: b
   };
 }
 
-export function networkIdOf(gateway: { mac?: string; ip?: string }): string | undefined {
-  const mac = gateway.mac && gateway.mac !== "00:00:00:00:00:00" ? gateway.mac.toLowerCase() : undefined;
-  const basis = mac ?? gateway.ip;
-  if (!basis) return undefined;
-  return createHash("sha256").update(`hocket-net|${basis}`).digest("hex").slice(0, 16);
+export function networkIdOf(mac: string | undefined): string | undefined {
+  if (!mac || mac === "00:00:00:00:00:00") return undefined;
+  return createHash("sha256").update(`hocket-net|${mac.toLowerCase()}`).digest("hex").slice(0, 16);
+}
+
+/** The id part of a link with this gateway: its MAC's hash, or `pending` while the MAC isn't known. */
+export function gatewayLink(gateway: string | undefined, mac: string | undefined): Pick<LinkInfo, "networkId" | "gateway" | "pending"> {
+  if (!gateway) return {};
+  const networkId = networkIdOf(mac);
+  return networkId ? { networkId, gateway } : { gateway, pending: true };
 }
 
 // -- Linux -------------------------------------------------------------------------------------
@@ -121,7 +132,7 @@ async function linuxLink(): Promise<LinkInfo> {
   const kind = linuxKind(route.iface, existsSync, readOr);
   const mac = route.gateway ? parseProcArp(readOr("/proc/net/arp") ?? "", route.gateway, route.iface) : undefined;
   const nm = await run("nmcli", ["-t", "-g", "GENERAL.METERED", "device", "show", route.iface]);
-  return { kind, metered: nm !== undefined && parseNmMetered(nm), networkId: route.gateway ? networkIdOf({ mac, ip: route.gateway }) : undefined };
+  return { kind, metered: nm !== undefined && parseNmMetered(nm), ...gatewayLink(route.gateway, mac) };
 }
 
 // -- macOS -------------------------------------------------------------------------------------
@@ -162,7 +173,7 @@ async function macLink(): Promise<LinkInfo> {
   const mac = route.gateway ? parseMacArp((await run("arp", ["-n", route.gateway])) ?? "") : undefined;
   // An iPhone's Personal Hotspot is metered, whichever way it is joined (Wi-Fi, USB, Bluetooth).
   const hotspot = route.gateway === "172.20.10.1";
-  return { kind, metered: hotspot || kind === "cellular", networkId: route.gateway ? networkIdOf({ mac, ip: route.gateway }) : undefined };
+  return { kind, metered: hotspot || kind === "cellular", ...gatewayLink(route.gateway, mac) };
 }
 
 // -- Watching ------------------------------------------------------------------------------------
@@ -184,15 +195,24 @@ export function detectLink(platform: NodeJS.Platform = process.platform): Promis
 /**
  * The link, looked up again only when the interfaces' addresses changed or `force` is set (resume,
  * unlock: the same addresses can belong to another network). Lookups don't overlap.
+ *
+ * A pending lookup (a gateway but no MAC yet) isn't kept: the next call looks again. Until the MAC
+ * turns up it carries the id the last full lookup found for the same gateway address, so a network
+ * that merely woke up with an empty ARP table doesn't flip to "no id" and back (each a reconnect).
+ * Another network behind the same address shows its own id once its MAC is known.
  */
 export function linkWatcher(detect: () => Promise<LinkInfo> = () => detectLink(), fingerprint: () => string = () => interfacesFingerprint()): (force?: boolean) => Promise<LinkInfo> {
   let last: { print: string; link: LinkInfo } | undefined;
+  let known: LinkInfo | undefined;
   let running: Promise<LinkInfo> | undefined;
   return async (force = false) => {
     const print = fingerprint();
-    if (!force && last?.print === print) return last.link;
+    if (!force && last?.print === print && !last.link.pending) return last.link;
     if (running) return running;
-    running = detect().then((link) => {
+    running = detect().then((found) => {
+      let link = found;
+      if (!found.pending) known = found.networkId ? found : undefined;
+      else if (known && known.gateway === found.gateway) link = { ...found, networkId: known.networkId };
       last = { print, link };
       return link;
     });
@@ -201,5 +221,22 @@ export function linkWatcher(detect: () => Promise<LinkInfo> = () => detectLink()
     } finally {
       running = undefined;
     }
+  };
+}
+
+/**
+ * After a wake (resume, unlock): look now, and once more a few seconds later, when Wi-Fi has
+ * usually joined again and the gateway answered ARP. A second wake before then starts over.
+ */
+export function wakeLookups(look: () => void, againMs = 5_000): () => void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return () => {
+    if (timer) clearTimeout(timer);
+    look();
+    timer = setTimeout(() => {
+      timer = undefined;
+      look();
+    }, againMs);
+    timer.unref?.();
   };
 }

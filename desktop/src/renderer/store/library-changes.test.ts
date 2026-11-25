@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Query } from "@core/api";
-import { ALBUM_DEPS, LIBRARY_LOG_CAP, changesSince, emptyLibraryLog, queryLibraryDeps, recordLibraryChange, shownIds, touches, touchesAny, type LibraryChange } from "./library-changes";
+import { ALBUM_DEPS, LIBRARY_LOG_CAP, changesSince, emptyLibraryLog, queryLibraryDeps, recordLibraryChange, settledIds, shownIds, showsLibrary, touches, touchesAny, type LibraryChange } from "./library-changes";
 
 const change = (tables: string[], ids: string[] = []): LibraryChange => ({ tables, ids });
 const deps = (q: Query) => queryLibraryDeps(q);
@@ -78,5 +78,35 @@ describe("shown ids", () => {
     expect(shownIds({ requestId: "r", tracks: [{ id: "t1" }], albums: [], artists: [], playlists: [] })).toEqual(["t1"]);
     expect(shownIds({ total: 3 })).toBeUndefined();
     expect(shownIds([{ track: { id: "t1" } }])).toBeUndefined();
+  });
+});
+
+describe("rows still loading", () => {
+  const rowDeps = deps({ type: "albumTracks", data: { id: "al1" } });
+
+  it("match any row change, so one that lands during a first load isn't dropped", () => {
+    const loaded: string[] = [];
+    expect(touchesAny(rowDeps, [change(["tracks"], ["t9"])], () => settledIds(true, () => loaded))).toBe(true);
+    expect(touchesAny(rowDeps, [change(["tracks"], ["t9"])], () => settledIds(false, () => loaded))).toBe(false);
+    expect(touchesAny(rowDeps, [change(["tracks"], ["t9"])], () => settledIds(false, () => ["t9"]))).toBe(true);
+  });
+
+  it("don't ask for the rows on screen until they are settled", () => {
+    let asked = 0;
+    const ids = () => {
+      asked++;
+      return ["t1"];
+    };
+    expect(settledIds(true, ids)).toBeUndefined();
+    expect(asked).toBe(0);
+    expect(settledIds(false, ids)).toEqual(["t1"]);
+  });
+});
+
+describe("showing the library", () => {
+  it("counts an unfocused fullscreen window Chromium calls hidden (#45) as shown", () => {
+    expect(showsLibrary({ pageVisible: false, windowState: { visible: true } })).toBe(true);
+    expect(showsLibrary({ pageVisible: true, windowState: { visible: true } })).toBe(true);
+    expect(showsLibrary({ pageVisible: false, windowState: { visible: false } })).toBe(false);
   });
 });

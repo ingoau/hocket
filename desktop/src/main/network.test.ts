@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { NetworkState } from "@core/api";
-import { linkWatcher, linuxKind, networkIdOf, networkReporter, parseMacArp, parseMacHardwarePorts, parseMacRoute, parseNmMetered, parseProcArp, parseProcRoute, type LinkInfo } from "./network";
+import { gatewayLink, linkWatcher, linuxKind, networkIdOf, networkReporter, parseMacArp, parseMacHardwarePorts, parseMacRoute, parseNmMetered, parseProcArp, parseProcRoute, wakeLookups, type LinkInfo } from "./network";
 
 const wifi = (networkId: string): LinkInfo => ({ kind: "wifi", metered: false, networkId });
 
@@ -39,12 +39,18 @@ describe("network reporter", () => {
 });
 
 describe("network id", () => {
-  it("hashes the gateway's MAC, else its address, and never leaks either", () => {
-    const a = networkIdOf({ mac: "AA:BB:CC:00:11:22", ip: "192.168.1.1" });
-    expect(a).toBe(networkIdOf({ mac: "aa:bb:cc:00:11:22", ip: "10.0.0.1" }));
+  it("hashes the gateway's MAC and never leaks it", () => {
+    const a = networkIdOf("AA:BB:CC:00:11:22");
+    expect(a).toBe(networkIdOf("aa:bb:cc:00:11:22"));
     expect(a).not.toContain("aa:bb");
-    expect(networkIdOf({ mac: "00:00:00:00:00:00", ip: "192.168.1.1" })).toBe(networkIdOf({ ip: "192.168.1.1" }));
-    expect(networkIdOf({})).toBeUndefined();
+    expect(networkIdOf("00:00:00:00:00:00")).toBeUndefined();
+    expect(networkIdOf(undefined)).toBeUndefined();
+  });
+
+  it("never falls back to the gateway's address: without its MAC the lookup is pending", () => {
+    expect(gatewayLink("192.168.1.1", "aa:bb:cc:00:11:22")).toEqual({ networkId: networkIdOf("aa:bb:cc:00:11:22"), gateway: "192.168.1.1" });
+    expect(gatewayLink("192.168.1.1", undefined)).toEqual({ gateway: "192.168.1.1", pending: true });
+    expect(gatewayLink(undefined, undefined)).toEqual({});
   });
 });
 
@@ -112,5 +118,65 @@ describe("link watcher", () => {
     expect(await look()).toEqual(wifi("b"));
     await look(true);
     expect(detect).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("link watcher, pending lookups", () => {
+  const found = (gateway: string, networkId?: string): LinkInfo => (networkId ? { kind: "wifi", metered: false, networkId, gateway } : { kind: "wifi", metered: false, gateway, pending: true });
+
+  it("looks again after a lookup that found the gateway but not its MAC", async () => {
+    const answers = [found("192.168.1.1"), found("192.168.1.1", "home")];
+    const detect = vi.fn(async () => answers.shift()!);
+    const look = linkWatcher(detect, () => "a");
+    expect((await look()).networkId).toBeUndefined();
+    expect((await look()).networkId).toBe("home");
+    expect(await look()).toEqual(found("192.168.1.1", "home"));
+    expect(detect).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the last id while the same gateway's MAC isn't known again yet (woke with an empty ARP table)", async () => {
+    const answers = [found("192.168.1.1", "home"), found("192.168.1.1"), found("192.168.1.1", "home")];
+    const look = linkWatcher(async () => answers.shift()!, () => "a");
+    const ids: (string | undefined)[] = [];
+    ids.push((await look()).networkId);
+    ids.push((await look(true)).networkId);
+    ids.push((await look()).networkId);
+    expect(ids).toEqual(["home", "home", "home"]);
+  });
+
+  it("doesn't carry an id to another gateway, and shows a new network once its MAC is known", async () => {
+    const answers = [found("192.168.1.1", "home"), found("10.0.0.1"), found("192.168.1.1", "home"), found("192.168.1.1"), found("192.168.1.1", "cafe")];
+    const look = linkWatcher(async () => answers.shift()!, () => "a");
+    expect((await look()).networkId).toBe("home");
+    expect((await look(true)).networkId).toBeUndefined();
+    expect((await look()).networkId).toBe("home");
+    // Another router behind the same address: "home" until its MAC is known, then its own id.
+    expect((await look(true)).networkId).toBe("home");
+    expect((await look()).networkId).toBe("cafe");
+  });
+});
+
+describe("wake lookups", () => {
+  it("looks now and once more a few seconds later; another wake starts over", () => {
+    vi.useFakeTimers();
+    try {
+      const look = vi.fn();
+      const wake = wakeLookups(look, 5_000);
+      wake();
+      expect(look).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(4_999);
+      expect(look).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(1);
+      expect(look).toHaveBeenCalledTimes(2);
+      vi.advanceTimersByTime(60_000);
+      expect(look).toHaveBeenCalledTimes(2);
+      wake();
+      vi.advanceTimersByTime(3_000);
+      wake();
+      vi.advanceTimersByTime(5_000);
+      expect(look).toHaveBeenCalledTimes(5);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
