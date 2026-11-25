@@ -1,10 +1,12 @@
 //! AutoMix's order (`docs/automix.md` → *Order*): with AutoMix on and a
 //! shuffled queue, the entry after the next one is the candidate that blends
-//! best with it; an in-order queue is never touched.
+//! best with it; an in-order queue is never touched, and skipping through
+//! tracks, back and forth, never moves anything.
 
 #![cfg(feature = "sim")]
 
 use hocket_core::api::*;
+use hocket_core::automix::order::SETTLE_MS;
 use hocket_core::automix::store::fingerprint_of;
 use hocket_core::automix::ANALYSIS_VERSION;
 use hocket_core::core::io::memory::MemoryNet;
@@ -36,40 +38,43 @@ fn bpm_of(id: &str) -> f64 {
 
 async fn store_records(t: &TestCore) {
     for n in 0..8 {
-        let id = format!("t{n}");
-        let track = t.open_db().track(&id).unwrap().unwrap();
-        let beat = 60_000.0 / bpm_of(&id);
-        let mut beats = vec![];
-        let mut downbeats = vec![];
-        let mut at = 250.0;
-        let mut i = 0;
-        while at < f64::from(track.duration_ms) - 1_000.0 {
-            beats.push(at.round() as Ms);
-            if i % 4 == 0 {
-                downbeats.push(at.round() as Ms);
-            }
-            at += beat;
-            i += 1;
-        }
-        let record = AnalysisRecord {
-            version: ANALYSIS_VERSION,
-            analyser: "test".into(),
-            produced_by: AnalysisProducer::Desktop,
-            source: fingerprint_of(&track),
-            duration_ms: track.duration_ms,
-            audible_end_ms: track.duration_ms - 1_000,
-            bpm: Some(bpm_of(&id) as f32),
-            beats_ms: beats,
-            downbeats_ms: downbeats,
-            beat_confidence: 0.9,
-            ..Default::default()
-        };
-        t.run(Command::StoreAnalysisRecord {
-            track_id: id.as_str().into(),
-            record: Box::new(record),
-        })
-        .await;
+        store_record(t, &format!("t{n}")).await;
     }
+}
+
+async fn store_record(t: &TestCore, id: &str) {
+    let track = t.open_db().track(id).unwrap().unwrap();
+    let beat = 60_000.0 / bpm_of(id);
+    let mut beats = vec![];
+    let mut downbeats = vec![];
+    let mut at = 250.0;
+    let mut i = 0;
+    while at < f64::from(track.duration_ms) - 1_000.0 {
+        beats.push(at.round() as Ms);
+        if i % 4 == 0 {
+            downbeats.push(at.round() as Ms);
+        }
+        at += beat;
+        i += 1;
+    }
+    let record = AnalysisRecord {
+        version: ANALYSIS_VERSION,
+        analyser: "test".into(),
+        produced_by: AnalysisProducer::Desktop,
+        source: fingerprint_of(&track),
+        duration_ms: track.duration_ms,
+        audible_end_ms: track.duration_ms - 1_000,
+        bpm: Some(bpm_of(id) as f32),
+        beats_ms: beats,
+        downbeats_ms: downbeats,
+        beat_confidence: 0.9,
+        ..Default::default()
+    };
+    t.run(Command::StoreAnalysisRecord {
+        track_id: id.into(),
+        record: Box::new(record),
+    })
+    .await;
 }
 
 async fn start(t: &TestCore, shuffle: bool) {
@@ -82,8 +87,11 @@ async fn start(t: &TestCore, shuffle: bool) {
     .await;
     store_records(t).await;
     play_all(t, shuffle).await;
-    t.run_for(500.0).await;
+    t.run_for(SETTLED).await;
 }
+
+/// Long enough for the current track to settle and the order to be decided.
+const SETTLED: f64 = SETTLE_MS as f64 + 2_000.0;
 
 async fn play_all(t: &TestCore, shuffle: bool) {
     t.run(Command::PlayTracks {
@@ -105,6 +113,126 @@ async fn upcoming(t: &TestCore) -> Vec<String> {
         .iter()
         .map(|i| i.track.id.to_string())
         .collect()
+}
+
+/// The whole list, history to the end: what navigation must never change.
+async fn whole_list(t: &TestCore) -> Vec<String> {
+    let doc = t.snapshot().await.session.expect("a session");
+    doc.history
+        .iter()
+        .chain(doc.current.as_ref())
+        .chain(doc.upcoming.iter())
+        .map(|i| i.track.id.to_string())
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn nothing_moves_before_the_current_track_settles() {
+    let t = synced_core("unsettled").await;
+    t.run(Command::SetTransitionSettings {
+        settings: TransitionSettings {
+            mode: TransitionMode::AutoMix,
+            crossfade_seconds: 6.0,
+        },
+    })
+    .await;
+    store_records(&t).await;
+    play_all(&t, true).await;
+    // (With this seed, the follow-up of the track after t0 already blends.)
+    t.run(Command::Next).await;
+    t.run_for(500.0).await;
+    let shuffled = whole_list(&t).await;
+    t.run_for(f64::from(SETTLE_MS) - 3_000.0).await;
+    assert_eq!(whole_list(&t).await, shuffled, "not before it settles");
+    t.run_for(5_000.0).await;
+    assert_ne!(whole_list(&t).await, shuffled, "once it has");
+}
+
+/// A burst of skips (loads deferred while it lasts) still decides the order
+/// around the track it lands on, once that has settled.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_skip_burst_decides_where_it_lands() {
+    let t = synced_core("burst").await;
+    t.run(Command::SetTransitionSettings {
+        settings: TransitionSettings {
+            mode: TransitionMode::AutoMix,
+            crossfade_seconds: 6.0,
+        },
+    })
+    .await;
+    store_records(&t).await;
+    play_all(&t, true).await;
+    t.run_for(500.0).await;
+    let shuffled = whole_list(&t).await;
+    for cmd in [Command::Next, Command::PreviousTrack, Command::Next] {
+        t.run(cmd).await;
+        t.run_for(50.0).await;
+    }
+    t.run_for(1_000.0).await;
+    assert_eq!(t.current_track_id().await.as_ref(), Some(&shuffled[1]));
+    assert_eq!(whole_list(&t).await, shuffled, "nothing moved in the burst");
+    t.run_for(SETTLED).await;
+    // Decided once it settled: a candidate of the next track's tempo follows it.
+    let up = upcoming(&t).await;
+    if up[1..].iter().take(6).any(|t| bpm_of(t) == bpm_of(&up[0])) {
+        assert_eq!(bpm_of(&up[0]), bpm_of(&up[1]), "{up:?}");
+    }
+}
+
+/// Skipping through tracks, forward and back, leaves the list as it was.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skipping_back_and_forth_never_reorders() {
+    let t = synced_core("skips").await;
+    start(&t, true).await;
+    let list = whole_list(&t).await;
+    for cmd in [
+        Command::Next,
+        Command::Next,
+        Command::Next,
+        Command::PreviousTrack,
+        Command::PreviousTrack,
+        Command::Next,
+        Command::PreviousTrack,
+        Command::PreviousTrack,
+    ] {
+        t.run(cmd).await;
+        t.run_for(1_500.0).await;
+        assert_eq!(whole_list(&t).await, list);
+    }
+}
+
+/// An entry's follow-up is decided once: going back to the track before it
+/// and letting it settle again doesn't move anything, even when the records
+/// that arrived since would now choose differently.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_revisited_track_keeps_the_order_it_had() {
+    let t = synced_core("revisit").await;
+    t.run(Command::SetTransitionSettings {
+        settings: TransitionSettings {
+            mode: TransitionMode::AutoMix,
+            crossfade_seconds: 6.0,
+        },
+    })
+    .await;
+    play_all(&t, true).await;
+    t.run(Command::Next).await;
+    // Only the next track's record: its follow-up is decided blind (kept).
+    let next = upcoming(&t).await[0].clone();
+    store_record(&t, &next).await;
+    t.run_for(SETTLED).await;
+    store_records(&t).await;
+    t.run(Command::Next).await;
+    t.run_for(SETTLED).await;
+    let list = whole_list(&t).await;
+    let here = t.current_track_id().await;
+    t.run(Command::PreviousTrack).await;
+    t.run_for(SETTLED).await;
+    assert_ne!(t.current_track_id().await, here, "went back");
+    assert_eq!(whole_list(&t).await, list, "back a track");
+    t.run(Command::Next).await;
+    t.run_for(SETTLED).await;
+    assert_eq!(t.current_track_id().await, here);
+    assert_eq!(whole_list(&t).await, list, "and forward again");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -180,11 +308,11 @@ async fn promotions_reach_the_room_after_the_skip_that_asked_for_them() {
     .await;
     store_records(&a).await;
     play_all(&a, true).await;
-    TestCore::run_all_for(&[&room, &a], 2_000.0).await;
+    TestCore::run_all_for(&[&room, &a], SETTLED).await;
     for _ in 0..3 {
         let before = upcoming(&a).await;
         a.run(Command::Next).await;
-        TestCore::run_all_for(&[&room, &a], 2_000.0).await;
+        TestCore::run_all_for(&[&room, &a], SETTLED).await;
         let cur = a.current_track_id().await.expect("playing");
         assert_eq!(cur, before[0], "the skip stood");
         let up = upcoming(&a).await;

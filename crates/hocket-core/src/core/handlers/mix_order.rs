@@ -7,24 +7,33 @@
 //! track's tail start was committed against the next track when the current
 //! one was preloaded, so the next track is already fixed, but its own tail
 //! start (its source's `mix_out_ms`) is planned against whatever follows it.
-//! Once per next entry, as soon as its record is known; the move travels as a
-//! [`SessionOp::PromoteForMix`], so every device sees the same order.
+//! Once per entry and follow-up, so skipping back and forward again finds
+//! the order it left (a reshuffle or an edit that gives the entry another
+//! follow-up decides again), and only once the current track has played a
+//! while ([`SETTLE_MS`]), so skipping through tracks moves nothing. The move travels as a [`SessionOp::PromoteForMix`], so every
+//! device sees the same order.
 //!
 //! Never touched: the "Next in queue" group, anything the user added, an
 //! album or playlist in order (shuffle off), and everything past the first
 //! entry that isn't ours to order.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::api::*;
-use crate::automix::order::{choose, mix_score, ORDER_WINDOW};
+use crate::automix::order::{choose, mix_score, ORDER_WINDOW, SETTLE_MS};
+use crate::automix::LOCK_IN_MS;
 use crate::connect::wire::SessionOp;
 use crate::core::actor::Actor;
 
 #[derive(Debug, Default)]
 pub(crate) struct MixOrderState {
-    /// The next entry whose follow-up was decided (once per entry).
-    decided_after: Option<QueueKey>,
+    /// Entries whose follow-up was decided, with the follow-up chosen. While
+    /// an entry still has it, a revisit (Previous, then Next) decides nothing.
+    decided: HashMap<QueueKey, QueueKey>,
+    /// A decision is due but was held back by something that passes (the
+    /// current track not settled yet, a load pending, a record fetch in
+    /// flight, offline): position reports ask again.
+    retry: bool,
     /// A promotion sent: replan the preloaded follow-up once it shows.
     promoted: Option<QueueKey>,
     /// Times each upcoming entry was passed over.
@@ -65,25 +74,33 @@ impl Actor {
                 self.replan_next();
             }
         }
+        self.mix_order.retry = false;
         if !self.owns_transport()
             || self.transition_settings().mode != TransitionMode::AutoMix
             || !self.mix_context_allows()
             || doc.repeat != RepeatMode::Off
-            // Offline, the next playable entry isn't always the document's next.
-            || self.is_offline()
-            || self.share.in_flight.is_some()
             // Too late to replan the next track's tail start against a new
-            // follow-up (a committed plan, a mix running, a load pending).
+            // follow-up (a committed plan, a mix running).
             || self.locked_tail_start().is_some()
             || self.playback.transition.is_some()
-            || self.playback.pending_load.is_some()
         {
             return;
         }
         let Some(anchor) = doc.upcoming.first().filter(|i| !i.unavailable) else {
             return;
         };
-        if self.mix_order.decided_after.as_ref() == Some(&anchor.key) {
+        if self.mix_order.decided.get(&anchor.key) == doc.upcoming.get(1).map(|i| &i.key) {
+            return;
+        }
+        if self.is_offline()
+            // Offline, the next playable entry isn't always the document's next.
+            || self.share.in_flight.is_some()
+            || self.playback.pending_load.is_some()
+            // Not while the user skips through tracks: each skip would move
+            // the entry after the next one, and the queue would shift under them.
+            || self.playback.position_now(self.now()) < self.settle_position()
+        {
+            self.mix_order.retry = true;
             return;
         }
         let run: Vec<&QueueItem> = doc.upcoming[1..]
@@ -117,10 +134,20 @@ impl Actor {
             .collect();
         let front_passes = self.mix_order.passes.get(&run[0].key).copied().unwrap_or(0);
         let pick = choose(&scores, front_passes);
-        self.mix_order.decided_after = Some(anchor.key.clone());
-        let keep: Vec<QueueKey> = doc.upcoming.iter().map(|i| i.key.clone()).collect();
+        let in_queue: HashSet<&QueueKey> = doc
+            .history
+            .iter()
+            .chain(doc.current.as_ref())
+            .chain(doc.upcoming.iter())
+            .map(|i| &i.key)
+            .collect();
+        self.mix_order.decided.retain(|k, _| in_queue.contains(k));
+        let keep: HashSet<&QueueKey> = doc.upcoming.iter().map(|i| &i.key).collect();
         self.mix_order.passes.retain(|k, _| keep.contains(k));
         if pick == 0 {
+            self.mix_order
+                .decided
+                .insert(anchor.key.clone(), run[0].key.clone());
             return;
         }
         tracing::debug!(
@@ -131,6 +158,18 @@ impl Actor {
             ?scores,
             "mix order: promoted"
         );
+        let key = run[pick].key.clone();
+        let after = anchor.key.clone();
+        self.mix_order.promoted = Some(key.clone());
+        if !self.local_op_quiet(SessionOp::PromoteForMix {
+            key: key.clone(),
+            after: after.clone(),
+        }) {
+            // Not sent: nothing moved, so nothing is decided or passed over.
+            self.mix_order.promoted = None;
+            return;
+        }
+        self.mix_order.decided.insert(after, key);
         for skipped in &run[..pick] {
             *self
                 .mix_order
@@ -138,11 +177,36 @@ impl Actor {
                 .entry(skipped.key.clone())
                 .or_default() += 1;
         }
-        let key = run[pick].key.clone();
-        let after = anchor.key.clone();
-        self.mix_order.promoted = Some(key.clone());
-        if !self.local_op_quiet(SessionOp::PromoteForMix { key, after }) {
-            self.mix_order.promoted = None;
+    }
+
+    /// The current track's position from which the order may be decided:
+    /// [`SETTLE_MS`], or halfway to the point its tail locks in when that
+    /// comes sooner (a short track, or a short planned tail start). The same
+    /// tail start [`Self::locked_tail_start`] measures from, when planned.
+    fn settle_position(&self) -> Ms {
+        let end = self
+            .playback
+            .next
+            .as_ref()
+            .and_then(|n| n.mix_in.as_ref())
+            .map(|p| p.tail_start_ms)
+            .or(self.playback.mix_out_ms)
+            .unwrap_or_else(|| self.playback.duration_ms());
+        SETTLE_MS.min(end.saturating_sub(LOCK_IN_MS) / 2)
+    }
+
+    /// A position report: ask again for a decision that was held back, once
+    /// the current track has settled.
+    /// The cheap reasons it is held back are checked here first, so a long
+    /// one (offline) doesn't copy the document on every report.
+    pub(crate) fn order_for_mix_at(&mut self, position_ms: Ms) {
+        if self.mix_order.retry
+            && position_ms >= self.settle_position()
+            && !self.is_offline()
+            && self.share.in_flight.is_none()
+            && self.playback.pending_load.is_none()
+        {
+            self.order_for_mix();
         }
     }
 }
