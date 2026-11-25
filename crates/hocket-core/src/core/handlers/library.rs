@@ -1281,6 +1281,11 @@ impl Actor {
                 .settings
                 .get_bool(crate::settings::keys::DOWNLOADS_TRANSCODE);
         for sid in sources {
+            // The user's pin (or retry) tries every track again, and the
+            // core's own retries do too from now on.
+            if let Err(e) = self.downloads.reset_failures(&sid, &target) {
+                self.log("warn", format!("resetting download failures: {e}"));
+            }
             match self.downloads.pin(&sid, &target, transcode) {
                 Ok(Some(spec)) => {
                     if let Err(e) = self.jobs.submit(spec) {
@@ -1948,6 +1953,24 @@ impl Actor {
         include_server: bool,
         request_id: String,
     ) -> SearchResults {
+        // A newer search replaces the one still asking the servers (one per
+        // keystroke), whether or not it asks them itself: the old one stops
+        // and its caller gets its one server batch, empty. Unless this
+        // search reuses its request id and asks the servers too: two
+        // batches for one id would read as the answer twice.
+        if let Some((_, old_id, old_query, task)) = self.server_search.take() {
+            task.abort();
+            if old_id != request_id || !include_server {
+                self.emit(Event::SearchResults {
+                    results: SearchResults {
+                        request_id: old_id,
+                        query: old_query,
+                        from_server: true,
+                        ..Default::default()
+                    },
+                });
+            }
+        }
         let mut local = self
             .db
             .search(&server_id, &query, limit)
@@ -2000,25 +2023,6 @@ impl Actor {
                     results: empty_server_batch(),
                 });
             } else {
-                // A newer search replaces the one still asking the servers
-                // (one per keystroke): it stops, and its caller gets its
-                // one server batch, empty.
-                // A caller reusing the request id gets only the new
-                // search's batch: two for one id would read as the answer
-                // twice.
-                if let Some((_, old_id, old_query, task)) = self.server_search.take() {
-                    task.abort();
-                    if old_id != request_id {
-                        self.emit(Event::SearchResults {
-                            results: SearchResults {
-                                request_id: old_id,
-                                query: old_query,
-                                from_server: true,
-                                ..Default::default()
-                            },
-                        });
-                    }
-                }
                 self.server_search_seq += 1;
                 let seq = self.server_search_seq;
                 let tx = self.tx.clone();

@@ -320,8 +320,11 @@ impl Actor {
         if self.started {
             self.register_job_runners();
             if reachable {
-                // Just signed in (or verified): its library now.
+                // Just signed in (or verified): its library now, and the
+                // downloads that failed while it wasn't (YouTube Music is
+                // installed reachable, with no probe to answer).
                 self.maybe_start_sync_for(&account_id, false, true);
+                self.retry_failed_downloads(&account_id);
             } else {
                 // Reinstalled from its saved row (every launch replays the
                 // credentials): a launch refresh, unless it is recent.
@@ -616,7 +619,10 @@ impl Actor {
             "cancel" => self.jobs.cancel(id),
             "pause" => self.jobs.pause(id),
             "resume" => self.jobs.resume(id),
-            _ => self.jobs.retry(id),
+            _ => {
+                self.reset_download_failures(id);
+                self.jobs.retry(id)
+            }
         };
         match r {
             Ok(false) => self.toast("That job is no longer running", None),
@@ -627,9 +633,28 @@ impl Actor {
 
     pub(crate) fn retry_problem(&mut self, id: &str) {
         match self.jobs.retry_problem(id) {
-            Ok(Some(_)) => {}
+            Ok(Some(job)) => self.reset_download_failures(&job),
             Ok(None) => self.toast("Nothing to retry", None),
             Err(e) => self.error(ErrorKind::Storage, "retry", Some(e.to_string())),
+        }
+    }
+
+    /// The user retries a job: when it downloads a pin, its tracks' failure
+    /// counts start over (see `Downloads::reset_failures`).
+    fn reset_download_failures(&mut self, job_id: &str) {
+        let Ok(Some(job)) = self.jobs.job(job_id) else {
+            return;
+        };
+        if job.kind != JobKind::Download {
+            return;
+        }
+        let r = match self.jobs.payload(job_id) {
+            Ok(Some(payload)) => self.downloads.reset_job_failures(&payload),
+            Ok(None) => Ok(()),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = r {
+            self.log("warn", format!("resetting download failures: {e}"));
         }
     }
 
@@ -1119,10 +1144,6 @@ impl Actor {
             self.apply_job_holds();
             return;
         }
-        let from_offline = self
-            .network
-            .as_ref()
-            .is_some_and(|n| n.kind == NetworkKind::Offline);
         let Some(state) = next else {
             // Offline mode off before the platform reported any network:
             // back to "unknown", which the core treats as online.
@@ -1131,7 +1152,7 @@ impl Actor {
             self.emit(Event::NetworkChanged { network: None });
             self.engine_input(Input::SetNetwork { online: true });
             self.apply_job_holds();
-            self.on_network_usable(from_offline);
+            self.on_network_usable();
             self.refresh_next_for_network();
             return;
         };
@@ -1167,16 +1188,16 @@ impl Actor {
         self.engine_input(Input::SetNetwork { online });
         self.apply_job_holds();
         if online {
-            self.on_network_usable(from_offline);
+            self.on_network_usable();
         } else {
             self.mark_prefetch_check();
         }
         self.refresh_next_for_network();
     }
 
-    /// A network to use (another one, or back from offline when
-    /// `from_offline`): what failed or waited for one runs now.
-    fn on_network_usable(&mut self, from_offline: bool) {
+    /// A network to use (another one, or back from offline): what failed
+    /// or waited for one runs now.
+    fn on_network_usable(&mut self) {
         self.mark_prefetch_check();
         // Prefetches that failed on the old network are due now.
         self.prefetch_retry_now();
@@ -1198,21 +1219,11 @@ impl Actor {
         for id in stale {
             self.probe_account(&id);
         }
-        // Back from offline: downloads that failed for want of a network
-        // are fetched again for the accounts still reachable (the others
-        // when their probe answers). Another network, or the same one
-        // reported again, isn't a reason to retry.
-        if from_offline {
-            let reachable: Vec<AccountId> = self
-                .accounts
-                .iter()
-                .filter(|s| s.info.reachable && !s.probing)
-                .map(|s| s.info.id.clone())
-                .collect();
-            for id in reachable {
-                self.retry_failed_downloads(&id);
-            }
-        }
+        // Downloads that failed on the old network (or while the server
+        // was down without its probe noticing) are fetched again for the
+        // accounts not known to be unreachable; the others when their probe
+        // answers. The per-track failure cap bounds the churn.
+        self.retry_all_failed_downloads();
         // So are lyrics.
         self.lyrics_failed.clear();
         // Downloads whose covers were never kept (or failed) get them now.
@@ -1220,9 +1231,24 @@ impl Actor {
         self.clear_offline_skips();
     }
 
-    /// Plan the failed tracks of the account's pins (its source's) again:
-    /// it is reachable again. Not for an account that isn't signed in (no
-    /// provider) or isn't reachable; only failures a retry may fix.
+    /// [`retry_failed_downloads`](Self::retry_failed_downloads) for every
+    /// account signed in and not known to be unreachable.
+    pub(crate) fn retry_all_failed_downloads(&mut self) {
+        let ids: Vec<AccountId> = self
+            .accounts
+            .iter()
+            .filter(|s| s.provider.is_some() && s.info.reachable)
+            .map(|s| s.info.id.clone())
+            .collect();
+        for id in ids {
+            self.retry_failed_downloads(&id);
+        }
+    }
+
+    /// Plan the failed tracks of the account's pins (its source's) again: a
+    /// network to use, the account reachable again, or just signed in. Not
+    /// for an account that isn't signed in (no provider) or isn't
+    /// reachable; only failures a retry may fix.
     pub(crate) fn retry_failed_downloads(&mut self, account_id: &str) {
         let Some(sid) = self
             .accounts

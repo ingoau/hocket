@@ -226,10 +226,7 @@ export async function resolveTrackRefs(target: ActionTarget): Promise<TrackRef[]
       return target.data.tracks;
     case "albums": {
       const out: TrackRef[] = [];
-      for (const id of target.data.ids) {
-        const r = await b.query({ type: "albumTracks", data: { id } });
-        if (r.type === "trackList") out.push(...r.data.map(refOf));
-      }
+      for (const id of target.data.ids) out.push(...(await albumTrackRefs(id)));
       return out;
     }
     case "artists": {
@@ -238,10 +235,7 @@ export async function resolveTrackRefs(target: ActionTarget): Promise<TrackRef[]
       for (const id of target.data.ids) {
         const r = await b.query({ type: "albums", data: { server_id: "", artist_id: id, genre: undefined, sort: "year", descending: false, page: { offset: 0, limit: 10_000 } } });
         if (r.type !== "albums") continue;
-        for (const a of r.data.items) {
-          const tr = await b.query({ type: "albumTracks", data: { id: a.id } });
-          if (tr.type === "trackList") out.push(...tr.data.map(refOf));
-        }
+        for (const a of r.data.items) out.push(...(await albumTrackRefs(a.id)));
       }
       return out;
     }
@@ -259,6 +253,21 @@ export async function resolveTrackRefs(target: ActionTarget): Promise<TrackRef[]
     }
     default:
       return [];
+  }
+}
+
+/**
+ * An album's songs. An album that can't be fetched (a catalogue album the
+ * service didn't answer for) contributes nothing, so the other albums of a
+ * multi-album action still go through.
+ */
+async function albumTrackRefs(id: string): Promise<TrackRef[]> {
+  try {
+    const r = await bridge().query({ type: "albumTracks", data: { id } });
+    return r.type === "trackList" ? r.data.map(refOf) : [];
+  } catch (e) {
+    console.warn("[actions] album tracks", id, e);
+    return [];
   }
 }
 

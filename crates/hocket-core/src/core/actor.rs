@@ -956,6 +956,9 @@ impl Actor {
             let _ = tx.send(ActorMsg::Internal(Internal::Jobs(ev)));
         });
         self.jobs.start(&self.rt);
+        // Accounts signed in reachable before the start (no probe to
+        // answer): their failed downloads are tried again.
+        self.retry_all_failed_downloads();
         self.apply_audio_to_backend();
         if let Err(e) = self.backend.set_volume(self.effective_volume()) {
             self.log("debug", format!("set_volume: {e}"));

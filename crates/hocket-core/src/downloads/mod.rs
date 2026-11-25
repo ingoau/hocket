@@ -166,20 +166,24 @@ pub enum DownloadError {
 
 impl DownloadError {
     /// A failure trying again unasked can't fix: the server said no (not
-    /// found, forbidden, any other 4xx but a timeout or rate limit, an answer
-    /// that isn't media) or the track isn't known. Network trouble, 5xx, a
-    /// sign-in that may be renewed and local trouble may pass.
+    /// found, forbidden, any other 4xx but a timeout or rate limit) or the
+    /// track isn't known. Network trouble, 5xx, a sign-in that may be
+    /// renewed, an answer that isn't media (a captive portal's or sign-in
+    /// proxy's page, an empty body, a redirect), a stream that wouldn't
+    /// resolve (YouTube Music's JS host not ready) and local trouble may
+    /// pass.
     pub fn is_permanent(&self) -> bool {
         match self {
             DownloadError::Server(e) => match e {
-                SubsonicError::NotFound(_)
-                | SubsonicError::Forbidden(_)
-                | SubsonicError::Protocol(_)
-                | SubsonicError::Unsupported(_) => true,
+                SubsonicError::NotFound(_) | SubsonicError::Forbidden(_) => true,
                 SubsonicError::Server { code, .. } => {
                     (400..500).contains(code) && *code != 408 && *code != 429
                 }
-                SubsonicError::Auth(_) | SubsonicError::Network(_) | SubsonicError::Io(_) => false,
+                SubsonicError::Protocol(_)
+                | SubsonicError::Unsupported(_)
+                | SubsonicError::Auth(_)
+                | SubsonicError::Network(_)
+                | SubsonicError::Io(_) => false,
             },
             DownloadError::UnknownTrack(_) | DownloadError::UnknownAlbumTracks(_) => true,
             DownloadError::Db(_)
@@ -189,10 +193,17 @@ impl DownloadError {
             | DownloadError::Cancelled => false,
         }
     }
+
+    /// Whether the failure counts against [`MAX_AUTO_RETRY_FAILURES`]: not
+    /// when the network failed, which isn't the track's fault (and is what
+    /// a job deferred for want of a network fails its track with).
+    pub fn counts_toward_cap(&self) -> bool {
+        !matches!(self, DownloadError::Server(SubsonicError::Network(_)))
+    }
 }
 
 /// Failed attempts after which a track is no longer retried unasked (the
-/// user's retry still fetches it).
+/// user's retry still fetches it, and clears the count).
 pub const MAX_AUTO_RETRY_FAILURES: i64 = 5;
 
 impl From<DownloadError> for JobError {
@@ -1096,6 +1107,31 @@ impl Downloads {
         Ok(out)
     }
 
+    /// The user retries the pin's downloads: its tracks' failure counts and
+    /// "a retry can't fix it" marks start over, so the core's own retries
+    /// try them again too.
+    pub fn reset_failures(&self, server_id: &str, target: &PinTarget) -> DbResult<()> {
+        self.inner.db.with_conn(|c| {
+            c.execute(
+                "UPDATE pin_tracks SET failures = 0, permanent = 0
+                 WHERE server_id = ?1 AND (failures > 0 OR permanent != 0) AND track_id IN (
+                     SELECT track_id FROM pin_tracks WHERE server_id = ?1 AND target_kind = ?2 AND target_id = ?3)",
+                params![server_id, kind_name(target), target_id(target)],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// [`reset_failures`](Self::reset_failures) for the pin a download job
+    /// fetches for (the user retries the job). Nothing for another kind of
+    /// job.
+    pub fn reset_job_failures(&self, payload: &str) -> DbResult<()> {
+        match serde_json::from_str::<DownloadJobPayload>(payload) {
+            Ok(p) => self.reset_failures(&p.server_id, &p.target),
+            Err(_) => Ok(()),
+        }
+    }
+
     /// Unfinished download jobs fetching for this pin.
     pub fn unfinished_jobs(&self, server_id: &str, target: &PinTarget) -> DbResult<Vec<String>> {
         self.inner.db.with_conn(|c| {
@@ -1594,7 +1630,7 @@ impl Downloads {
 
     /// Fail the track's rows after a fetch that claimed them: the error is
     /// kept, with whether a retry unasked could help, and the attempt counts
-    /// against [`MAX_AUTO_RETRY_FAILURES`].
+    /// against [`MAX_AUTO_RETRY_FAILURES`] unless the network failed.
     fn mark_failed(&self, server_id: &str, track_id: &str, error: &DownloadError) -> DbResult<()> {
         self.set_failed(server_id, track_id, error, "")
     }
@@ -1609,9 +1645,15 @@ impl Downloads {
         self.inner.db.with_conn(|c| {
             c.execute(
                 &format!(
-                    "UPDATE pin_tracks SET state = 'failed', error = ?3, failures = failures + 1, permanent = ?4 WHERE server_id = ?1 AND track_id = ?2 {rows}"
+                    "UPDATE pin_tracks SET state = 'failed', error = ?3, failures = failures + ?5, permanent = ?4 WHERE server_id = ?1 AND track_id = ?2 {rows}"
                 ),
-                params![server_id, track_id, error.to_string(), error.is_permanent()],
+                params![
+                    server_id,
+                    track_id,
+                    error.to_string(),
+                    error.is_permanent(),
+                    error.counts_toward_cap() as i64
+                ],
             )?;
             Ok(())
         })?;
@@ -2740,6 +2782,8 @@ impl JobRunner for DownloadRunner {
                         // The network going away usually fails the request
                         // before the platform says so: if it has by now, the
                         // track waits with the job instead of failing.
+                        // (A network failure doesn't count against the
+                        // track's retry cap, so a deferral costs it nothing.)
                         if matches!(e, DownloadError::Server(SubsonicError::Network(_))) {
                             ctx.checkpoint().await?;
                         }
@@ -3490,7 +3534,10 @@ mod tests {
         let fail = |track: &str, e: DownloadError| f.dl.fail_unclaimed("srv", track, &e).unwrap();
         fail(
             "t0",
-            DownloadError::Server(SubsonicError::Network("tunnel".into())),
+            DownloadError::Server(SubsonicError::Server {
+                code: 503,
+                message: "http 503".into(),
+            }),
         );
         fail(
             "t1",
@@ -3510,7 +3557,10 @@ mod tests {
         for _ in 1..MAX_AUTO_RETRY_FAILURES {
             fail(
                 "t0",
-                DownloadError::Server(SubsonicError::Network("tunnel".into())),
+                DownloadError::Server(SubsonicError::Server {
+                    code: 503,
+                    message: "http 503".into(),
+                }),
             );
         }
         assert_eq!(row(&f, "t0").1, MAX_AUTO_RETRY_FAILURES);
@@ -3536,9 +3586,23 @@ mod tests {
         };
         assert!(server(SubsonicError::NotFound("x".into())));
         assert!(server(SubsonicError::Forbidden("x".into())));
-        assert!(server(SubsonicError::Protocol("x".into())));
         assert!(code(400) && code(410) && code(416));
         assert!(!code(408) && !code(429) && !code(500) && !code(0));
+        // A captive portal's or sign-in proxy's page, an empty body, a
+        // redirect, a stream that wouldn't resolve: these pass.
+        assert!(!server(SubsonicError::Protocol(
+            "media response was text/html instead of audio/image".into()
+        )));
+        assert!(!server(SubsonicError::Protocol(
+            "empty media response".into()
+        )));
+        assert!(!server(SubsonicError::Protocol(
+            "unexpected http status 302".into()
+        )));
+        assert!(!code(302));
+        assert!(!server(SubsonicError::Unsupported(
+            "WEB_REMIX: the JS host signed nothing".into()
+        )));
         assert!(!server(SubsonicError::Network("x".into())));
         assert!(!server(SubsonicError::Auth("x".into())));
         assert!(DownloadError::UnknownTrack("x".into()).is_permanent());
@@ -3547,6 +3611,69 @@ mod tests {
             free: 0.0
         }
         .is_permanent());
+    }
+
+    #[test]
+    fn network_failures_do_not_use_up_the_retry_cap() {
+        let f = fixture();
+        let target = PinTarget::Track { id: "t0".into() };
+        f.dl.pin("srv", &target, false).unwrap().unwrap();
+        let network = DownloadError::Server(SubsonicError::Network("tunnel".into()));
+        // What a job deferred for want of a network (its runner's
+        // checkpoint) fails its track with, however often that happens.
+        for _ in 0..MAX_AUTO_RETRY_FAILURES * 2 {
+            f.dl.fail_unclaimed("srv", "t0", &network).unwrap();
+        }
+        assert_eq!(row(&f, "t0"), ("failed".into(), 0, false));
+        assert_eq!(f.dl.replan_failed("srv").unwrap()[0].items, vec!["t0"]);
+        // Other failures still count.
+        let portal = DownloadError::Server(SubsonicError::Protocol("text/html".into()));
+        f.dl.fail_unclaimed("srv", "t0", &portal).unwrap();
+        assert_eq!(row(&f, "t0"), ("failed".into(), 1, false));
+    }
+
+    #[test]
+    fn the_users_retry_clears_failure_counts_and_permanent_marks() {
+        let f = fixture();
+        let album = PinTarget::Album { id: "al0".into() };
+        f.dl.pin("srv", &album, false).unwrap().unwrap();
+        f.dl.fail_unclaimed(
+            "srv",
+            "t0",
+            &DownloadError::Server(SubsonicError::NotFound("http 404".into())),
+        )
+        .unwrap();
+        for _ in 0..MAX_AUTO_RETRY_FAILURES {
+            f.dl.fail_unclaimed(
+                "srv",
+                "t1",
+                &DownloadError::Server(SubsonicError::Server {
+                    code: 500,
+                    message: "http 500".into(),
+                }),
+            )
+            .unwrap();
+        }
+        assert!(f.dl.replan_failed("srv").unwrap().is_empty());
+        f.dl.reset_failures("srv", &album).unwrap();
+        assert_eq!(row(&f, "t0"), ("failed".into(), 0, false));
+        assert_eq!(row(&f, "t1"), ("failed".into(), 0, false));
+        assert_eq!(
+            f.dl.replan_failed("srv").unwrap()[0].items,
+            vec!["t0", "t1"]
+        );
+        // The same through a download job's payload (the user retries it).
+        f.dl.fail_unclaimed(
+            "srv",
+            "t0",
+            &DownloadError::Server(SubsonicError::NotFound("http 404".into())),
+        )
+        .unwrap();
+        let spec = f.dl.plan("srv", &album, false).unwrap().unwrap();
+        f.dl.reset_job_failures(&spec.payload).unwrap();
+        assert_eq!(row(&f, "t0"), ("failed".into(), 0, false));
+        // Another kind of job's payload changes nothing.
+        f.dl.reset_job_failures("{\"cursor\":1}").unwrap();
     }
 
     #[tokio::test]
