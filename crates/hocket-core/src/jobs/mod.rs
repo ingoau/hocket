@@ -956,6 +956,11 @@ impl JobContext {
         self.cancel.is_cancelled()
     }
 
+    /// The job's cancellation, to race long work against.
+    pub fn cancel_token(&self) -> CancellationToken {
+        self.cancel.clone()
+    }
+
     pub fn is_paused(&self) -> bool {
         *self.pause.borrow()
     }

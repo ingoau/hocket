@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use super::{Db, DbResult};
 use crate::api::{Album, Artist, Track};
 
-/// The most rows kept per kind; the oldest go first.
+/// The most rows kept per kind; the oldest go first (pinned ones are kept
+/// on top).
 const KEEP: i64 = 20_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -22,6 +23,21 @@ pub struct CatalogueAlbum {
 pub struct CatalogueArtist {
     pub artist: Artist,
     pub albums: Vec<Album>,
+}
+
+/// Keep `kind`'s newest `keep` rows. Downloaded songs and albums stay on
+/// top: the catalogue is all a pinned item a provider answered live is known
+/// from.
+fn trim(tx: &rusqlite::Connection, kind: &str, keep: i64) -> DbResult<()> {
+    tx.execute(
+        "DELETE FROM catalogue WHERE kind = ?1 AND rowid IN (
+            SELECT rowid FROM catalogue c WHERE kind = ?1
+              AND NOT EXISTS (SELECT 1 FROM pin_tracks p WHERE ?1 = 'track' AND p.server_id = c.server_id AND p.track_id = c.id)
+              AND NOT EXISTS (SELECT 1 FROM pins p WHERE p.server_id = c.server_id AND p.target_kind = ?1 AND p.target_id = c.id)
+            ORDER BY fetched_at DESC LIMIT -1 OFFSET ?2)",
+        params![kind, keep],
+    )?;
+    Ok(())
 }
 
 impl Db {
@@ -42,10 +58,7 @@ impl Db {
             for (source, id, json) in rows {
                 st.execute(params![kind, source, id, json, now])?;
             }
-            tx.execute(
-                "DELETE FROM catalogue WHERE kind = ?1 AND rowid IN (SELECT rowid FROM catalogue WHERE kind = ?1 ORDER BY fetched_at DESC LIMIT -1 OFFSET ?2)",
-                params![kind, KEEP],
-            )?;
+            trim(tx, kind, KEEP)?;
             Ok(())
         })
     }
@@ -220,5 +233,47 @@ mod tests {
             db.catalogue_album("MPREb_x").unwrap().unwrap().tracks.len(),
             1
         );
+    }
+
+    #[test]
+    fn the_trim_keeps_pinned_songs_and_albums() {
+        let db = Db::open_in_memory().unwrap();
+        let track = |id: &str| Track {
+            id: id.into(),
+            server_id: "ytm".into(),
+            title: id.into(),
+            ..Default::default()
+        };
+        let album = |id: &str| Album {
+            id: id.into(),
+            server_id: "ytm".into(),
+            name: id.into(),
+            ..Default::default()
+        };
+        db.catalogue_put_album(&album("old-al"), &[track("old-pinned")], 1.0)
+            .unwrap();
+        db.catalogue_put_tracks(&[track("old")], 1.0).unwrap();
+        db.catalogue_put_albums(&[album("old-al2")], 1.0).unwrap();
+        db.catalogue_put_tracks(&[track("new")], 2.0).unwrap();
+        db.catalogue_put_albums(&[album("new-al")], 2.0).unwrap();
+        db.with_tx(|tx| {
+            tx.execute(
+                "INSERT INTO pins(server_id, target_kind, target_id, label, created_at) VALUES ('ytm', 'album', 'old-al', 'A', 1)",
+                [],
+            )?;
+            tx.execute(
+                "INSERT INTO pin_tracks(server_id, target_kind, target_id, track_id, state) VALUES ('ytm', 'album', 'old-al', 'old-pinned', 'done')",
+                [],
+            )?;
+            trim(tx, "track", 1)?;
+            trim(tx, "album", 1)
+        })
+        .unwrap();
+        assert!(db.catalogue_track("old-pinned").unwrap().is_some());
+        assert!(db.catalogue_track("new").unwrap().is_some());
+        assert!(db.catalogue_track("old").unwrap().is_none());
+        assert!(db.catalogue_album("old-al").unwrap().is_some());
+        assert!(db.catalogue_album("new-al").unwrap().is_some());
+        assert!(db.catalogue_album("old-al2").unwrap().is_none());
     }
 }

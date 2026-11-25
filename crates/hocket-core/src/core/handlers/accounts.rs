@@ -380,16 +380,12 @@ impl Actor {
         }
         self.providers_changed();
         self.prefetch_tick(self.now());
-        if let Err(e) = self.db.delete_account(&account_id) {
-            self.error(ErrorKind::Storage, "remove account", Some(e.to_string()));
-        }
+        self.forget_account_data(&account_id);
         // The last account of a shared source (YouTube Music's `ytm`) takes
         // the source's mirror, pins and outbox with it.
         let source = removed.info.source.clone();
         if source != account_id && self.accounts.for_source(&source).is_none() {
-            if let Err(e) = self.db.delete_account(&source) {
-                self.error(ErrorKind::Storage, "remove account", Some(e.to_string()));
-            }
+            self.forget_account_data(&source);
         }
         self.persist_priorities();
         self.credentials_changed();
@@ -398,6 +394,20 @@ impl Actor {
         }
         self.relink();
         self.emit_everything(false);
+    }
+
+    /// Drop what a removed account (or source) kept: its download jobs, its
+    /// downloaded and cached files, then its rows.
+    fn forget_account_data(&mut self, server_id: &str) {
+        for job in self.downloads.account_jobs(server_id).unwrap_or_default() {
+            let _ = self.jobs.cancel(&job);
+        }
+        if let Err(e) = self.downloads.remove_account_files(server_id) {
+            self.log("warn", format!("remove account files: {e}"));
+        }
+        if let Err(e) = self.db.delete_account(server_id) {
+            self.error(ErrorKind::Storage, "remove account", Some(e.to_string()));
+        }
     }
 
     pub(crate) fn reorder_accounts(&mut self, ids: Vec<AccountId>) {
@@ -1179,9 +1189,29 @@ impl Actor {
         for id in stale {
             self.probe_account(&id);
         }
+        // Downloads that failed on the old network are fetched again.
+        self.retry_failed_downloads();
+        // So are lyrics.
+        self.lyrics_failed.clear();
         // Downloads whose covers were never kept (or failed) get them now.
         self.keep_download_covers();
         self.clear_offline_skips();
+    }
+
+    /// Plan every pin's failed tracks again (each source's pins).
+    fn retry_failed_downloads(&mut self) {
+        for sid in self.accounts.sources() {
+            match self.downloads.replan_failed(&sid) {
+                Ok(specs) => {
+                    for spec in specs {
+                        if let Err(e) = self.jobs.submit(spec) {
+                            self.error(ErrorKind::Storage, "download job", Some(e.to_string()));
+                        }
+                    }
+                }
+                Err(e) => self.log("warn", format!("retrying failed downloads: {e}")),
+            }
+        }
     }
 
     /// The stream URL may change with the network's transcoding profile,

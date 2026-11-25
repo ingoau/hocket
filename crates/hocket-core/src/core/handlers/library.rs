@@ -1105,18 +1105,13 @@ impl Actor {
         let outbox = self.outbox.clone();
         let tx = self.tx.clone();
         let entry_id = entry_id.to_string();
-        let db = self.db.clone();
-        let local_target = target.clone();
-        let local_new = new.clone();
         self.spawn(async move {
             let result = match outbox
                 .execute_cas(api.as_ref(), target, expected, new)
                 .await
             {
-                Ok(crate::outbox::CasOutcome::Applied) => {
-                    apply_cas_locally(&db, &local_target, &local_new);
-                    CasResult::Applied
-                }
+                // `execute_cas` already updated that account's mirror row.
+                Ok(crate::outbox::CasOutcome::Applied) => CasResult::Applied,
                 Ok(crate::outbox::CasOutcome::Skipped { .. }) => CasResult::Skipped,
                 Err(e) => {
                     tracing::warn!(target: "hocket_core", error = %e, "cas failed");
@@ -1227,13 +1222,26 @@ impl Actor {
             .collect()
     }
 
-    /// The account a pin target belongs to.
+    /// The account a pin target belongs to (a song or album a provider
+    /// answered live is known from the catalogue only).
     fn pin_owner(&self, target: &PinTarget) -> Option<String> {
         match target {
-            PinTarget::Track { id } => self.db.track(id).ok().flatten().map(|t| t.server_id),
-            PinTarget::Album { id } => {
-                self.source_of_context(&ContextKind::Album { id: id.clone() })
-            }
+            PinTarget::Track { id } => self
+                .db
+                .track(id)
+                .ok()
+                .flatten()
+                .or_else(|| self.db.catalogue_track(id).ok().flatten())
+                .map(|t| t.server_id),
+            PinTarget::Album { id } => self
+                .source_of_context(&ContextKind::Album { id: id.clone() })
+                .or_else(|| {
+                    self.db
+                        .catalogue_album(id)
+                        .ok()
+                        .flatten()
+                        .map(|c| c.album.server_id)
+                }),
             PinTarget::Playlist { id } => {
                 self.source_of_context(&ContextKind::Playlist { id: id.clone() })
             }
@@ -1720,14 +1728,24 @@ impl Actor {
             return;
         }
         self.lyrics_for = current.clone();
+        // Data saver: only what plays (the next may never be heard).
+        let next = (!self.data_saver_active())
+            .then(|| queue.upcoming().find(|e| !e.item.unavailable))
+            .flatten()
+            .map(|e| e.track.id.clone());
+        // Fetches for tracks skipped past stop: on a bad link they would
+        // otherwise hold the HTTP slots the new track's fetch needs.
+        let keep = [current.as_ref(), next.as_ref()];
+        self.lyrics_inflight.retain(|(_, track), (_, task)| {
+            let wanted = keep.contains(&Some(track));
+            if !wanted {
+                task.abort();
+            }
+            wanted
+        });
         let Some(id) = current else { return };
         self.fetch_lyrics(id, false);
-        // Data saver: only what plays (the next may never be heard).
-        if self.data_saver_active() {
-            return;
-        }
-        if let Some(next) = queue.upcoming().find(|e| !e.item.unavailable) {
-            let next_id = next.track.id.clone();
+        if let Some(next_id) = next {
             self.prefetch_lyrics(next_id);
         }
     }
@@ -1750,7 +1768,26 @@ impl Actor {
                 return;
             }
         }
-        if self.is_offline() {
+        let key = (sid.clone(), track_id.clone());
+        if let Some((announced, _)) = self.lyrics_inflight.get_mut(&key) {
+            // One fetch per track: its result is announced if any asker
+            // wants it.
+            *announced |= announce;
+            return;
+        }
+        let now = self.now();
+        self.lyrics_failed.retain(|_, until| *until > now);
+        let external_enabled = self
+            .settings
+            .get_bool(crate::settings::keys::LYRICS_EXTERNAL_ENABLED);
+        // A server that didn't answer its last probe would only make the
+        // fetch wait out its timeouts and retries.
+        let server_unreachable = self
+            .accounts
+            .for_source(&sid)
+            .is_some_and(|a| !a.info.reachable && !a.probing);
+        let recently_failed = !force && self.lyrics_failed.contains_key(&key);
+        if self.is_offline() || recently_failed || (server_unreachable && !external_enabled) {
             // Nothing to ask; the view says there are none for now.
             if announce {
                 self.emit(Event::LyricsChanged {
@@ -1760,9 +1797,6 @@ impl Actor {
             }
             return;
         }
-        let external_enabled = self
-            .settings
-            .get_bool(crate::settings::keys::LYRICS_EXTERNAL_ENABLED);
         let track = self.track_or_bare(&TrackRef::new(sid.clone(), track_id.clone()));
         let caches = self.caches.clone();
         let tx = self.tx.clone();
@@ -1772,9 +1806,12 @@ impl Actor {
             caches.lyrics_get(&sid, &track_id, LyricsSource::Server),
             Ok(Some(None))
         ) && !force;
-        self.spawn(async move {
+        let task = self.spawn_abortable(async move {
             let mut found: Option<Lyrics> = None;
-            if !server_negative {
+            let mut failed = false;
+            if server_unreachable {
+                failed = true;
+            } else if !server_negative {
                 match api.lyrics(&track_id).await {
                     Ok(entries) => {
                         // A conversion failure is our bug, not "no lyrics":
@@ -1798,6 +1835,7 @@ impl Actor {
                         }
                     }
                     Err(e) => {
+                        failed = true;
                         tracing::debug!(target: "hocket_core", error = %e, "server lyrics");
                     }
                 }
@@ -1835,6 +1873,7 @@ impl Actor {
                                     let _ = caches.lyrics_put_none(&sid, &track_id, LyricsSource::External);
                                 }
                                 Err(e) => {
+                                    failed = true;
                                     tracing::debug!(target: "hocket_core", error = %e, "external lyrics");
                                 }
                             }
@@ -1843,21 +1882,33 @@ impl Actor {
                 }
             }
             let _ = tx.send(ActorMsg::Internal(Internal::LyricsFetched {
+                failed: failed && found.is_none(),
                 server_id: sid,
                 track_id,
                 lyrics: found,
                 announce,
             }));
         });
+        self.lyrics_inflight.insert(key, (announce, task));
     }
 
     pub(crate) fn on_lyrics_fetched(
         &mut self,
-        _server_id: ServerId,
+        server_id: ServerId,
         track_id: TrackId,
         lyrics: Option<Lyrics>,
         announce: bool,
+        failed: bool,
     ) {
+        let key = (server_id, track_id.clone());
+        let announce = match self.lyrics_inflight.remove(&key) {
+            Some((announced, _)) => announced || announce,
+            None => announce,
+        };
+        if failed {
+            self.lyrics_failed
+                .insert(key, self.now() + LYRICS_RETRY_AFTER_MS);
+        }
         if !announce {
             return;
         }
@@ -1935,10 +1986,25 @@ impl Actor {
                     results: empty_server_batch(),
                 });
             } else {
+                // A newer search replaces the one still asking the servers
+                // (one per keystroke): it stops, and its caller gets its
+                // one server batch, empty.
+                if let Some((old_id, old_query, task)) = self.server_search.take() {
+                    task.abort();
+                    self.emit(Event::SearchResults {
+                        results: SearchResults {
+                            request_id: old_id,
+                            query: old_query,
+                            from_server: true,
+                            ..Default::default()
+                        },
+                    });
+                }
                 let tx = self.tx.clone();
                 let db = self.db.clone();
                 let now = self.now();
-                self.spawn(async move {
+                let pending = (request_id.clone(), query.clone());
+                let task = self.spawn_abortable(async move {
                     let mut results = SearchResults {
                         request_id,
                         query: query.clone(),
@@ -1967,6 +2033,7 @@ impl Actor {
                     // waiting for exactly one server batch.
                     let _ = tx.send(ActorMsg::Internal(Internal::ServerSearch { results }));
                 });
+                self.server_search = Some((pending.0, pending.1, task));
             }
         } else if include_server {
             self.emit(Event::SearchResults {
@@ -1974,6 +2041,16 @@ impl Actor {
             });
         }
         local
+    }
+
+    /// A server search's batch, unless a newer search already answered it
+    /// (empty) when it replaced it.
+    pub(crate) fn on_server_search(&mut self, results: SearchResults) {
+        match &self.server_search {
+            Some((id, _, _)) if *id == results.request_id => self.server_search = None,
+            _ => return,
+        }
+        self.emit(Event::SearchResults { results });
     }
 
     // -- stats ---------------------------------------------------------------------------------
@@ -2063,6 +2140,10 @@ impl crate::lyrics::LyricsHttp for SharedHttp {
         self.0.post_json(url, body)
     }
 }
+
+/// How long a lyrics fetch that failed on the network is not tried again
+/// (a network change clears it sooner).
+const LYRICS_RETRY_AFTER_MS: f64 = 5.0 * 60_000.0;
 
 fn rate_label(rating: u32, n: usize) -> String {
     let base = if rating == 0 {
@@ -2155,23 +2236,6 @@ fn cas_new(m: &CasMutation) -> Option<Prior> {
         Command::SetArtistLoved { loved, .. } => Some(Prior::Loved(*loved)),
         _ => None,
     }
-}
-
-fn apply_cas_locally(db: &Db, target: &CasTarget, new: &Prior) {
-    let _ = match (target, new) {
-        (CasTarget::Rating(RatingTarget::Track { id, .. }), Prior::Rating(r)) => {
-            db.set_track_rating(id, *r)
-        }
-        (CasTarget::Rating(RatingTarget::Album { id }), Prior::Rating(r)) => {
-            db.set_album_rating(id, *r)
-        }
-        (CasTarget::Loved(LoveTarget::Track { id }), Prior::Loved(l)) => db.set_track_loved(id, *l),
-        (CasTarget::Loved(LoveTarget::Album { id }), Prior::Loved(l)) => db.set_album_loved(id, *l),
-        (CasTarget::Loved(LoveTarget::Artist { id }), Prior::Loved(l)) => {
-            db.set_artist_loved(id, *l)
-        }
-        _ => Ok(false),
-    };
 }
 
 /// The autoplay chain's data source: the Subsonic client plus the mirror

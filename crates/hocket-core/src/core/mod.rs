@@ -175,6 +175,8 @@ pub enum Internal {
         lyrics: Option<Lyrics>,
         /// Emit `LyricsChanged` (false for a silent prefetch).
         announce: bool,
+        /// Nothing found because a request failed (not "no lyrics").
+        failed: bool,
     },
     /// A background refresh of an artist's cached top songs ended;
     /// `changed` when the cache now holds a different list.

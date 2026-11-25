@@ -651,6 +651,39 @@ async fn lyrics_degrade_honestly_across_tiers_and_external_is_opt_in() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_lyrics_fetch_is_not_retried_on_every_ask() {
+    let server = seeded_server(2, 180.0);
+    server
+        .state
+        .lock()
+        .lyrics
+        .insert("t0".into(), vec![syllable_entry()]);
+    let t = synced("lyrics-fail", server).await;
+    // The server stops answering (the platform still says online).
+    t.server.set_offline(true);
+    assert!(lyrics_of(&t, "t0").await.is_none());
+    let calls = t.server.calls_to("getLyricsBySongId");
+    assert_eq!(calls, 1);
+    t.server.set_offline(false);
+    for _ in 0..3 {
+        assert!(lyrics_of(&t, "t0").await.is_none());
+    }
+    assert_eq!(
+        t.server.calls_to("getLyricsBySongId"),
+        calls,
+        "the failure is remembered"
+    );
+    // Asked for explicitly, it is tried again.
+    t.run(Command::FetchLyrics {
+        track_id: "t0".into(),
+    })
+    .await;
+    t.core.settle().await;
+    assert_eq!(t.server.calls_to("getLyricsBySongId"), calls + 1);
+    assert!(lyrics_of(&t, "t0").await.is_some());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn settings_persist_export_and_import() {
     let t = synced("settings", seeded_server(2, 180.0)).await;
     t.run(Command::SetSetting {
@@ -1539,6 +1572,42 @@ async fn search_asking_the_server_always_gets_one_server_batch() {
     let server = only_server(&b);
     assert_eq!(server.len(), 1, "{b:?}");
     assert!(server[0].tracks.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_newer_search_replaces_the_one_still_asking_the_server() {
+    let t = synced("search-typing", seeded_server(4, 180.0)).await;
+    // Typed quickly: the second query arrives before the first is answered.
+    for (q, id) in [("Tra", "k1"), ("Track", "k2")] {
+        t.query(Query::Search {
+            server_id: t.server_id.clone(),
+            query: q.into(),
+            limit: 20,
+            include_server: true,
+            request_id: id.into(),
+        })
+        .await;
+    }
+    t.core.settle().await;
+    let server: Vec<SearchResults> = t
+        .events
+        .all()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::SearchResults { results } if results.from_server => Some(results),
+            _ => None,
+        })
+        .collect();
+    for id in ["k1", "k2"] {
+        let mine: Vec<_> = server.iter().filter(|b| b.request_id == id).collect();
+        assert_eq!(
+            mine.len(),
+            1,
+            "exactly one server batch for {id}: {server:?}"
+        );
+    }
+    let k1 = server.iter().find(|b| b.request_id == "k1").unwrap();
+    assert_eq!(k1.query, "Tra");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
