@@ -6512,6 +6512,7 @@ mod tests {
             tracks: vec!["t1".into(), "t2".into(), "t3".into()],
         });
         room_doc.current = Some(crate::api::QueueItem {
+            settled: false,
             key: "k1".into(),
             track: "t1".into(),
             source: crate::api::QueueSource::Context { index: 0 },
@@ -6523,6 +6524,7 @@ mod tests {
         });
         room_doc.upcoming = vec![
             crate::api::QueueItem {
+                settled: false,
                 key: "k2".into(),
                 track: "t2".into(),
                 source: crate::api::QueueSource::Context { index: 1 },
@@ -6533,6 +6535,7 @@ mod tests {
                 alts: vec![],
             },
             crate::api::QueueItem {
+                settled: false,
                 key: "k3".into(),
                 track: "t3".into(),
                 source: crate::api::QueueSource::Context { index: 2 },
@@ -7848,6 +7851,7 @@ mod tests {
         let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
         room_doc.revision = 1;
         room_doc.current = Some(crate::api::QueueItem {
+            settled: false,
             key: "k".into(),
             track: "t".into(),
             source: crate::api::QueueSource::Inserted,
@@ -7950,6 +7954,7 @@ mod tests {
         let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
         room_doc.revision = 1;
         room_doc.current = Some(crate::api::QueueItem {
+            settled: false,
             key: "k".into(),
             track: "t".into(),
             source: crate::api::QueueSource::Inserted,
@@ -8174,6 +8179,7 @@ mod tests {
         let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
         room_doc.revision = 1;
         room_doc.current = Some(crate::api::QueueItem {
+            settled: false,
             key: "k".into(),
             track: "t".into(),
             source: crate::api::QueueSource::Inserted,
@@ -9930,6 +9936,7 @@ mod tests {
         let mut room_doc = crate::session::new_document("scope", "s".into(), 0.0);
         room_doc.revision = 1;
         room_doc.current = Some(crate::api::QueueItem {
+            settled: false,
             key: "k".into(),
             track: "t".into(),
             source: crate::api::QueueSource::Inserted,

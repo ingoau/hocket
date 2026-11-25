@@ -352,6 +352,7 @@ mod tests {
         if playing {
             q.current = Some(QueueEntry {
                 item: QueueItem {
+                    settled: false,
                     key: "k1".into(),
                     track: "t1".into(),
                     source: QueueSource::Inserted,

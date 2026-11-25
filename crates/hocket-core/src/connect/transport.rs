@@ -417,6 +417,7 @@ mod tests {
         // Navidrome ids are 22-character base62; md5 hex (older servers) is longer.
         let track = |i: usize| format!("{i:032x}");
         let item = |i: usize| QueueItem {
+            settled: false,
             key: key(10_000 + i / 50, i % 50),
             track: crate::api::TrackRef::from(track(i)),
             source: match i % 4 {

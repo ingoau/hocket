@@ -252,7 +252,9 @@ With AutoMix on, when the order is Hocket's to choose, the device that owns
 playback biases what plays toward pairs that blend. Decisions (issue #256):
 
 - **Whose order**: entries that are not in the "Next in queue" group, not
-  added by the user (`QueueItem.added`) and either autoplay's (radio and
+  added by the user (`QueueItem.added`), not placed already
+  (`QueueItem.settled`: dragged by the user, or put there by an earlier
+  decision) and either autoplay's (radio and
   "continue playing" are autoplay providers: similar songs, sonic
   similarity, top songs, random) or a shuffled context's (`doc.shuffle`).
   An album, playlist or selection played in order, anything the user
@@ -264,11 +266,16 @@ playback biases what plays toward pairs that blend. Decisions (issue #256):
   then that follow-up's, and so on), so the top of the queue is settled
   before the listener gets there: playing a shuffled queue orders its top
   at once, and in steady play each track decides one new pair, about ten
-  entries down, where a move is out of the way. Once per entry and
-  follow-up, so Previous and Next again find the order they left, and a
-  decided pair stays even when records that would now choose differently
-  arrive (a reshuffle or an edit that gives an entry another follow-up
-  decides it again). The next entry's follow-up is the one playback
+  entries down, where a move is out of the way. Each decision marks the
+  follow-up `settled` in the document, also when it stays where it was, so
+  a decided pair stays: Previous and Next again find the order they left,
+  records that would now choose differently change nothing, and a new
+  transport owner (another device, or this one after a restart) doesn't
+  decide it again. A shuffle clears the marks; an edit that gives an entry
+  a follow-up that isn't settled decides that pair again. The owner also
+  remembers the pairs it decided (in memory), so a room that drops the
+  marks (a coordinator older than them) can't make it decide forever. The
+  next playable entry's follow-up is the one playback
   depends on: the current track's tail start was committed against the
   next track when it was preloaded (`mix_out_ms`), and the follow-up
   decides the next track's own tail start, so that pair isn't decided once
@@ -279,13 +286,14 @@ playback biases what plays toward pairs that blend. Decisions (issue #256):
   (the entry's or a candidate's: in a fetch in flight or about to go out,
   or being analysed here) rather than decide without it; an entry whose own
   record isn't coming keeps its follow-up undecided, in case it comes
-  later. Checked on every document change, ownership gain and record
-  arrival; a decision held back by something that passes (a skip just now,
+  later. Checked on every document change, ownership gain, record
+  arrival and AutoMix being turned on; a decision held back by something that passes (a skip just now,
   a load pending, a record on its way, offline) is asked again on position
-  reports. Each pick is a
+  reports. Each decision is a
   synced `SessionOp::PromoteForMix { key, after }`: the entry moves to
-  directly after `after`, past unqueued entries only, keeping its flags
-  and ordinal, so turning shuffle off still restores the context's order.
+  directly after `after` (or stays there, when it already is), past
+  unqueued entries only, keeping its ordinal, so turning shuffle off still
+  restores the context's order, and is marked `settled`.
   The preloaded next source is then replanned against its new follow-up.
 - **How much randomness**: an entry's candidates are the `ORDER_WINDOW` = 6
   entries after it in shuffle (or autoplay) order, which stays the source

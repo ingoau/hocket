@@ -70,10 +70,11 @@ Everything behind the pointer is history; nothing is consumed. Playing a song yo
 
 ### Items
 
-Each list entry carries a stable key (all ops name entries by key, never by index, so trimming and concurrent edits don't misdirect), the track, and two flags:
+Each list entry carries a stable key (all ops name entries by key, never by index, so trimming and concurrent edits don't misdirect), the track, and three flags:
 
 - **`added`** — the user put it there (Play next, Add to queue, Play later). Never changes. Drives a small queue icon in the UI when the entry is outside the "Next in queue" group.
 - **`queued`** — the entry is in the "Next in queue" group. The group is the contiguous run of `queued` entries directly after the current song. Because group membership is just a flag that rides with the entry, Next/Previous keep it consistent: play A (queued), press Previous, and A is back at the head of the group.
+- **`settled`** — its place is settled: the user dragged it there, or AutoMix's order chose it to follow the entry before it (`docs/automix.md` → *Order*). AutoMix never moves it or passes it over. Rides with the entry; a shuffle clears it. Not shown in the UI.
 
 Autoplay entries are appended at the end, flagged as autoplay and not `added`.
 

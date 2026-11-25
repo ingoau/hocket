@@ -637,6 +637,7 @@ mod tests {
         let mut d = doc();
         for i in 0..HISTORY_CAP + 100 {
             d.history.push(crate::api::QueueItem {
+                settled: false,
                 key: format!("k{i}"),
                 track: format!("t{i}").into(),
                 source: crate::api::QueueSource::Inserted,

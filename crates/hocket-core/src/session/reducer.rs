@@ -179,7 +179,9 @@ pub enum QueueOp {
     /// the pointer to directly after `after` (the current entry or one
     /// ahead of it, not inside the group), past unqueued entries only.
     /// Unlike a drag the entry keeps its ordinal and flags, so turning
-    /// shuffle off still restores the context's order.
+    /// shuffle off still restores the context's order; it is marked
+    /// `settled`. An entry already directly after `after` stays put and is
+    /// only marked (the order kept the follow-up it had).
     PromoteForMix {
         key: QueueKey,
         after: QueueKey,
@@ -1034,6 +1036,7 @@ impl Reducer<'_, '_> {
                 for it in items {
                     let key = self.ctx.entropy.next_key();
                     self.q.list.push(QueueItem {
+                        settled: false,
                         key,
                         track: it.track,
                         source: QueueSource::Autoplay {
@@ -1136,6 +1139,7 @@ impl Reducer<'_, '_> {
 
     fn fresh(&self, track_id: TrackRef, source: QueueSource, added: bool) -> QueueItem {
         QueueItem {
+            settled: false,
             key: self.ctx.entropy.next_key(),
             track: track_id,
             source,
@@ -1564,6 +1568,10 @@ impl Reducer<'_, '_> {
         let fixed: Vec<bool> = tail.iter().map(|i| i.queued).collect();
         let (mut queued, mut movable): (Vec<QueueItem>, Vec<QueueItem>) =
             tail.into_iter().partition(|i| i.queued);
+        for i in &mut movable {
+            // A new order: nothing in it was placed.
+            i.settled = false;
+        }
         f(&mut movable);
         queued.reverse();
         movable.reverse();
@@ -1708,6 +1716,8 @@ impl Reducer<'_, '_> {
             target.max(group_end)
         };
         item.queued = in_group;
+        // Where the user put it: AutoMix's order leaves it there.
+        item.settled = true;
         self.q.list.insert(at, item);
         if self.doc.shuffle {
             self.q.ordinals_after_previous(at, 1);
@@ -1732,7 +1742,8 @@ impl Reducer<'_, '_> {
         {
             return Err(ReduceError::BadMove);
         }
-        let item = self.q.list.remove(i);
+        let mut item = self.q.list.remove(i);
+        item.settled = true;
         self.q.list.insert(a + 1, item);
         Ok(())
     }

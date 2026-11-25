@@ -143,6 +143,10 @@ async fn upcoming(t: &TestCore) -> Vec<String> {
         .collect()
 }
 
+async fn upcoming_items(t: &TestCore) -> Vec<QueueItem> {
+    t.snapshot().await.session.expect("a session").upcoming
+}
+
 /// The whole list, history to the end: what navigation must never change.
 async fn whole_list(t: &TestCore) -> Vec<String> {
     let doc = t.snapshot().await.session.expect("a session");
@@ -162,18 +166,17 @@ fn blends_ahead(up: &[String]) -> usize {
         .count()
 }
 
-/// A shuffled queue's top is ordered as soon as the records are there,
-/// before the current track has played a while: nothing there is left to
-/// move later.
+/// A shuffled queue's top is ordered at once, before the current track has
+/// played a while: nothing there is left to move later.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_top_of_the_queue_is_ordered_at_once() {
     let t = synced_core_with("ahead", MANY).await;
-    automix_on(&t).await;
+    store_records_of(&t, MANY).await;
     play_n(&t, MANY, true).await;
     t.run_for(2_000.0).await;
-    // Without records there is nothing to judge by: the shuffle as it came.
+    // Without AutoMix: the shuffle as it came.
     let shuffled = upcoming(&t).await;
-    store_records_of(&t, MANY).await;
+    automix_on(&t).await;
     t.run_for(500.0).await;
     let up = upcoming(&t).await;
     let mut sorted = up.clone();
@@ -194,10 +197,17 @@ async fn playing_on_moves_only_what_is_far_down() {
     let t = synced_core_with("far", MANY).await;
     start_with(&t, MANY, true).await;
     t.run_for(2_000.0).await;
-    for _ in 0..4 {
+    for round in 0..4 {
         let before = upcoming(&t).await;
-        t.run(Command::Next).await;
-        t.run_for(SETTLED).await;
+        if round % 2 == 0 {
+            t.run(Command::Next).await;
+            t.run_for(SETTLED).await;
+        } else {
+            // Through a mix: the track plays to its end.
+            let cur = t.current_track_id().await;
+            t.run_for(200_000.0).await;
+            assert_ne!(t.current_track_id().await, cur, "it moved on");
+        }
         let after = upcoming(&t).await;
         assert_eq!(
             after[..ORDER_AHEAD],
@@ -277,6 +287,9 @@ async fn skipping_back_and_forth_never_reorders() {
         t.run_for(1_500.0).await;
         assert_eq!(whole_list(&t).await, list);
     }
+    // Back where it started, settled: the pairs it had are still decided.
+    t.run_for(SETTLED).await;
+    assert_eq!(whole_list(&t).await, list);
 }
 
 /// An entry's follow-up is decided once: going back to the track before it
@@ -295,7 +308,7 @@ async fn a_revisited_track_keeps_the_order_it_had() {
     play_all(&t, true).await;
     t.run(Command::Next).await;
     // Only the next track's record: its follow-up is decided blind (kept;
-    // the others aren't coming), the rest wait for theirs.
+    // the others' records aren't coming), the rest stay undecided.
     let next = upcoming(&t).await[0].clone();
     store_record(&t, &next).await;
     t.run_for(SETTLED).await;
@@ -336,6 +349,69 @@ async fn a_decided_pair_stays_when_more_records_arrive() {
     assert_ne!(bpm_of(&up[0]), bpm_of(&up[1]), "{up:?}");
     assert!(up[1..7].iter().any(|i| bpm_of(i) == bpm_of(&up[0])));
     assert_eq!(whole_list(&t).await[..3], list[..3], "{up:?}");
+}
+
+/// A song the user drags stays where they put it, also when the order
+/// reaches it later: it is settled.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dragged_entry_stays_where_the_user_put_it() {
+    let t = synced_core_with("drag", MANY).await;
+    start_with(&t, MANY, true).await;
+    t.run_for(2_000.0).await;
+    let items = upcoming_items(&t).await;
+    // Past what is decided, after an entry it doesn't blend with.
+    let after = &items[ORDER_AHEAD + 1];
+    let moved = items[ORDER_AHEAD + 3..]
+        .iter()
+        .find(|i| bpm_of(&i.track.id) != bpm_of(&after.track.id))
+        .expect("a song of the other tempo");
+    t.run(Command::MoveQueueItem {
+        key: moved.key.clone(),
+        after: after.key.clone(),
+        in_group: false,
+    })
+    .await;
+    // Play on until the order has decided past it.
+    for _ in 0..4 {
+        t.run(Command::Next).await;
+        t.run_for(SETTLED).await;
+    }
+    let up = upcoming_items(&t).await;
+    let at = |key: &str| up.iter().position(|i| i.key == key).expect("still queued");
+    assert_eq!(
+        at(&moved.key),
+        at(&after.key) + 1,
+        "{:?}",
+        up.iter().map(|i| &i.track.id).collect::<Vec<_>>()
+    );
+    assert!(at(&after.key) < ORDER_AHEAD, "the order reached it");
+}
+
+/// The order's decisions are marks in the document: the top of the queue is
+/// settled for every device, so a new owner doesn't decide it again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_decided_top_is_settled_in_the_document() {
+    let t = synced_core_with("marks", MANY).await;
+    start_with(&t, MANY, true).await;
+    t.run_for(2_000.0).await;
+    let up = upcoming_items(&t).await;
+    // The follow-ups of the first entries; past them, nothing is decided yet.
+    assert!(up[1..=ORDER_AHEAD].iter().all(|i| i.settled), "{up:?}");
+    assert!(up[ORDER_AHEAD + 1..].iter().all(|i| !i.settled), "{up:?}");
+    // A reshuffle is a new order: nothing in it is settled, and the top is
+    // decided again.
+    t.run(Command::SetShuffle { enabled: false }).await;
+    t.run(Command::SetShuffle { enabled: true }).await;
+    t.run_for(500.0).await;
+    let again = upcoming_items(&t).await;
+    assert_ne!(
+        again.iter().map(|i| &i.key).collect::<Vec<_>>(),
+        up.iter().map(|i| &i.key).collect::<Vec<_>>()
+    );
+    // (A pair this device decided before, that the reshuffle happened to
+    // form again, counts as decided.)
+    let settled = again[1..=ORDER_AHEAD].iter().filter(|i| i.settled).count();
+    assert!(settled >= ORDER_AHEAD - 1, "{again:?}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -426,6 +502,12 @@ async fn promotions_reach_the_room_after_the_skip_that_asked_for_them() {
             upcoming(&room).await,
             up,
             "the room's peer has the same order"
+        );
+        let marks = |items: Vec<QueueItem>| items.iter().map(|i| i.settled).collect::<Vec<_>>();
+        assert_eq!(
+            marks(upcoming_items(&room).await),
+            marks(upcoming_items(&a).await),
+            "and the same marks"
         );
     }
     a.core.shutdown().await;

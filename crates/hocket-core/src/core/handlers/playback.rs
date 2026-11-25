@@ -812,6 +812,7 @@ impl Actor {
                     .cloned()
             })
             .unwrap_or(QueueItem {
+                settled: false,
                 key: key.clone(),
                 track: track_id.clone(),
                 source: QueueSource::Inserted,

@@ -846,6 +846,12 @@ pub struct QueueItem {
     /// after the current one. The flag rides with the entry through Next and Previous.
     #[serde(default)]
     pub queued: bool,
+    /// Its place is settled: the user dragged it there, or AutoMix's order chose it to follow
+    /// the entry before it (`PromoteForMix`). AutoMix's order never moves it or passes it over.
+    /// Rides with the entry; a shuffle clears it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[typeshare(skip)]
+    pub settled: bool,
     /// Place in the unshuffled order: turning shuffle off sorts the entries after the group by
     /// it. Equal to the list index while shuffle is off.
     #[serde(default)]

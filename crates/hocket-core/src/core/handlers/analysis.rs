@@ -46,14 +46,20 @@ impl Actor {
     /// Whether `track` has no record good enough for AutoMix: none usable,
     /// or only a phone's loudness-only one.
     pub(crate) fn needs_analysis(&self, track: &Track) -> bool {
-        match self.analysis_record_for(track) {
+        Self::record_is_lacking(self.analysis_record_for(track).as_ref())
+    }
+
+    /// [`Self::needs_analysis`] of a track whose record is `record`.
+    pub(crate) fn record_is_lacking(record: Option<&AnalysisRecord>) -> bool {
+        match record {
             None => true,
             Some(r) => r.beats_ms.is_empty() && r.produced_by == AnalysisProducer::Device,
         }
     }
 
-    /// Whether `track` is being analysed here, or will be at the next look.
-    pub(crate) fn local_analysis_coming(&self, track: &Track) -> bool {
+    /// Whether `track` is being analysed here, or will be at the next look
+    /// (`candidates`: [`Self::analysis_candidates`]).
+    pub(crate) fn local_analysis_coming(&self, track: &Track, candidates: &[Track]) -> bool {
         let key = (track.server_id.clone(), track.id.clone());
         if self.analysis.busy.as_ref() == Some(&key) {
             return true;
@@ -61,8 +67,7 @@ impl Actor {
         cfg!(feature = "automix-analysis")
             && self.cfg.coordinator_listen.is_none()
             && !self.analysis.tried.contains(&key)
-            && self
-                .analysis_candidates()
+            && candidates
                 .iter()
                 .any(|t| t.server_id == track.server_id && t.id == track.id)
             && self.complete_local_file(track).is_some()
@@ -93,7 +98,7 @@ impl Actor {
     }
 
     /// Current, next and next-next, in that order.
-    fn analysis_candidates(&self) -> Vec<Track> {
+    pub(crate) fn analysis_candidates(&self) -> Vec<Track> {
         let mut out: Vec<Track> = self.playback.track.iter().cloned().collect();
         for item in self.upcoming_playable(2) {
             if let Some(t) = self.track_for_item(&item) {
@@ -123,8 +128,10 @@ impl Actor {
             };
             let mut fingerprint = crate::automix::store::fingerprint_of(&track);
             fingerprint.transcoded = transcoded;
+            // Tried even when the job couldn't start (no worker thread), so
+            // the order doesn't wait for a record that isn't coming.
+            self.analysis.tried.insert(key.clone());
             if self.send_analysis_job(key.clone(), path, fingerprint) {
-                self.analysis.tried.insert(key.clone());
                 self.analysis.busy = Some(key);
             }
             return;
