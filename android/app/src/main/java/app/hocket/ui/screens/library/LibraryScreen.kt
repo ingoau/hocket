@@ -136,6 +136,17 @@ sealed interface DetailTarget {
     data class Genre(val name: String) : DetailTarget
 }
 
+/**
+ * A library list with nothing in it: still filling while a sync runs, or else really empty, in the
+ * list's own words ([title], [body]).
+ */
+@Composable
+internal fun EmptyLibrary(@StringRes title: Int, @StringRes body: Int, modifier: Modifier = Modifier) {
+    val sync by LocalCoreClient.current.syncProgress.collectAsStateWithLifecycle()
+    if (sync?.finished == false) EmptyState(stringResource(R.string.empty_library_syncing_title), stringResource(R.string.empty_library_syncing_body), modifier)
+    else EmptyState(stringResource(title), stringResource(body), modifier)
+}
+
 /** How many skeleton rows a paged list shows before its total is known. */
 private const val SKELETON_COUNT = 12
 
@@ -222,7 +233,7 @@ internal fun AlbumsTab(serverId: String, control: SortControl, open: (DetailTarg
     val groups = rememberGroups(PinKind.Album, { history, pinned -> recentAlbumIds(history, RECENT_CARDS, pinned) }, cachedRecentAlbums(ALBUMS_TILE_COVERS)) { id -> (client.query(Queries.album(id)) as? QueryResult.AlbumDetail)?.data }
     LaunchedEffect(key, state.generation) { client.albumPages.ensure(key, 0) }
     LaunchedEffect(state.total) { if (state.total >= 0 && kind == SelectionKind.Albums) client.setSelectionTotal(state.total) }
-    if (state.known && state.total == 0) { EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body), Modifier.padding(top = topPadding)); return }
+    if (state.known && state.total == 0) { EmptyLibrary(R.string.empty_albums_title, R.string.empty_albums_body, Modifier.padding(top = topPadding)); return }
     val grid = rememberLazyGridState()
     ScrollToTopOnReselect(grid)
     KeepTopForGroups(groups, { grid.firstVisibleItemIndex == 0 && grid.firstVisibleItemScrollOffset == 0 }) { grid.requestScrollToItem(0) }
@@ -259,7 +270,7 @@ internal fun ArtistsTab(serverId: String, control: SortControl, open: (DetailTar
     val selecting = selection.active && kind == SelectionKind.Artists
     val groups = rememberGroups(PinKind.Artist, { history, pinned -> recentArtistIds(history, RECENT_CARDS, pinned) }) { id -> (client.query(Queries.artist(id)) as? QueryResult.ArtistDetail)?.data }
     LaunchedEffect(key, state.generation) { client.artistPages.ensure(key, 0) }
-    if (state.known && state.total == 0) { EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body), Modifier.padding(top = topPadding)); return }
+    if (state.known && state.total == 0) { EmptyLibrary(R.string.empty_artists_title, R.string.empty_artists_body, Modifier.padding(top = topPadding)); return }
     val grid = rememberLazyGridState()
     ScrollToTopOnReselect(grid)
     KeepTopForGroups(groups, { grid.firstVisibleItemIndex == 0 && grid.firstVisibleItemScrollOffset == 0 }) { grid.requestScrollToItem(0) }
@@ -361,7 +372,7 @@ internal fun SongsTab(serverId: String, sort: SortOrder, descending: Boolean, na
     val empty = state.known && state.total == 0
     if (empty && onOfflineOnlyChange == null) {
         if (offlineOnly) EmptyState(stringResource(R.string.available_offline_empty_title), stringResource(R.string.available_offline_empty_body), Modifier.padding(top = topPadding))
-        else EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body), Modifier.padding(top = topPadding))
+        else EmptyLibrary(R.string.empty_songs_title, R.string.empty_songs_body, Modifier.padding(top = topPadding))
         return
     }
     val listState = rememberLazyListState()
@@ -390,7 +401,7 @@ internal fun SongsTab(serverId: String, sort: SortOrder, descending: Boolean, na
             }
             if (empty) item(key = "empty") {
                 if (offlineOnly) EmptyState(stringResource(R.string.available_offline_empty_title), stringResource(R.string.available_offline_empty_body))
-                else EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body))
+                else EmptyLibrary(R.string.empty_songs_title, R.string.empty_songs_body)
             }
             val count = if (state.known) state.total else SKELETON_COUNT
             items(count, contentType = { i -> if (state.item(i, client.trackPages.pageSize) == null) "skeleton" else "track" }) { i ->
@@ -436,7 +447,7 @@ internal fun GenresTab(serverId: String, control: SortControl, open: (DetailTarg
         val byName = list.orEmpty().associateBy { it.name }
         ListGroups(pinnedIds.take(PINNED_LIMIT).mapNotNull { byName[it] }, recentGenres(played, list.orEmpty(), RECENT_ROWS, pinnedIds))
     }
-    if (list != null && list.isEmpty()) { EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body), Modifier.padding(top = topPadding)); return }
+    if (list != null && list.isEmpty()) { EmptyLibrary(R.string.empty_genres_title, R.string.empty_genres_body, Modifier.padding(top = topPadding)); return }
     val listState = rememberLazyListState()
     ScrollToTopOnReselect(listState)
     KeepTopForGroups(groups, { listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0 }) { listState.requestScrollToItem(0) }

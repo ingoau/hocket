@@ -74,7 +74,8 @@ describe("reducer", () => {
     s = reduce(s, { type: "settingChanged", data: { setting: { key: "x", value: "1", scope: "accountSynced", updatedAt: 1 } } });
     expect(settingValue(s, "x", 0)).toBe(1);
     s = reduce(s, { type: "libraryChanged", data: { server_id: "s", tables: ["tracks"], ids: ["a"] } });
-    expect(s.libraryVersion).toBe(1);
+    expect(s.libraryChanges.seq).toBe(1);
+    expect(s.libraryChanges.recent).toEqual([{ seq: 1, tables: ["tracks"], ids: ["a"] }]);
     s = reduce(s, { type: "playerNotice", data: { message: "Couldn't play X, skipped", code: "couldNotPlaySkipped", detail: "X" } });
     expect(s.playerNotice).toEqual({ message: "Couldn't play X, skipped", code: "couldNotPlaySkipped", detail: "X" });
     // An older core without a code still shows its message.
@@ -97,16 +98,16 @@ describe("reducer", () => {
     const entry = (id: string) => ({ item: { key: `k-${id}`, track: { source: "s", id }, source: { type: "context" as const, data: { index: 0 } } }, track: track(id) });
     let s = applySnapshot(initialCoreState, { ...snapshot, queue: { ...snapshot.queue, current: entry("t1"), entries: [entry("t1"), entry("t2"), entry("t1")], total: 3, currentIndex: 0, totalUpcoming: 2 } });
     s = reduce(s, { type: "searchResults", data: { results: { requestId: "r", query: "q", tracks: [track("t1"), track("t3")], albums: [], artists: [], playlists: [], fromServer: true, lyrics: [] } } });
-    const version = s.libraryVersion;
+    const version = s.libraryChanges.seq;
     s = reduce(s, { type: "libraryItemsChanged", data: { server_id: "s", items: [{ kind: "track", id: "t1", rating: 4, loved: true }], from_device: "other" } });
     expect(s.nowPlaying?.track).toMatchObject({ rating: 4, loved: true });
     expect(s.queue.entries.map((e) => e.track.rating)).toEqual([4, 0, 4]);
     expect(s.queue.current?.track.rating).toBe(4);
     expect(s.lastServerSearch?.tracks.map((t) => t.loved)).toEqual([true, false]);
     // Lists refetch on the libraryChanged that follows, not twice.
-    expect(s.libraryVersion).toBe(version);
+    expect(s.libraryChanges.seq).toBe(version);
     s = reduce(s, { type: "playlistChanged", data: { server_id: "s", playlist_id: "p1", playlist: undefined } });
-    expect(s.libraryVersion).toBe(version);
+    expect(s.libraryChanges.seq).toBe(version);
   });
 
   it("follows the core's network state (NetworkChanged), not the browser's", () => {

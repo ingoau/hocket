@@ -109,6 +109,27 @@ class NowPlayingSheetTest {
         collapseByDrag()
     }
 
+    @Test
+    fun backFromTheQueueReturnsToTheArtworkBeforeCollapsing() {
+        val core = TestCore()
+        start(core)
+        expand()
+        compose.mainClock.autoAdvance = false
+        try {
+            openMode("queue")
+            advanceUntil("the queue") { displayed("queue.list") }
+            // First back: the artwork again, the player still open.
+            compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+            advanceUntil("artwork mode") { modes.none { modeSelected(it) } }
+            assertTrue(displayed("player.playPause"))
+            // Second back: the player collapses.
+            compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+            advanceUntil("the sheet to collapse") { sheetCollapsed() }
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+    }
+
     /** A one-track queue with autoplay off: skipping past it stops on it, removing it leaves nothing current. */
     private fun playOnlyOneTrack(core: TestCore): String {
         val track = core.client.nowPlaying.value!!.track.id

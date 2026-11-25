@@ -446,18 +446,25 @@ impl Actor {
                     }
                 },
             };
-            let url = match want {
-                Want::Song(mut facts, id) => {
-                    // The mirror keeps no ISRC: ask the server for this one song.
-                    if let (Some(api), Some((_, id))) = (api, id) {
-                        match api.song(&id).await {
-                            Ok(child) => facts.isrc = child.isrc,
-                            Err(e) => tracing::debug!(target: "hocket_core", error = %e, "squigly: getSong failed"),
+            let lookup = async {
+                match want {
+                    Want::Song(mut facts, id) => {
+                        // The mirror keeps no ISRC: ask the server for this one song.
+                        if let (Some(api), Some((_, id))) = (api, id) {
+                            match api.song(&id).await {
+                                Ok(child) => facts.isrc = child.isrc,
+                                Err(e) => tracing::debug!(target: "hocket_core", error = %e, "squigly: getSong failed"),
+                            }
                         }
+                        crate::songlink::song_url(http.as_ref(), &facts).await
                     }
-                    crate::songlink::song_url(http.as_ref(), &facts).await
+                    Want::Album(name, artist) => crate::songlink::album_url(http.as_ref(), &name, artist.as_deref()).await,
                 }
-                Want::Album(name, artist) => crate::songlink::album_url(http.as_ref(), &name, artist.as_deref()).await,
+            };
+            let mut reply = reply;
+            let url = tokio::select! {
+                _ = reply.closed() => return,
+                url = lookup => url,
             };
             let _ = reply.send(QueryResult::SongLink(url));
         });
@@ -618,7 +625,12 @@ impl Actor {
             filters: self.filters(),
         };
         self.spawn(async move {
-            let list = crate::autoplay::related(&source, &track, count).await;
+            let mut reply = reply;
+            // Nobody waiting any more (the screen went): stop asking.
+            let list = tokio::select! {
+                _ = reply.closed() => return,
+                list = crate::autoplay::related(&source, &track, count) => list,
+            };
             let _ = reply.send(QueryResult::Related(list));
         });
     }
@@ -738,12 +750,19 @@ impl Actor {
         let db = self.db.clone();
         let caches = self.caches.clone();
         self.spawn(async move {
-            let fetched = match of {
-                InfoOf::Artist => api
-                    .artist_info2(&id, 10, false)
-                    .await
-                    .map(|a| artist_info(&db, &a)),
-                InfoOf::Album => api.album_info2(&id).await.map(|a| album_info(&a)),
+            let mut reply = reply;
+            let fetch = async {
+                match of {
+                    InfoOf::Artist => api
+                        .artist_info2(&id, 10, false)
+                        .await
+                        .map(|a| artist_info(&db, &a)),
+                    InfoOf::Album => api.album_info2(&id).await.map(|a| album_info(&a)),
+                }
+            };
+            let fetched = tokio::select! {
+                _ = reply.closed() => return,
+                fetched = fetch => fetched,
             };
             let answer = match fetched {
                 Ok(info) => {

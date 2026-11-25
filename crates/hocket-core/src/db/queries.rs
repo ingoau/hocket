@@ -791,48 +791,42 @@ impl Db {
     }
 
     /// Local rating/loved updates (optimistic, before the outbox flushes).
-    pub fn set_track_rating(&self, id: &str, rating: u32) -> DbResult<bool> {
-        self.with_conn(|c| {
-            Ok(c.execute(
-                "UPDATE tracks SET rating = ?2 WHERE id = ?1",
-                params![id, rating.min(5)],
-            )? > 0)
-        })
+    /// Ids are only unique per server: each write names its account.
+    pub fn set_track_rating(&self, server_id: &str, id: &str, rating: u32) -> DbResult<bool> {
+        self.set_column(server_id, "tracks", "rating", id, rating.min(5) as i64)
     }
 
-    pub fn set_track_loved(&self, id: &str, loved: bool) -> DbResult<bool> {
-        self.with_conn(|c| {
-            Ok(c.execute(
-                "UPDATE tracks SET loved = ?2 WHERE id = ?1",
-                params![id, loved as i64],
-            )? > 0)
-        })
+    pub fn set_track_loved(&self, server_id: &str, id: &str, loved: bool) -> DbResult<bool> {
+        self.set_column(server_id, "tracks", "loved", id, loved as i64)
     }
 
-    pub fn set_album_rating(&self, id: &str, rating: u32) -> DbResult<bool> {
-        self.with_conn(|c| {
-            Ok(c.execute(
-                "UPDATE albums SET rating = ?2 WHERE id = ?1",
-                params![id, rating.min(5)],
-            )? > 0)
-        })
+    pub fn set_album_rating(&self, server_id: &str, id: &str, rating: u32) -> DbResult<bool> {
+        self.set_column(server_id, "albums", "rating", id, rating.min(5) as i64)
     }
 
-    pub fn set_album_loved(&self, id: &str, loved: bool) -> DbResult<bool> {
-        self.with_conn(|c| {
-            Ok(c.execute(
-                "UPDATE albums SET loved = ?2 WHERE id = ?1",
-                params![id, loved as i64],
-            )? > 0)
-        })
+    pub fn set_album_loved(&self, server_id: &str, id: &str, loved: bool) -> DbResult<bool> {
+        self.set_column(server_id, "albums", "loved", id, loved as i64)
     }
 
-    pub fn set_artist_loved(&self, id: &str, loved: bool) -> DbResult<bool> {
+    pub fn set_artist_loved(&self, server_id: &str, id: &str, loved: bool) -> DbResult<bool> {
+        self.set_column(server_id, "artists", "loved", id, loved as i64)
+    }
+
+    /// `UPDATE <table> SET <column> = value` on one account's row (`table`
+    /// and `column` are compile-time constants from the setters above).
+    fn set_column(
+        &self,
+        server_id: &str,
+        table: &str,
+        column: &str,
+        id: &str,
+        value: i64,
+    ) -> DbResult<bool> {
         self.with_conn(|c| {
-            Ok(c.execute(
-                "UPDATE artists SET loved = ?2 WHERE id = ?1",
-                params![id, loved as i64],
-            )? > 0)
+            let mut st = c.prepare_cached(&format!(
+                "UPDATE {table} SET {column} = ?3 WHERE server_id = ?1 AND id = ?2"
+            ))?;
+            Ok(st.execute(params![server_id, id, value])? > 0)
         })
     }
 
@@ -1177,17 +1171,7 @@ impl Db {
     }
 
     pub fn replace_genres(&self, server_id: &str, genres: &[Genre], sync_gen: i64) -> DbResult<()> {
-        self.with_tx(|tx| {
-            let mut st = tx.prepare_cached(
-                "INSERT INTO genres(server_id, name, song_count, album_count, sync_gen) VALUES (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT(server_id, name) DO UPDATE SET song_count = excluded.song_count, album_count = excluded.album_count, sync_gen = excluded.sync_gen",
-            )?;
-            for g in genres {
-                st.execute(params![server_id, g.name, g.song_count, g.album_count, sync_gen])?;
-            }
-            tx.execute("DELETE FROM genres WHERE server_id = ?1 AND sync_gen < ?2", params![server_id, sync_gen])?;
-            Ok(())
-        })
+        self.with_tx(|tx| replace_genres(tx, server_id, genres, sync_gen))
     }
 
     // -- playlists ----------------------------------------------------------
@@ -1718,6 +1702,33 @@ impl Db {
             Ok(())
         })
     }
+}
+
+/// Replace `server_id`'s genres with `genres` (one sync's, `sync_gen`).
+pub(crate) fn replace_genres(
+    tx: &rusqlite::Transaction,
+    server_id: &str,
+    genres: &[Genre],
+    sync_gen: i64,
+) -> DbResult<()> {
+    let mut st = tx.prepare_cached(
+        "INSERT INTO genres(server_id, name, song_count, album_count, sync_gen) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(server_id, name) DO UPDATE SET song_count = excluded.song_count, album_count = excluded.album_count, sync_gen = excluded.sync_gen",
+    )?;
+    for g in genres {
+        st.execute(params![
+            server_id,
+            g.name,
+            g.song_count,
+            g.album_count,
+            sync_gen
+        ])?;
+    }
+    tx.execute(
+        "DELETE FROM genres WHERE server_id = ?1 AND sync_gen < ?2",
+        params![server_id, sync_gen],
+    )?;
+    Ok(())
 }
 
 fn track_where(server_id: &str, filter: &Option<WhereClause>) -> (String, Vec<Value>) {
@@ -2295,6 +2306,28 @@ mod tests {
         };
         assert_eq!(row("s"), (offline_to_i64(OfflineState::Downloaded), 0));
         assert_eq!(row("other"), (offline_to_i64(OfflineState::None), 1));
+    }
+
+    #[test]
+    fn ratings_and_loves_are_per_account() {
+        let db = Db::open_in_memory().unwrap();
+        let a = t("same", "Song", "A", "B");
+        let mut b = a.clone();
+        b.server_id = "other".into();
+        db.upsert_tracks(&[a], &[], 1).unwrap();
+        db.upsert_tracks(&[b], &[], 1).unwrap();
+        assert!(db.set_track_rating("s", "same", 4).unwrap());
+        assert!(db.set_track_loved("other", "same", true).unwrap());
+        assert!(!db.set_track_rating("nobody", "same", 1).unwrap());
+        let row = |sid: &str| {
+            let t = db
+                .track_ref(&api::TrackRef::new(sid, "same"))
+                .unwrap()
+                .unwrap();
+            (t.rating, t.loved)
+        };
+        assert_eq!(row("s"), (4, false));
+        assert_eq!(row("other"), (0, true));
     }
 
     #[test]

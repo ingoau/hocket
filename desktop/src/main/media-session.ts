@@ -6,7 +6,7 @@
 // on Windows the session is anchored to a persistent hidden window's HWND.
 import type { Command, Event, MediaSessionState } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
-import { expectResult, snapshotOf } from "@shared/core-handle";
+import { snapshotOf } from "@shared/core-handle";
 import type { NativeModule } from "./core-host";
 
 interface AddonMessage {
@@ -39,9 +39,7 @@ export function tickPosition(state: MediaSessionState, nowMs: number, clockOffse
 
 export class MediaSessionHost {
   private session: InstanceType<NativeModule["MediaSession"]> | undefined;
-  private last: MediaSessionState | undefined;
   private ticker: NodeJS.Timeout | undefined;
-  private artworkCache = new Map<string, string | undefined>();
   private unsubscribe: (() => void) | undefined;
   /** Session clock minus local clock, from ConnectionChanged (0 when local). */
   private clockOffsetMs = 0;
@@ -104,35 +102,19 @@ export class MediaSessionHost {
     else if (e.type === "connectionChanged") this.clockOffsetMs = e.data.state.clockOffsetMs ?? 0;
   }
 
+  /**
+   * Published as it comes, artwork or not: while the core is still fetching the cover the state
+   * has no `artworkPath`, and the core sends another one with it when the fetch lands. Waiting on a
+   * fetch of our own would hold play/pause and position back (offline, until the HTTP timeout).
+   */
   private publish(state: MediaSessionState): void {
-    this.last = state;
     if (!this.session) return;
-    void this.withArtwork(state).then((s) => {
-      if (this.last !== state) return; // superseded
-      try {
-        this.session?.setState(JSON.stringify(s));
-      } catch (err) {
-        console.warn("[media-session] publish failed", err);
-      }
-      this.updateTicker(s);
-    });
-  }
-
-  /** The core normally resolves artwork itself; fall back to Query.Artwork when it didn't. */
-  private async withArtwork(state: MediaSessionState): Promise<MediaSessionState> {
-    const meta = state.metadata;
-    if (!meta || meta.artworkPath || !meta.trackId) return state;
-    if (!this.artworkCache.has(meta.trackId)) {
-      try {
-        const track = expectResult(await this.opts.core.query({ type: "track", data: { track: { source: meta.source ?? "", id: meta.trackId } } }), "trackDetail");
-        const path = track?.coverArt ? expectResult(await this.opts.core.query({ type: "artwork", data: { id: track.coverArt, size: 300 } }), "path") : undefined;
-        this.artworkCache.set(meta.trackId, path);
-        if (this.artworkCache.size > 50) this.artworkCache.delete(this.artworkCache.keys().next().value as string);
-      } catch {
-        this.artworkCache.set(meta.trackId, undefined);
-      }
+    try {
+      this.session.setState(JSON.stringify(state));
+    } catch (err) {
+      console.warn("[media-session] publish failed", err);
     }
-    return { ...state, metadata: { ...meta, artworkPath: this.artworkCache.get(meta.trackId) } };
+    this.updateTicker(state);
   }
 
   private updateTicker(state: MediaSessionState): void {

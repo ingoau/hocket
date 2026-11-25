@@ -74,6 +74,9 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import app.hocket.ui.icons.HocketIcons
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import androidx.compose.runtime.snapshotFlow
+import app.hocket.core.api.NetworkKind
 import app.hocket.ui.nav.BottomContentInset
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.ref
@@ -218,6 +221,44 @@ private fun DetailScaffold(
     }
 }
 
+/** Why a detail page has nothing to show once the core has answered. */
+private enum class DetailUnavailable {
+    /** The core answered: it doesn't have it (removed from the server, or never synced). */
+    Missing,
+    /** The query failed. */
+    Failed,
+}
+
+/**
+ * An album's or playlist's page that couldn't load, in place of a skeleton that would never fill
+ * (like an artist's "Not in your library"). Offline it says so whatever the reason, and tries again
+ * once back online; a failed load online offers Retry.
+ */
+@Composable
+private fun UnavailableDetail(
+    nav: NavHostController, embedded: Boolean, coverArt: String?, shareKey: String?, immersive: Boolean, why: DetailUnavailable,
+    @androidx.annotation.StringRes missingBody: Int, @androidx.annotation.StringRes failedTitle: Int, onRetry: () -> Unit,
+) {
+    val client = LocalCoreClient.current
+    val network by client.network.collectAsStateWithLifecycle()
+    val offline = network?.kind == NetworkKind.Offline
+    var wasOffline by remember { mutableStateOf(offline) }
+    LaunchedEffect(offline) {
+        if (wasOffline && !offline) onRetry()
+        wasOffline = offline
+    }
+    DetailScaffold(nav, embedded, null, coverArt, immersive = immersive, shareKey = shareKey) {
+        item(key = "unavailable") {
+            val modifier = Modifier.padding(top = 48.dp).testTag("detail.unavailable")
+            when {
+                offline -> EmptyState(stringResource(R.string.detail_offline_title), stringResource(R.string.detail_offline_body), modifier)
+                why == DetailUnavailable.Missing -> EmptyState(stringResource(R.string.detail_missing_title), stringResource(missingBody), modifier)
+                else -> EmptyState(stringResource(failedTitle), stringResource(R.string.detail_failed_body), modifier, actionLabel = stringResource(R.string.action_retry), onAction = onRetry)
+            }
+        }
+    }
+}
+
 /**
  * A group's rows in a list: inset from the screen's edges, 2dp below the one before, and no wider
  * than [ContentMaxWidth] (centred) on a wide content area.
@@ -263,19 +304,26 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
     // The album's notes (Last.fm, through the server), under Play and Shuffle.
     var notes by rememberCachedState<String?>(listOf("detail.albumNotes", id)) { null }
     LaunchedEffect(id) { notes = (client.query(Queries.albumInfo(id)) as? QueryResult.ExternalInfo)?.data?.text?.takeIf { it.isNotBlank() } ?: notes }
-    LaunchedEffect(id, libraryGen) {
-        val a = (client.query(Queries.album(id)) as? QueryResult.AlbumDetail)?.data
+    // Set once the core answered without the album, or couldn't answer: the page says so.
+    var unavailable by remember(id) { mutableStateOf<DetailUnavailable?>(null) }
+    var attempt by remember(id) { mutableIntStateOf(0) }
+    LaunchedEffect(id, libraryGen, attempt) {
+        val res = client.query(Queries.album(id))
+        val a = (res as? QueryResult.AlbumDetail)?.data
         val t = (client.query(Queries.albumTracks(id)) as? QueryResult.TrackList)?.data
         // Both at once, so the header and its rows land together.
         album = a ?: album
         tracks = t ?: tracks ?: emptyList()
+        unavailable = if (album != null) null else if (res is QueryResult.AlbumDetail) DetailUnavailable.Missing else DetailUnavailable.Failed
         // The artist's other releases, for "More by" under the tracks.
         val artistId = (a ?: album)?.artistId
         if (artistId != null) more = ((client.query(Queries.albums("", Page(0u, 50u), app.hocket.core.api.SortOrder.Year, artistId = artistId)) as? QueryResult.Albums)?.data?.items ?: more).filter { it.id != id }
     }
     val a = album
     if (a == null) {
-        DetailScaffold(nav, embedded, null, flyingCover, shareKey = shareKey, loading = true) {}
+        val why = unavailable
+        if (why != null) UnavailableDetail(nav, embedded, flyingCover, shareKey, immersive = true, why, R.string.album_missing_body, R.string.album_failed_title, onRetry = { unavailable = null; attempt++ })
+        else DetailScaffold(nav, embedded, null, flyingCover, shareKey = shareKey, loading = true) {}
         return
     }
     val nowPlaying by client.nowPlaying.collectAsStateWithLifecycle()
@@ -667,6 +715,12 @@ private fun releaseCountRes(kind: ReleaseKind): Int = when (kind) {
 @androidx.compose.runtime.Immutable
 internal data class PlaylistEntry(val key: String, val track: Track)
 
+/** Rows per playlist query: big enough that most playlists are one, small enough to show the first quickly. */
+private const val PLAYLIST_PAGE = 1000u
+/** Asks for a failing page of a playlist, 1 s then 2 s apart. */
+private const val PLAYLIST_PAGE_TRIES = 3
+private const val PLAYLIST_PAGE_RETRY_MS = 1_000L
+
 /** Keys by id plus occurrence ("id#0", "id#1" for a track listed twice), never by position. */
 internal fun playlistEntries(tracks: List<Track>): List<PlaylistEntry> {
     val seen = HashMap<String, Int>()
@@ -692,12 +746,44 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
     var dragKey by remember { mutableStateOf<String?>(null) }
     var dragFrom by remember { mutableIntStateOf(-1) }
     var commits by remember { mutableIntStateOf(0) }
-    LaunchedEffect(id, libraryGen) {
+    // Set once the core answered without the playlist, or couldn't answer: the page says so.
+    var unavailable by remember(id) { mutableStateOf<DetailUnavailable?>(null) }
+    var attempt by remember(id) { mutableIntStateOf(0) }
+    // A page of tracks failed (after retries) with no whole list to show: the page says so, rather
+    // than showing a playlist cut short.
+    var incomplete by remember(id) { mutableStateOf(false) }
+    LaunchedEffect(id, libraryGen, attempt) {
         val startedAt = commits
-        val pl = (client.query(Queries.playlist(id)) as? QueryResult.PlaylistDetail)?.data
-        val t = (client.query(Queries.playlistTracks(id, Page(0u, 5000u))) as? QueryResult.Tracks)?.data?.items
-        playlist = pl ?: playlist
-        if (dragKey == null && commits == startedAt) entries = t?.let(::playlistEntries) ?: entries ?: emptyList()
+        val res = client.query(Queries.playlist(id))
+        playlist = (res as? QueryResult.PlaylistDetail)?.data ?: playlist
+        unavailable = if (playlist != null) null else if (res is QueryResult.PlaylistDetail) DetailUnavailable.Missing else DetailUnavailable.Failed
+        // The whole playlist, a page at a time. On a first visit the first pages show as they land;
+        // a list already on screen is only replaced once this has caught up, so it never shrinks.
+        val loaded = ArrayList<Track>()
+        var failed = false
+        var total: Int? = null
+        while (true) {
+            // A page that fails is asked again a couple of times before the load gives up.
+            var page: app.hocket.core.api.TrackPage? = null
+            for (tries in 0 until PLAYLIST_PAGE_TRIES) {
+                if (tries > 0) delay(PLAYLIST_PAGE_RETRY_MS * tries)
+                page = (client.query(Queries.playlistTracks(id, Page(loaded.size.toUInt(), PLAYLIST_PAGE))) as? QueryResult.Tracks)?.data
+                if (page != null) break
+            }
+            if (page == null) { failed = true; break }
+            total = page.total.toInt()
+            loaded += page.items
+            if (page.items.isEmpty() || loaded.size >= page.total.toInt()) break
+            if (dragKey == null && commits == startedAt && loaded.size >= (entries?.size ?: 0)) entries = playlistEntries(loaded)
+        }
+        // Never under the finger: a drag in progress keeps its rows until it's dropped.
+        snapshotFlow { dragKey }.first { it == null }
+        if (commits == startedAt) {
+            val shown = entries
+            if (!failed) entries = playlistEntries(loaded)
+            // A list already whole (from before) stays; one cut short, or none at all, is a failure.
+            incomplete = failed && (shown == null || (total != null && shown.size < total))
+        }
     }
     val p = playlist
     val haptics = LocalHapticFeedback.current
@@ -734,8 +820,15 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
     if (selecting) selectMode = false
     val choosing = selecting || selectMode
     androidx.activity.compose.BackHandler(enabled = selectMode) { selectMode = false }
-    if (p == null) {
-        DetailScaffold(nav, embedded, null, flyingCover, immersive = false, shareKey = shareKey, loading = true, listState = listState) {}
+    if (p == null || incomplete) {
+        val why = unavailable ?: DetailUnavailable.Failed.takeIf { incomplete }
+        if (why != null) UnavailableDetail(nav, embedded, flyingCover, shareKey, immersive = false, why, R.string.playlist_missing_body, R.string.playlist_failed_title, onRetry = {
+            unavailable = null
+            // The part-list goes too: the retry shows the load from the start, not the same cut.
+            if (incomplete) { incomplete = false; entries = null }
+            attempt++
+        })
+        else DetailScaffold(nav, embedded, null, flyingCover, immersive = false, shareKey = shareKey, loading = true, listState = listState) {}
         return
     }
     val context = Commands.playlistContext(p.serverId, p.id, p.name)
@@ -886,7 +979,7 @@ fun GenreDetailScreen(nav: NavHostController, name: String, embedded: Boolean = 
     }) {
         if (al == null || tr == null) return@DetailScaffold
         if (al.isEmpty() && tr.isEmpty()) {
-            item(key = "empty") { EmptyState(stringResource(R.string.empty_library_title), stringResource(R.string.empty_library_body)) }
+            item(key = "empty") { EmptyState(stringResource(R.string.empty_genre_title), stringResource(R.string.empty_genre_body)) }
             return@DetailScaffold
         }
         if (al.isNotEmpty()) {

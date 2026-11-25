@@ -194,7 +194,7 @@ export function AlbumGrid({ items, total, scope, targetKind, onOpen, onPlay, onN
                     data-testid="grid-tile"
                     data-id={it.id}
                   >
-                    <Artwork id={it.coverArt} size={300} round={it.round} alt="" />
+                    <Artwork id={it.coverArt} size={300} round={it.round} alt="" dwell />
                     <div className="t1" title={it.title}>{it.title}</div>
                     {it.subtitle ? <div className="t2" title={it.subtitle}>{it.subtitle}</div> : null}
                     {it.badge ? <span className="badge tile-badge" style={{ position: "absolute", top: 10, left: 10 }}><Icon name={it.badge} size={11} title={t("a11y.downloaded")} /></span> : null}

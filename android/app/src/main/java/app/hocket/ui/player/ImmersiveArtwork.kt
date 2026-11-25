@@ -17,15 +17,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import app.hocket.ui.components.ARTWORK_RETRIES
-import app.hocket.ui.components.ARTWORK_RETRY_MS
-import kotlinx.coroutines.delay
+import app.hocket.ui.components.askForArtwork
+import app.hocket.ui.components.rememberArtworkReach
 import androidx.compose.runtime.remember
 import app.hocket.ui.components.ArtworkPathCache
+import app.hocket.ui.components.ArtworkMisses
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.BlurredEdgeTreatment
@@ -193,22 +191,21 @@ fun rememberArtworkLayout(coverArt: String?, preference: Preference, dark: Boole
     // Never immersive: a card, known at once, with no cover to fetch, decode or classify.
     val never = preference == Preference.Never
     val state = remember(coverArt, preference, dark) { mutableStateOf(if (never) ImmersiveArtwork.Resolved(null) else ImmersiveArtwork.cached(coverArt, preference, dark)) }
-    // A cover the core could not fetch (a network drop) is asked for again, as [Artwork] does: a
-    // card meanwhile, the immersive layout once the file comes.
-    val network by client.network.collectAsStateWithLifecycle()
+    // A cover the core could not fetch (a network drop) is asked for again on [Artwork]'s shared
+    // schedule: a card meanwhile, the immersive layout once the file comes.
+    val reach = rememberArtworkReach(client)
     // Known from the first frame when worked out already (a file in hand, whatever its layout).
     var fetched by remember(state) { mutableStateOf(state.value != null) }
-    var attempt by remember(state, network) { mutableIntStateOf(0) }
-    LaunchedEffect(state, attempt, network) {
+    LaunchedEffect(state, reach) {
         if (fetched || coverArt == null || never) return@LaunchedEffect
-        val path = client.artworkPath(coverArt, ArtworkSizes.GRID)
-        if (path != null) ArtworkPathCache.put(ArtworkPathCache.key(coverArt, ArtworkSizes.GRID), path)
-        state.value = ImmersiveArtwork.Resolved(path?.let { ImmersiveArtwork.analyse(it, preference, dark) })
-        if (path != null) { fetched = true; return@LaunchedEffect }
-        if (attempt < ARTWORK_RETRIES) {
-            delay(ARTWORK_RETRY_MS shl attempt)
-            attempt++
+        val asked = askForArtwork(client, coverArt, ArtworkSizes.GRID, reach) { path, _ ->
+            val key = ArtworkPathCache.key(coverArt, ArtworkSizes.GRID)
+            if (path != null) { ArtworkPathCache.put(key, path); ArtworkMisses.forget(key) }
+            state.value = ImmersiveArtwork.Resolved(path?.let { ImmersiveArtwork.analyse(it, preference, dark) })
+            if (path != null) fetched = true
         }
+        // Nothing asked (offline with a miss known, or out of retries): a card.
+        if (!asked && state.value == null) state.value = ImmersiveArtwork.Resolved(null)
     }
     return state
 }

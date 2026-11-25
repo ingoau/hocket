@@ -61,6 +61,7 @@ import { scrimAlpha } from "../lib/contrast";
 import { SK } from "@shared/settings-keys";
 import type { ArtworkEdge, ImmersiveArtwork } from "@core/api";
 import { useVolumeControl } from "../lib/volume";
+import { useLargeArtworkSize } from "../lib/artwork-size";
 import { useConnectSyncing } from "../lib/connect-sync";
 import { SPRING_EFFECTS, SPRING_FAST, SPRING_SPATIAL } from "../lib/spring";
 import { ratingTarget, refOf } from "../lib/track-ref";
@@ -155,6 +156,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   useEffect(() => closeRef.current?.focus({ preventScroll: true }), []);
   const d = bridge().dispatch;
   const track = now?.track;
+  const largeArt = useLargeArtworkSize();
   const playing = transport.position.isPlaying;
 
   /** Whether the full screen button put the window into fullscreen, so closing takes it back out. */
@@ -228,7 +230,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   ) : (
     <div className="np-art-img placeholder"><Icon name="music" size={48} /></div>
   );
-  const smallArt = track ? <Artwork id={track.coverArt} size={1000} className="np-art-img" /> : <div className="np-art-img placeholder"><Icon name="music" size={48} /></div>;
+  const smallArt = track ? <Artwork id={track.coverArt} size={largeArt} className="np-art-img" /> : <div className="np-art-img placeholder"><Icon name="music" size={48} /></div>;
   /** With a view open, the stacked layout shows the artwork as a thumbnail by the title; the others keep it in its slot. */
   const thumbByTitle = shape === "stacked" && mode !== "art";
 

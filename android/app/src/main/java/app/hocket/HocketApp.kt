@@ -17,7 +17,6 @@ import app.hocket.playback.ForegroundBinder
 import app.hocket.playback.PlaybackServiceConnection
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
-import coil3.disk.DiskCache
 import coil3.memory.MemoryCache
 import coil3.request.crossfade
 import kotlinx.coroutines.CoroutineScope
@@ -36,7 +35,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import androidx.core.content.pm.ShortcutManagerCompat
 import kotlinx.coroutines.launch
-import okio.Path.Companion.toOkioPath
 
 /**
  * Process-wide wiring: binds to the playback service (which owns the core) while any UI is started
@@ -207,7 +205,9 @@ class HocketApp : Application(), SingletonImageLoader.Factory {
     override fun newImageLoader(context: coil3.PlatformContext): ImageLoader =
         ImageLoader.Builder(context)
             .memoryCache { MemoryCache.Builder().maxSizePercent(context, 0.2).build() }
-            .diskCache { DiskCache.Builder().directory(cacheDir.resolve("coil").toOkioPath()).maxSizeBytes(64L * 1024 * 1024).build() }
+            // No disk cache: every image is a local file (the core's artwork cache) or a content URI,
+            // and Coil's disk cache only holds what its network fetchers download.
+            .diskCache { null }
             .crossfade(180)
             .build()
 }

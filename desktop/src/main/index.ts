@@ -22,7 +22,7 @@ import { deepLinkFromArgv, registerDeepLinks } from "./deep-link";
 import { installIpc } from "./ipc";
 import { MediaSessionHost } from "./media-session";
 import { installAppMenu, type AppMenuState } from "./menu";
-import { networkReporter } from "./network";
+import { linkWatcher, networkReporter, wakeLookups } from "./network";
 import { StoreFile } from "./store-file";
 import { AppTray, appIcon } from "./tray";
 import { installUpdater } from "./updater";
@@ -127,9 +127,15 @@ async function main(): Promise<void> {
   });
 
   let rendererVisible = true;
-  let pageVisible = true;
+  // Each window's page visibility, by webContents id: the mini player's report must not overwrite
+  // the main window's. The app is visible while the main window is shown and its page visible, or
+  // another window (the mini player) says its page is.
+  const pageVisible = new Map<number, boolean>();
   const pushVisibility = (focused: boolean) => {
-    core.dispatch({ type: "setVisibility", data: { visible: rendererVisible && pageVisible, focused } });
+    const mainId = windows.main?.webContents.id;
+    const main = rendererVisible && (mainId === undefined || (pageVisible.get(mainId) ?? true));
+    const other = [...pageVisible].some(([id, v]) => v && id !== mainId);
+    core.dispatch({ type: "setVisibility", data: { visible: main || other, focused } });
   };
 
   installProtocols(appRoot, artwork);
@@ -232,11 +238,19 @@ async function main(): Promise<void> {
         return { closeToTray: store.get("closeToTray") ?? true };
       },
     },
-    onVisibilityReport: (visible) => {
-      pageVisible = visible;
+    onVisibilityReport: (visible, contents) => {
+      if (!pageVisible.has(contents.id)) {
+        contents.once("destroyed", () => {
+          pageVisible.delete(contents.id);
+          // Quitting destroys every window after the core has shut down: nothing to tell it then.
+          if (shuttingDown) return;
+          pushVisibility(windows.main?.isFocused() ?? false);
+        });
+      }
+      pageVisible.set(contents.id, visible);
       pushVisibility(windows.main?.isFocused() ?? false);
     },
-    onNetworkReport: (online) => pushNetwork(online),
+    onNetworkReport: (online) => reportNetwork(online),
   });
 
   // Fan events out to every renderer window; keep the tray in step.
@@ -299,7 +313,7 @@ async function main(): Promise<void> {
       });
       applySettingsFromSnapshot(snapshot.settings);
       applyBattery();
-      pushNetwork(net.isOnline());
+      reportNetwork(net.isOnline(), true);
     }
     if (event.type === "credentialsSynced") {
       // Credential sync brought passwords (the core already added the accounts): keep them as if typed here.
@@ -335,16 +349,32 @@ async function main(): Promise<void> {
   powerMonitor.on("on-battery", applyBattery);
   powerMonitor.on("on-ac", applyBattery);
   powerMonitor.on("suspend", () => core.dispatch({ type: "setVisibility", data: { visible: false, focused: false } }));
+  // The network may have changed while asleep (same addresses, another Wi-Fi): look again now, and
+  // once more when Wi-Fi has had a few seconds to join again (the first look often finds none of it).
+  const lookAfterWake = wakeLookups(() => reportNetwork(net.isOnline(), true));
   powerMonitor.on("resume", () => {
     pushVisibility(windows.main?.isFocused() ?? false);
-    // The network may have changed while asleep; don't wait for the next poll.
-    pushNetwork(net.isOnline());
+    lookAfterWake();
   });
+  powerMonitor.on("unlock-screen", lookAfterWake);
 
-  // Network: the renderer reports online/offline transitions; main polls as a backstop. Only
-  // changes reach the core.
+  // Network: the renderer reports online/offline transitions; main polls as a backstop and looks
+  // the link up (kind, id, metered) when the interfaces change. Only changes reach the core.
   const pushNetwork = networkReporter((state) => core.dispatch({ type: "setNetworkState", data: { state } }));
-  setInterval(() => pushNetwork(net.isOnline()), 30_000).unref();
+  const lookUpLink = linkWatcher();
+  let networkAsk = 0;
+  const reportNetwork = (online: boolean, force = false) => {
+    const ask = ++networkAsk;
+    if (!online) {
+      pushNetwork(false);
+      return;
+    }
+    // Only the latest report counts: an older lookup landing late must not undo it.
+    void lookUpLink(force).then((link) => {
+      if (ask === networkAsk) pushNetwork(true, link);
+    });
+  };
+  setInterval(() => reportNetwork(net.isOnline()), 30_000).unref();
 
   updateAppMenu = installAppMenu({ showMain: () => windows.showMain(), openSettings: () => sendUiAction("ui.settings"), setOfflineMode: (on) => setOfflineMode(on), quit: () => shutdown() });
   updateAppMenu({ offlineMode });

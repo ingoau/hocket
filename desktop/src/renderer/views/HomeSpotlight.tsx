@@ -5,6 +5,7 @@ import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
 import { openContextMenu } from "../components/ContextMenu";
 import { resolveArtwork } from "../components/Artwork";
+import { useLargeArtworkSize } from "../lib/artwork-size";
 import { Icon } from "../components/Icon";
 import { extractAccent } from "../lib/accent";
 import { usePrefersReducedMotion } from "../lib/media";
@@ -149,11 +150,12 @@ export function HomeSpotlight({ stats, statsReady, dynamic, onAccent, onEmpty }:
 function Slide({ slide, active, position, accent, theme, serverId, onOpen }: { slide: SpotlightSlide; active: boolean; position: string; accent?: string; theme: ThemeName; serverId: string; onOpen: () => void }) {
   const cover = slideCover(slide);
   const [url, setUrl] = useState<string | undefined>(undefined);
+  const size = useLargeArtworkSize();
   useEffect(() => {
     let live = true;
-    void resolveArtwork(cover, 1000).then((u) => { if (live) setUrl(u); });
+    void resolveArtwork(cover, size).then((u) => { if (live) setUrl(u); });
     return () => { live = false; };
-  }, [cover]);
+  }, [cover, size]);
   // Contrast-checked for the app's theme, never the cover's lightness.
   const vars = useMemo(() => {
     if (!accent) return undefined;

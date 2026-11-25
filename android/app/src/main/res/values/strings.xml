@@ -67,8 +67,19 @@
     <string name="empty_queue_body">Play an album, a playlist or a song and it shows up here.</string>
     <string name="empty_downloads_title">Nothing downloaded</string>
     <string name="empty_downloads_body">Long-press an album, playlist or song and choose Download to keep it offline.</string>
-    <string name="empty_library_title">Library is syncing</string>
-    <string name="empty_library_body">Albums appear as the sync completes. You can browse what is there already.</string>
+    <string name="empty_library_syncing_title">Library is syncing</string>
+    <string name="empty_library_syncing_body">Your music appears here as the sync completes. You can browse what is there already.</string>
+    <string name="empty_albums_title">No albums yet</string>
+    <string name="empty_albums_body">Albums added to your server show up here after the next sync.</string>
+    <string name="empty_artists_title">No artists yet</string>
+    <string name="empty_artists_body">Artists show up here once your server has music by them.</string>
+    <string name="empty_songs_title">No songs yet</string>
+    <string name="empty_songs_body">Songs added to your server show up here after the next sync.</string>
+    <string name="empty_genres_title">No genres</string>
+    <string name="empty_genres_body">Genres come from your songs\' tags, and none of them has one yet.</string>
+    <!-- A genre's page when nothing in the library has that genre any more. -->
+    <string name="empty_genre_title">Nothing in this genre</string>
+    <string name="empty_genre_body">No song in your library has this genre any more.</string>
     <string name="empty_search_title">Search your library</string>
     <string name="empty_search_body">Songs, albums, artists, playlists, and lyrics of songs you\'ve played.</string>
     <string name="empty_search_none">No results for “%1$s”</string>
@@ -83,6 +94,8 @@
     <string name="empty_lyrics_title">No lyrics</string>
     <string name="empty_lyrics_body">This track has no lyrics on the server.</string>
     <string name="empty_lyrics_external_hint">Turn on external lyrics in Settings to look them up.</string>
+    <!-- The lyrics empty state's link to the external lyrics setting. -->
+    <string name="empty_lyrics_external_link">Turn on external lyrics</string>
     <string name="empty_stats_title">No listening yet</string>
     <string name="empty_stats_body">Stats build up from what you play on this device.</string>
     <string name="empty_jobs_title">Nothing running</string>
@@ -138,6 +151,9 @@
     <string name="setup_show_password">Show password</string>
     <string name="setup_hide_password">Hide password</string>
     <string name="setup_error_url">Enter the server address, starting with http:// or https://</string>
+    <string name="setup_error_auth">Wrong username or password.</string>
+    <string name="setup_error_unreachable">Couldn\'t reach the server. Check the address and that this device is online.</string>
+    <string name="setup_error_not_subsonic">That address doesn\'t answer like a Navidrome or Subsonic server. Check the URL, including any path after the host.</string>
     <string name="setup_too_old">This server runs Navidrome %1$s. Hocket needs 0.63.0 or newer for synced lyrics and fast library sync.</string>
     <string name="setup_caps_title">Server capabilities</string>
     <string name="setup_caps_version">Navidrome %1$s</string>
@@ -274,6 +290,15 @@
     <string name="artist_featured_on">Featured on</string>
     <string name="artist_missing_title">Not in your library</string>
     <string name="artist_missing_body">No song in your library credits this artist.</string>
+    <!-- An album's or playlist's page that can't be shown: missing from the library, offline, or failed to load. -->
+    <string name="detail_missing_title">Not in your library</string>
+    <string name="album_missing_body">This album isn\'t on your server any more, or hasn\'t synced yet.</string>
+    <string name="playlist_missing_body">This playlist was deleted, or isn\'t shared with you any more.</string>
+    <string name="detail_offline_title">Not available offline</string>
+    <string name="detail_offline_body">Open it again once you\'re online, or download it next time to keep it offline.</string>
+    <string name="album_failed_title">Couldn\'t load this album</string>
+    <string name="playlist_failed_title">Couldn\'t load this playlist</string>
+    <string name="detail_failed_body">Something went wrong while loading it. Try again in a moment.</string>
     <string name="genre_albums">Albums</string>
     <string name="genre_songs">Songs</string>
     <string name="rating_stars">Rating</string>
@@ -343,7 +368,7 @@
     <string name="settings_external_control">Allow control by other apps</string>
     <string name="settings_external_control_summary">Let apps like media browsers and Android Auto browse your library, see the queue and control playback. Notification, lock screen and Bluetooth controls, and apps you\'ve given notification access, always work.</string>
     <string name="settings_system_eq">Device equalizer</string>
-    <string name="settings_system_eq_body">Your phone\'s sound effects, applied to what Hocket plays</string>
+    <string name="settings_system_eq_body">This device\'s sound effects, applied to what Hocket plays</string>
     <string name="settings_home_screen">Home screen</string>
     <string name="settings_widget_add">Add the now-playing widget</string>
     <string name="settings_widget_add_body">Shows what is playing, and on which device, on your home screen</string>
@@ -404,16 +429,15 @@
     <string name="settings_account_stats">Listening stats</string>
     <string name="settings_account_devices">Devices</string>
     <string name="handoff_settings">Connect &amp; devices</string>
-    <string name="handoff_this_phone">This phone</string>
     <string name="handoff_other_devices">Connect</string>
-    <!-- The Connect sheet's group of Chromecasts (Google Cast receivers) this phone can play through. -->
+    <!-- The Connect sheet's group of Chromecasts (Google Cast receivers) this device can play through. -->
     <string name="handoff_cast">Cast</string>
     <string name="handoff_cast_empty">No Cast devices found on this network</string>
     <!-- A Connect device playing through its Cast receiver: "Playing on Living Room TV". -->
     <string name="handoff_playing_on">Playing on %1$s</string>
     <!-- Another device playing through its Cast receiver: "Pixel → Living Room TV". -->
     <string name="handoff_device_to_renderer">%1$s → %2$s</string>
-    <string name="handoff_phone_speaker">Phone speaker</string>
+    <string name="handoff_device_speaker">Device speaker</string>
     <string name="handoff_wired">Wired headphones</string>
     <string name="handoff_usb">USB audio</string>
     <string name="handoff_bluetooth">Bluetooth audio</string>
@@ -507,6 +531,8 @@
     <string name="downloads_transcoded">Transcoded</string>
     <string name="downloads_original">Original files</string>
     <string name="downloads_clear_cache">Clear stream cache</string>
+    <string name="downloads_clear_cache_confirm">Clear the stream cache (%1$s)? Songs you haven\'t downloaded will stream from the server again, and won\'t play offline until they do.</string>
+    <string name="downloads_clear_cache_action">Clear</string>
     <string name="downloads_threshold">Warn above</string>
     <string name="downloads_threshold_none">No limit</string>
     <string name="downloads_remove_confirm">Remove “%1$s” from this device? The files are deleted.</string>
@@ -630,6 +656,9 @@
     <string name="filter_value_low">From</string>
     <string name="filter_value_high">To</string>
     <string name="filter_days">Days</string>
+    <string name="filter_date">Date</string>
+    <!-- Spoken action on the filter rule's date field: opens the calendar. -->
+    <string name="filter_date_pick">pick a date</string>
     <plurals name="filter_count">
         <item quantity="one">%1$d matching track</item>
         <item quantity="other">%1$d matching tracks</item>
@@ -767,6 +796,9 @@
     <string name="settings_bitrate_unlimited">Unlimited</string>
     <string name="settings_bitrate_kbps">%1$d kbps</string>
     <string name="settings_cannot_decode">Always transcode</string>
+    <string name="settings_cannot_decode_body">File types this device can\'t play itself: the server converts them first.</string>
+    <string name="settings_cannot_decode_other">Other file type</string>
+    <string name="settings_cannot_decode_add">Add</string>
     <string name="settings_lan_discovery">Find devices on this network</string>
     <string name="settings_device_name">This device: %1$s</string>
     <string name="settings_section_queue">Queue</string>
@@ -872,14 +904,14 @@
     <string name="settings_category_advanced">Advanced</string>
     <string name="settings_summary_advanced">Developer mode: %1$s</string>
     <string name="settings_headphone_handoff">Headphone handoff (beta)</string>
-    <string name="settings_headphone_handoff_body">When headphones connect to this phone while another device is playing, or paused in the last few seconds, move the music here.</string>
+    <string name="settings_headphone_handoff_body">When headphones connect to this device while another device is playing, or paused in the last few seconds, move the music here.</string>
     <string name="settings_search_kw_headphone_handoff">bluetooth earbuds earphones headset transfer move connect</string>
     <string name="settings_developer_mode">Developer mode</string>
-    <string name="settings_developer_mode_body">Keep detailed logs on this phone, and shake it (or press Ctrl+Shift+D on a keyboard) to open developer diagnostics.</string>
+    <string name="settings_developer_mode_body">Keep detailed logs on this device, and shake it (or press Ctrl+Shift+D on a keyboard) to open developer diagnostics.</string>
     <string name="settings_developer_diagnostics">Developer diagnostics</string>
     <string name="settings_developer_diagnostics_body">Save or share the last hour of logs, with versions and device details.</string>
     <string name="developer_title">Developer diagnostics</string>
-    <string name="developer_subtitle">The last hour of logs, with versions and device details. Nothing leaves this phone unless you share, copy or save it (to a file, or to your coordinator when it allows), or another of your devices asks for it while developer mode is on here.</string>
+    <string name="developer_subtitle">The last hour of logs, with versions and device details. Nothing leaves this device unless you share, copy or save it (to a file, or to your coordinator when it allows), or another of your devices asks for it while developer mode is on here.</string>
     <string name="developer_wait_for_others">Waiting for the other devices…</string>
     <string name="developer_others">Other devices</string>
     <string name="developer_others_hint">Asked as this page opens, so their bundles go with whatever you share, save or copy. A device answers only while its own developer mode is on; this waits up to 45 seconds for them.</string>
@@ -904,7 +936,7 @@
     <string name="developer_state_incomplete">Incomplete · %1$d of %2$d</string>
     <string name="developer_state_no_answer">No answer</string>
     <string name="developer_state_none">Not used</string>
-    <string name="developer_mode_on">Developer mode is on: logs are detailed, and shaking the phone opens this page.</string>
+    <string name="developer_mode_on">Developer mode is on: logs are detailed, and shaking the device opens this page.</string>
     <string name="developer_mode_off">Developer mode is off, so logs are at the normal level.</string>
     <string name="developer_share">Share</string>
     <string name="developer_save">Save to file</string>
@@ -1004,6 +1036,9 @@
     <string name="size_kb">%1$.0f KB</string>
     <string name="size_mb">%1$.1f MB</string>
     <string name="size_gb">%1$.2f GB</string>
+    <!-- Round sizes for choices: "500 MB", "4 GB". -->
+    <string name="size_mb_whole">%1$d MB</string>
+    <string name="size_gb_whole">%1$d GB</string>
     <string name="error_generic">Something went wrong</string>
     <string name="error_auth">Wrong username or password</string>
     <string name="error_network">Can’t reach the server</string>
@@ -1238,7 +1273,7 @@
     <string name="pebble_album_art">Album art</string>
     <string name="pebble_album_art_body">The cover behind Now Playing, on the Pebble Time 2 and Round 2.</string>
     <string name="pebble_auto_open">Open on watch when playback starts</string>
-    <string name="pebble_auto_open_body">Opens the watchapp when this phone starts playing.</string>
+    <string name="pebble_auto_open_body">Opens the watchapp when this device starts playing.</string>
     <string name="pebble_close_when_paused">Close when paused</string>
     <string name="pebble_minutes">%1$d min</string>
     <string name="pebble_item_now_playing">Now Playing</string>

@@ -681,6 +681,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                             { id -> sharedArtwork.prepareDestination(ArtworkShare.album(id)); nav.navigate(Route.Album(id)) },
                             { id -> sharedArtwork.prepareDestination(ArtworkShare.artist(id)); nav.navigate(Route.Artist(id)) },
                             { id -> sharedArtwork.prepareDestination(ArtworkShare.playlist(id)); nav.navigate(Route.Playlist(id)) },
+                            { route, tag -> app.hocket.ui.screens.settings.SettingsJump.request(tag); nav.navigate(route) { launchSingleTop = true } },
                         )
                     }
                     CompositionLocalProvider(app.hocket.ui.LocalDetailNavigator provides contentNavigator) {
@@ -689,7 +690,19 @@ private fun MainShell(snackbar: SnackbarHostState) {
                     }
                     // The panel's Lyrics and Queue take over the main screen beside it (the lyrics'
                     // backdrop runs on behind the panel too).
-                    PanelPageHost(page = if (panelOpen) sheet.panelPage else null, onClose = { sheet.panelPage = null }, endInset = panelRoom)
+                    // Its links (the lyrics' "Turn on external lyrics", a queue row's album) close the
+                    // page first, so what they open shows beside the panel.
+                    val panelNavigator = remember(contentNavigator, sheet) {
+                        app.hocket.ui.DetailNavigator(
+                            { id -> sheet.panelPage = null; contentNavigator.openAlbum(id) },
+                            { id -> sheet.panelPage = null; contentNavigator.openArtist(id) },
+                            { id -> sheet.panelPage = null; contentNavigator.openPlaylist?.invoke(id) },
+                            { route, tag -> sheet.panelPage = null; contentNavigator.openSetting?.invoke(route, tag) },
+                        )
+                    }
+                    CompositionLocalProvider(app.hocket.ui.LocalDetailNavigator provides panelNavigator) {
+                        PanelPageHost(page = if (panelOpen) sheet.panelPage else null, onClose = { sheet.panelPage = null }, endInset = panelRoom)
+                    }
                 }
             }
             // Links inside the full player (album/artist, the "More" sheet's go-to actions, rows'
@@ -706,6 +719,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                     openAlbum = { id -> sharedArtwork.prepareDestination(ArtworkShare.album(id)); leavePlayer(); nav.navigate(Route.Album(id)) },
                     openArtist = { id -> sharedArtwork.prepareDestination(ArtworkShare.artist(id)); leavePlayer(); nav.navigate(Route.Artist(id)) },
                     openPlaylist = { id -> sharedArtwork.prepareDestination(ArtworkShare.playlist(id)); leavePlayer(); nav.navigate(Route.Playlist(id)) },
+                    openSetting = { route, tag -> app.hocket.ui.screens.settings.SettingsJump.request(tag); leavePlayer(); nav.navigate(route) { launchSingleTop = true } },
                 )
             }
             // The bottom chrome's whole strip (the bar, the gap above it and the margins beside the

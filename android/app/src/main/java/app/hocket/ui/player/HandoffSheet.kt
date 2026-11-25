@@ -134,10 +134,10 @@ fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpe
                     onDismiss()
                 }
                 val heardHere = self.playing && castingTo == null
-                GroupLabel(stringResource(R.string.handoff_this_phone), Modifier.padding(top = 16.dp), color = MaterialTheme.colorScheme.primary)
+                GroupLabel(stringResource(R.string.handoff_this_device), Modifier.padding(top = 16.dp), color = MaterialTheme.colorScheme.primary)
                 SegmentedGroup {
                     if (outputs.outputs.isEmpty()) {
-                        DeviceRow(0, 1, stringResource(R.string.handoff_this_device), if (heardHere) stringResource(R.string.handoff_playing) else null, HocketIcons.Outlined.PhoneAndroid, heardHere, onClick = { pick(null) })
+                        DeviceRow(0, 1, stringResource(R.string.handoff_device_speaker), if (heardHere) stringResource(R.string.handoff_playing) else null, HocketIcons.Outlined.PhoneAndroid, heardHere, onClick = { pick(null) })
                     } else outputs.outputs.forEachIndexed { i, o ->
                         val on = heardHere && o.id == outputs.current?.id
                         val detail = outputDetail(o)
@@ -279,7 +279,7 @@ private fun outputDetail(o: AudioOutputs.Output): String? = when (o.kind) {
 
 @Composable
 private fun outputName(o: AudioOutputs.Output): String = when (o.kind) {
-    AudioOutputs.Kind.Phone -> stringResource(R.string.handoff_phone_speaker)
+    AudioOutputs.Kind.Phone -> stringResource(R.string.handoff_device_speaker)
     AudioOutputs.Kind.Bluetooth -> o.name.ifBlank { stringResource(R.string.handoff_bluetooth) }
     AudioOutputs.Kind.Wired -> stringResource(if (o.form == AudioOutputs.Form.Speaker) R.string.handoff_line_out else R.string.handoff_wired)
     AudioOutputs.Kind.Usb -> o.name.ifBlank { stringResource(R.string.handoff_usb) }

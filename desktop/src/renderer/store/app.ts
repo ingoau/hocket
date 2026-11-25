@@ -502,6 +502,8 @@ export function connectStore(kind: "main" | "mini" = "main"): () => void {
     b.window.reportVisibility(visible);
   };
   document.addEventListener("visibilitychange", onVis);
+  // A window that starts hidden (in the tray) never sees a change to report.
+  onVis();
   // The browser's view is the input main reports to the core (SetNetworkState);
   // the core's NetworkChanged event is what the UI shows.
   const onOnline = () => b.window.reportNetwork(navigator.onLine);

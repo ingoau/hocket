@@ -525,7 +525,7 @@ impl Outbox {
                 params![id, self.clock.now_ms()],
             )?;
             if let Some(prior) = &entry.expected_prior {
-                revert_local(tx, &entry.mutation, prior)?;
+                revert_local(tx, &entry.server_id, &entry.mutation, prior)?;
             }
             Ok(CancelOutcome::Cancelled)
         })
@@ -1220,6 +1220,7 @@ impl Outbox {
         expected: Prior,
         new: Prior,
     ) -> Result<CasOutcome, SubsonicError> {
+        let sid = api.server_id();
         match (&target, &expected, &new) {
             (
                 CasTarget::Rating(RatingTarget::Track { id, .. }),
@@ -1234,7 +1235,7 @@ impl Outbox {
                     });
                 }
                 api.set_rating(id, *new_r).await?;
-                self.db.set_track_rating(id, *new_r).map_err(db_err)?;
+                self.db.set_track_rating(sid, id, *new_r).map_err(db_err)?;
                 Ok(CasOutcome::Applied)
             }
             (
@@ -1250,7 +1251,7 @@ impl Outbox {
                     });
                 }
                 api.set_rating(id, *new_r).await?;
-                self.db.set_album_rating(id, *new_r).map_err(db_err)?;
+                self.db.set_album_rating(sid, id, *new_r).map_err(db_err)?;
                 Ok(CasOutcome::Applied)
             }
             (CasTarget::Loved(t), Prior::Loved(exp), Prior::Loved(new_l)) => {
@@ -1279,9 +1280,9 @@ impl Outbox {
                     api.unstar(&[star]).await?;
                 }
                 match t {
-                    LoveTarget::Track { id } => self.db.set_track_loved(id, *new_l),
-                    LoveTarget::Album { id } => self.db.set_album_loved(id, *new_l),
-                    LoveTarget::Artist { id } => self.db.set_artist_loved(id, *new_l),
+                    LoveTarget::Track { id } => self.db.set_track_loved(sid, id, *new_l),
+                    LoveTarget::Album { id } => self.db.set_album_loved(sid, id, *new_l),
+                    LoveTarget::Artist { id } => self.db.set_artist_loved(sid, id, *new_l),
                 }
                 .map_err(db_err)?;
                 Ok(CasOutcome::Applied)
@@ -1480,7 +1481,12 @@ fn local_order(
     Ok(Some((sid, order)))
 }
 
-fn revert_local(tx: &rusqlite::Connection, m: &Mutation, prior: &Prior) -> DbResult<()> {
+fn revert_local(
+    tx: &rusqlite::Connection,
+    server_id: &str,
+    m: &Mutation,
+    prior: &Prior,
+) -> DbResult<()> {
     match (m, prior) {
         (
             Mutation::SetRating {
@@ -1490,8 +1496,8 @@ fn revert_local(tx: &rusqlite::Connection, m: &Mutation, prior: &Prior) -> DbRes
             Prior::Rating(r),
         ) => {
             tx.execute(
-                "UPDATE tracks SET rating = ?2 WHERE id = ?1",
-                params![id, r],
+                "UPDATE tracks SET rating = ?2 WHERE id = ?1 AND server_id = ?3",
+                params![id, r, server_id],
             )?;
         }
         (
@@ -1502,8 +1508,8 @@ fn revert_local(tx: &rusqlite::Connection, m: &Mutation, prior: &Prior) -> DbRes
             Prior::Rating(r),
         ) => {
             tx.execute(
-                "UPDATE albums SET rating = ?2 WHERE id = ?1",
-                params![id, r],
+                "UPDATE albums SET rating = ?2 WHERE id = ?1 AND server_id = ?3",
+                params![id, r, server_id],
             )?;
         }
         (
@@ -1514,8 +1520,8 @@ fn revert_local(tx: &rusqlite::Connection, m: &Mutation, prior: &Prior) -> DbRes
             Prior::Loved(l),
         ) => {
             tx.execute(
-                "UPDATE tracks SET loved = ?2 WHERE id = ?1",
-                params![id, *l as i64],
+                "UPDATE tracks SET loved = ?2 WHERE id = ?1 AND server_id = ?3",
+                params![id, *l as i64, server_id],
             )?;
         }
         (
@@ -1526,8 +1532,8 @@ fn revert_local(tx: &rusqlite::Connection, m: &Mutation, prior: &Prior) -> DbRes
             Prior::Loved(l),
         ) => {
             tx.execute(
-                "UPDATE albums SET loved = ?2 WHERE id = ?1",
-                params![id, *l as i64],
+                "UPDATE albums SET loved = ?2 WHERE id = ?1 AND server_id = ?3",
+                params![id, *l as i64, server_id],
             )?;
         }
         (
@@ -1538,8 +1544,8 @@ fn revert_local(tx: &rusqlite::Connection, m: &Mutation, prior: &Prior) -> DbRes
             Prior::Loved(l),
         ) => {
             tx.execute(
-                "UPDATE artists SET loved = ?2 WHERE id = ?1",
-                params![id, *l as i64],
+                "UPDATE artists SET loved = ?2 WHERE id = ?1 AND server_id = ?3",
+                params![id, *l as i64, server_id],
             )?;
         }
         (
@@ -1806,6 +1812,59 @@ mod tests {
             outbox.cancel_if_unsent(&id).unwrap(),
             CancelOutcome::AlreadySent
         );
+    }
+
+    #[test]
+    fn cancelling_reverts_only_its_own_accounts_row() {
+        let (db, _, outbox, _) = setup();
+        // Another account's song with the same id, loved there.
+        db.upsert_tracks(
+            &[api::Track {
+                id: "t1".into(),
+                server_id: "other".into(),
+                title: "Elsewhere".into(),
+                loved: true,
+                rating: 4,
+                ..Default::default()
+            }],
+            &[],
+            1,
+        )
+        .unwrap();
+        let love = outbox
+            .enqueue(
+                "srv",
+                Mutation::SetLoved {
+                    target: LoveTarget::Track { id: "t1".into() },
+                    loved: true,
+                },
+                Some(Prior::Loved(false)),
+            )
+            .unwrap();
+        let rate = outbox
+            .enqueue(
+                "srv",
+                Mutation::SetRating {
+                    target: RatingTarget::Track {
+                        id: "t1".into(),
+                        source: String::new(),
+                    },
+                    rating: 5,
+                },
+                Some(Prior::Rating(2)),
+            )
+            .unwrap();
+        outbox.cancel_if_unsent(&love).unwrap();
+        outbox.cancel_if_unsent(&rate).unwrap();
+        let row = |sid: &str| {
+            let t = db
+                .track_ref(&api::TrackRef::new(sid, "t1"))
+                .unwrap()
+                .unwrap();
+            (t.loved, t.rating)
+        };
+        assert_eq!(row("srv"), (false, 2));
+        assert_eq!(row("other"), (true, 4), "the other account's copy kept");
     }
 
     #[tokio::test]

@@ -6,6 +6,7 @@ import type {
 import { snapshotOf } from "@shared/core-handle";
 import { isPositionTick } from "@shared/transport";
 import type { PlayerNotice } from "../lib/notice";
+import { emptyLibraryLog, recordLibraryChange, type LibraryChangeLog } from "./library-changes";
 
 export const SAVER_OFF: BatterySaver = { level: "off", automatic: false, features: [] };
 
@@ -56,9 +57,8 @@ export interface CoreState {
   /** The player-bar notice (code, detail and the core's English text); undefined when cleared. */
   playerNotice: PlayerNotice | undefined;
   toasts: Toast[];
-  /** Bumped on LibraryChanged so views refetch. */
-  libraryVersion: number;
-  libraryChangedIds: string[];
+  /** Recent LibraryChanged events (and finished syncs), for views to refetch what they touch. */
+  libraryChanges: LibraryChangeLog;
   /** Bumped on ActionsChanged. */
   actionsVersion: number;
   lastServerSearch: SearchResults | undefined;
@@ -139,8 +139,7 @@ export const initialCoreState: CoreState = {
   lyrics: undefined,
   playerNotice: undefined,
   toasts: [],
-  libraryVersion: 0,
-  libraryChangedIds: [],
+  libraryChanges: emptyLibraryLog,
   actionsVersion: 0,
   lastServerSearch: undefined,
   lastError: undefined,
@@ -219,9 +218,10 @@ export function reduce(state: CoreState, e: Event): CoreState {
     case "coordinatorInvites":
       return { ...state, coordinator: { ...state.coordinator, invites: e.data.invites, created: e.data.created ?? undefined, error: undefined } };
     case "syncProgress":
-      return { ...state, syncProgress: e.data.progress, libraryVersion: e.data.progress.finished ? state.libraryVersion + 1 : state.libraryVersion };
+      // A finished sync is followed by a LibraryChanged for everything; views refetch on that.
+      return { ...state, syncProgress: e.data.progress };
     case "libraryChanged":
-      return { ...state, libraryVersion: state.libraryVersion + 1, libraryChangedIds: e.data.ids };
+      return { ...state, libraryChanges: recordLibraryChange(state.libraryChanges, { tables: e.data.tables, ids: e.data.ids }) };
     case "libraryItemsChanged": {
       // A rating or love set here or on another signed-in device. Lists refetch on the
       // libraryChanged that follows; copies held in view state are patched now.

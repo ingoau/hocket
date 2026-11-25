@@ -11,7 +11,10 @@ import android.net.NetworkCapabilities
 import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import app.hocket.core.Commands
 import app.hocket.core.api.Command
 import app.hocket.core.api.NetworkKind
@@ -25,12 +28,22 @@ import java.security.MessageDigest
  * its capabilities as the default-network callback reports them. The id is a hash of the SSID when
  * it is readable (needs location permission), "wired" on Ethernet, and none otherwise: every
  * metered connection shares the core's `metered` profile, so mobile data needs no id of its own.
+ *
+ * A network counts as online only when it can reach anything: not behind a captive portal, and
+ * validated unless it is a local one (Wi-Fi or Ethernet), where a self-hosted server can still be
+ * reachable without internet access ([usable]). Changes after the first report settle for
+ * [debounceMs] before they're published (at most twice that while it keeps changing), so a handover that briefly has no default network (Wi-Fi
+ * lost, mobile data a moment later) or a network that validates right after connecting reports
+ * only where it ends up, not an `Offline` blip that resets recovery and artwork retries.
  */
 class NetworkMonitor(
     private val context: Context,
     private val dispatch: (Command) -> Unit,
     /** Called with whether there is any connectivity, on every change of that (and once at start). */
     private val onConnectivity: (online: Boolean) -> Unit = {},
+    /** How long a change must hold before it's published; 0 publishes at once. */
+    private val debounceMs: Long = DEBOUNCE_MS,
+    private val handler: Handler = Handler(Looper.getMainLooper()),
 ) {
     private val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private var last: NetworkState? = null
@@ -41,6 +54,13 @@ class NetworkMonitor(
     private var blocked = false
     /** The callback has said something, so the one-time start-up read ([seed]) is stale and unused. */
     private var heard = false
+    /** A state waiting out [debounceMs] before it's published. */
+    private var pending: NetworkState? = null
+    /** When [pending] started waiting (uptime ms). */
+    private var pendingSince = 0L
+    /** The longest a change waits however often it changes again. */
+    private val maxWait = debounceMs * 2
+    private val flush = Runnable { flushPending() }
 
     // Capabilities always follow onAvailable (API 26+), so only they, the blocked status and onLost
     // publish. On 12+ the SSID is redacted from callback capabilities unless the callback asks for
@@ -88,6 +108,10 @@ class NetworkMonitor(
 
     fun stop() {
         runCatching { cm.unregisterNetworkCallback(callback) }
+        synchronized(this) {
+            handler.removeCallbacks(flush)
+            pending = null
+        }
     }
 
     @Synchronized
@@ -130,7 +154,7 @@ class NetworkMonitor(
     /** The state [caps] stands for. */
     internal fun stateOf(caps: NetworkCapabilities?): NetworkState {
         val kind = when {
-            caps == null -> NetworkKind.Offline
+            caps == null || !usable(caps) -> NetworkKind.Offline
             caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> NetworkKind.Wifi
             caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> NetworkKind.Cellular
             caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> NetworkKind.Wired
@@ -141,7 +165,7 @@ class NetworkMonitor(
             NetworkKind.Wired -> "wired"
             else -> null
         }
-        return NetworkState(kind, caps != null && isMetered(caps), id)
+        return NetworkState(kind, kind != NetworkKind.Offline && caps != null && isMetered(caps), id)
     }
 
     @Suppress("DEPRECATION")
@@ -160,6 +184,38 @@ class NetworkMonitor(
 
     private fun publish() {
         val state = stateOf(if (blocked) null else caps)
+        // The first report goes out at once: the core waits for it.
+        if (last == null || debounceMs <= 0) {
+            handler.removeCallbacks(flush)
+            pending = null
+            emit(state)
+            return
+        }
+        // Back where it was reported: nothing to publish. The same state again (capability noise
+        // that changes nothing reported): the wait already running stands rather than starting over.
+        if (state == last) {
+            handler.removeCallbacks(flush)
+            pending = null
+            return
+        }
+        if (state == pending) return
+        // Each different state waits [debounceMs] afresh, but never past [maxWait] since the first:
+        // a network that keeps changing is still reported.
+        val now = SystemClock.uptimeMillis()
+        if (pending == null) pendingSince = now
+        pending = state
+        handler.removeCallbacks(flush)
+        handler.postDelayed(flush, (pendingSince + maxWait - now).coerceIn(0L, debounceMs))
+    }
+
+    @Synchronized
+    private fun flushPending() {
+        val state = pending ?: return
+        pending = null
+        emit(state)
+    }
+
+    private fun emit(state: NetworkState) {
         val was = last
         if (state != was) {
             last = state
@@ -170,6 +226,21 @@ class NetworkMonitor(
     }
 
     internal companion object {
+        /** How long a network change must hold before it's reported. */
+        const val DEBOUNCE_MS = 1_000L
+
+        /**
+         * Whether [caps] can carry the app's traffic. A captive portal can't until the user signs in.
+         * Otherwise the system's validation (it reached the internet) decides, except on Wi-Fi and
+         * Ethernet: those may be a LAN with the Navidrome server on it and no internet, and the core
+         * finds an unreachable server by probing it anyway.
+         */
+        fun usable(caps: NetworkCapabilities): Boolean {
+            if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)) return false
+            if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) return true
+            return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+        }
+
         /**
          * Metered unless the network says it isn't. A temporarily unmetered one (a carrier's
          * unmetered 5G, Android 11+) counts as unmetered while it says so.

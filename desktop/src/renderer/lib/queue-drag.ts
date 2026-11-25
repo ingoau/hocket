@@ -271,11 +271,14 @@ export function addToQueue(target: ActionTarget, slot?: DropSlot): void {
     app.runAction(plan.action, target);
     return;
   }
-  void resolveTrackRefs(target).then((refs) => {
-    const s = useApp.getState();
-    const cmd = insertTracksCommand(s.queue, refs, plan.insert);
-    if (cmd) s.dispatch(cmd);
-  });
+  void resolveTrackRefs(target).then(
+    (refs) => {
+      const s = useApp.getState();
+      const cmd = insertTracksCommand(s.queue, refs, plan.insert);
+      if (cmd) s.dispatch(cmd);
+    },
+    (e: unknown) => console.warn("[queue-drag] resolving the dropped songs", e),
+  );
 }
 
 function overSelector(x: number, y: number, selector: string): boolean {

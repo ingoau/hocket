@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import type { SortOrder, TrackRef } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
+import { TRACKS_DEPS } from "../store/library-changes";
 import { bridge } from "../core/bridge";
 import { openContextMenu } from "../components/ContextMenu";
 import { ListGroups, ListHeader, SongRows, usePinnedIds, usePinsOf, useRecentHistory, type GroupItem } from "../components/ListGroups";
@@ -24,7 +25,7 @@ export function Songs() {
     if (r.type !== "tracks") throw new Error("bad result");
     return { items: r.data.items, total: r.data.total };
   }, [source, sort, desc]);
-  const { rows, total, onNeedRange } = usePagedTracks(fetchPage, [source, sort, desc]);
+  const { rows, total, onNeedRange } = usePagedTracks(fetchPage, [source, sort, desc], TRACKS_DEPS);
   const onPlay = (index: number) => {
     // "All songs" is an ad-hoc context; play from the sorted list around the row.
     const refs = rows.filter((x): x is NonNullable<typeof x> => !!x).map(refOf);

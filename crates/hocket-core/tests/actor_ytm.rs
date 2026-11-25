@@ -385,3 +385,78 @@ async fn an_expired_sign_in_asks_to_sign_in_again() {
         .iter()
         .all(|a| a.kind != AccountKind::YoutubeMusic));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_catalogue_album_that_fails_to_load_is_an_error_not_missing() {
+    let t = TestCore::start_with_ytm("ytm-album-fail", navidrome(), Arc::new(ytm())).await;
+    add_ytm(&t, None).await;
+    // The fixtures answer nothing for this album: the fetch fails. The page
+    // should offer a retry, which a "no such album" answer wouldn't.
+    let id = "MPREb_unanswered";
+    assert!(t.core.query(Query::Album { id: id.into() }).await.is_err());
+    assert!(t
+        .core
+        .query(Query::AlbumTracks { id: id.into() })
+        .await
+        .is_err());
+    // The core is still there: the next query is answered.
+    assert!(matches!(
+        t.query(Query::Accounts).await,
+        QueryResult::Accounts(_)
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn youtube_music_signed_in_retries_its_failed_downloads() {
+    let t = TestCore::start_with_ytm("ytm-dl-retry", navidrome(), Arc::new(ytm())).await;
+    add_ytm(&t, None).await;
+    // A catalogue song (from a live search) pinned.
+    let _ = t
+        .query(Query::Search {
+            server_id: String::new(),
+            query: "daft punk get lucky".into(),
+            limit: 10,
+            include_server: true,
+            request_id: "r1".into(),
+        })
+        .await;
+    t.wait_until(10_000.0, |t| {
+        t.events.all().iter().any(|e| matches!(e, Event::SearchResults { results } if results.from_server && results.tracks.iter().any(|x| x.server_id == "ytm")))
+    })
+    .await;
+    t.run(Command::Pin {
+        target: PinTarget::Track {
+            id: "4D7u5KF7SP8".into(),
+        },
+        transcode: false,
+    })
+    .await;
+    async fn download_jobs(t: &TestCore) -> usize {
+        match t.query(Query::Jobs).await {
+            QueryResult::Jobs(j) => j.iter().filter(|j| j.kind == JobKind::Download).count(),
+            other => panic!("{other:?}"),
+        }
+    }
+    t.wait_until(10_000.0, |t| {
+        t.events.all().iter().any(|e| {
+            matches!(e, Event::JobsChanged { jobs } if jobs.iter().any(|j| j.kind == JobKind::Download && matches!(j.state, JobState::Done | JobState::Failed)))
+        })
+    })
+    .await;
+    let before = download_jobs(&t).await;
+    assert_eq!(before, 1);
+    // Say it failed in a way a retry may fix (the account wasn't signed in
+    // when it ran).
+    t.open_db()
+        .with_conn(|c| {
+            c.execute(
+                "UPDATE pin_tracks SET state = 'failed', failures = 1, permanent = 0 WHERE server_id = 'ytm'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    // Signed in (installed reachable, no probe to answer): fetched again.
+    add_ytm(&t, None).await;
+    assert_eq!(download_jobs(&t).await, before + 1);
+}

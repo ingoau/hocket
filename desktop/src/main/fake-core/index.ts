@@ -2004,7 +2004,7 @@ export class FakeCore implements CoreHandle {
     const apply = (r: (id: string) => number) => {
       for (const t of tracks) t.rating = r(t.id);
       for (const a of albums) a.rating = r(a.id);
-      this.libraryChanged("tracks", [...tracks.map((t) => t.id), ...albums.map((a) => a.id)]);
+      this.libraryChanged(["tracks", "albums"], [...tracks.map((t) => t.id), ...albums.map((a) => a.id)]);
       this.emitNowPlaying();
     };
     apply(() => rating);
@@ -2027,7 +2027,7 @@ export class FakeCore implements CoreHandle {
     const apply = (f: (id: string) => boolean) => {
       for (const t of tracks) t.loved = f(t.id);
       for (const a of albums) a.loved = f(a.id);
-      this.libraryChanged("tracks", [...tracks.map((t) => t.id), ...albums.map((a) => a.id)]);
+      this.libraryChanged(["tracks", "albums"], [...tracks.map((t) => t.id), ...albums.map((a) => a.id)]);
       this.emitNowPlaying();
     };
     apply(() => loved);
@@ -2143,9 +2143,10 @@ export class FakeCore implements CoreHandle {
     this.libraryChanged("playlists", [p.playlist.id]);
   }
 
-  private libraryChanged(table: string, ids: string[]): void {
+  private libraryChanged(table: string | string[], ids: string[]): void {
     if (!this.lib) return;
-    this.emit({ type: "libraryChanged", data: { server_id: this.lib.serverId, tables: [table], ids } });
+    // Rating and love name both tables, as the core does (`after_library_mutation`).
+    this.emit({ type: "libraryChanged", data: { server_id: this.lib.serverId, tables: typeof table === "string" ? [table] : table, ids } });
   }
 
   // ---- Downloads -------------------------------------------------------

@@ -6,6 +6,8 @@ import type { ActionTarget, TrackRef } from "@core/api";
 import { t } from "@shared/strings";
 import { bridge } from "../core/bridge";
 import { useApp, useJsonSetting } from "../store/app";
+import { useLibraryVersion } from "../store/queries";
+import { LIBRARY_ITEM_DEPS } from "../store/library-changes";
 import { filterName } from "./filters";
 import { LIBRARY_PINS_KEY, isPinKind, parsePins, pinTap, type LibraryPin, type PinKind, type PinTap } from "./library-pins";
 import { playFilter, playGenre } from "./pin-menus";
@@ -31,7 +33,7 @@ export function useResolvedPins(kind?: PinKind): ResolvedPin[] | undefined {
   const all = usePins();
   const pins = useMemo(() => (kind ? all.filter((p) => p.kind === kind) : all), [all, kind]);
   const filters = useApp((s) => s.filters);
-  const libraryVersion = useApp((s) => s.libraryVersion);
+  const libraryVersion = useLibraryVersion(LIBRARY_ITEM_DEPS);
   const [resolved, setResolved] = useState<ResolvedPin[] | undefined>(undefined);
   const key = JSON.stringify(pins);
   useEffect(() => {

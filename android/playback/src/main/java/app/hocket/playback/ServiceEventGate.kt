@@ -23,7 +23,8 @@ internal class ServiceEventGate {
         }
         is Event.Backend, is Event.MediaSession, is Event.DevicesChanged, is Event.QueueChanged,
         is Event.AccountsChanged, is Event.LibraryChanged, is Event.ConnectionChanged, is Event.Started,
-        is Event.Snapshot, is Event.SettingChanged, is Event.ResumeOfferChanged, is Event.AudioSettingsChanged -> true
+        is Event.Snapshot, is Event.SettingChanged, is Event.ResumeOfferChanged, is Event.AudioSettingsChanged,
+        is Event.NetworkChanged -> true
         else -> false
     }
 }

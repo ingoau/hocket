@@ -17,7 +17,9 @@ import org.junit.runner.RunWith
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowNetwork
+import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowNetworkCapabilities
+import java.util.concurrent.TimeUnit
 
 /** What [NetworkMonitor] reports from the default network's capabilities. */
 @RunWith(AndroidJUnit4::class)
@@ -25,7 +27,11 @@ import org.robolectric.shadows.ShadowNetworkCapabilities
 class NetworkMonitorTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
 
+    /** Validated capabilities for [transport], plus [capabilities]. */
     private fun caps(transport: Int, vararg capabilities: Int): NetworkCapabilities =
+        unvalidated(transport, NetworkCapabilities.NET_CAPABILITY_VALIDATED, *capabilities)
+
+    private fun unvalidated(transport: Int, vararg capabilities: Int): NetworkCapabilities =
         ShadowNetworkCapabilities.newInstance().also { c ->
             shadowOf(c).addTransportType(transport)
             capabilities.forEach { shadowOf(c).addCapability(it) }
@@ -65,11 +71,108 @@ class NetworkMonitorTest {
     }
 
     @Test
-    fun followsTheDefaultNetworkCallbackAndSkipsRepeats() {
+    fun captivePortalsAndUnvalidatedMobileDataAreOffline() {
+        val offline = NetworkState(NetworkKind.Offline, false, null)
+        assertEquals(offline, monitor.stateOf(caps(NetworkCapabilities.TRANSPORT_WIFI, NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)))
+        assertEquals(offline, monitor.stateOf(unvalidated(NetworkCapabilities.TRANSPORT_WIFI, NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)))
+        assertEquals(offline, monitor.stateOf(unvalidated(NetworkCapabilities.TRANSPORT_CELLULAR)))
+    }
+
+    @Test
+    fun anUnvalidatedLocalNetworkStaysOnlineForALanServer() {
+        // No internet, but a self-hosted server on the LAN may answer; the core probes it.
+        assertEquals(NetworkKind.Wifi, monitor.stateOf(unvalidated(NetworkCapabilities.TRANSPORT_WIFI, NetworkCapabilities.NET_CAPABILITY_NOT_METERED)).kind)
+        assertEquals(NetworkKind.Wired, monitor.stateOf(unvalidated(NetworkCapabilities.TRANSPORT_ETHERNET)).kind)
+    }
+
+    @Test
+    fun aHandoverThroughNoNetworkIsReportedOnlyWhereItEnds() {
         val cm = context.getSystemService(ConnectivityManager::class.java)
         val sent = mutableListOf<NetworkState>()
         val online = mutableListOf<Boolean>()
         val m = NetworkMonitor(context, { c -> if (c is Command.SetNetworkState) sent += c.data.state }, onConnectivity = { online += it })
+        m.start()
+        val callback = shadowOf(cm).networkCallbacks.single()
+        val wifi = ShadowNetwork.newInstance(1)
+        val cell = ShadowNetwork.newInstance(2)
+        callback.onAvailable(wifi)
+        callback.onCapabilitiesChanged(wifi, caps(NetworkCapabilities.TRANSPORT_WIFI, NetworkCapabilities.NET_CAPABILITY_NOT_METERED))
+        ShadowLooper.idleMainLooper(NetworkMonitor.DEBOUNCE_MS, TimeUnit.MILLISECONDS)
+        assertEquals(NetworkKind.Wifi, sent.last().kind)
+        val before = sent.size
+        val onlineBefore = online.size
+        // Wi-Fi goes, mobile data takes over a moment later: no Offline in between.
+        callback.onLost(wifi)
+        ShadowLooper.idleMainLooper(NetworkMonitor.DEBOUNCE_MS / 2, TimeUnit.MILLISECONDS)
+        callback.onAvailable(cell)
+        callback.onCapabilitiesChanged(cell, caps(NetworkCapabilities.TRANSPORT_CELLULAR))
+        assertEquals(before, sent.size)
+        ShadowLooper.idleMainLooper(NetworkMonitor.DEBOUNCE_MS, TimeUnit.MILLISECONDS)
+        assertEquals(listOf(NetworkState(NetworkKind.Cellular, true, null)), sent.drop(before))
+        assertEquals(onlineBefore, online.size)
+        // A loss that holds is reported.
+        callback.onLost(cell)
+        ShadowLooper.idleMainLooper(NetworkMonitor.DEBOUNCE_MS, TimeUnit.MILLISECONDS)
+        assertEquals(NetworkState(NetworkKind.Offline, false, null), sent.last())
+        assertEquals(false, online.last())
+        m.stop()
+    }
+
+    @Test
+    fun steadyCapabilityNoiseDoesNotHoldBackAChange() {
+        val cm = context.getSystemService(ConnectivityManager::class.java)
+        val sent = mutableListOf<NetworkState>()
+        val m = NetworkMonitor(context, { c -> if (c is Command.SetNetworkState) sent += c.data.state })
+        m.start()
+        val callback = shadowOf(cm).networkCallbacks.single()
+        val wifi = ShadowNetwork.newInstance(1)
+        val cell = ShadowNetwork.newInstance(2)
+        callback.onAvailable(wifi)
+        callback.onCapabilitiesChanged(wifi, caps(NetworkCapabilities.TRANSPORT_WIFI, NetworkCapabilities.NET_CAPABILITY_NOT_METERED))
+        ShadowLooper.idleMainLooper(NetworkMonitor.DEBOUNCE_MS, TimeUnit.MILLISECONDS)
+        val before = sent.size
+        // Mobile data takes over, then repeats the same capabilities every few hundred ms.
+        callback.onAvailable(cell)
+        repeat(3) {
+            callback.onCapabilitiesChanged(cell, caps(NetworkCapabilities.TRANSPORT_CELLULAR))
+            ShadowLooper.idleMainLooper(NetworkMonitor.DEBOUNCE_MS * 2 / 5, TimeUnit.MILLISECONDS)
+        }
+        assertEquals(listOf(NetworkState(NetworkKind.Cellular, true, null)), sent.drop(before))
+        m.stop()
+    }
+
+    @Test
+    fun aNetworkThatKeepsChangingIsStillReported() {
+        val cm = context.getSystemService(ConnectivityManager::class.java)
+        val sent = mutableListOf<NetworkState>()
+        val m = NetworkMonitor(context, { c -> if (c is Command.SetNetworkState) sent += c.data.state })
+        m.start()
+        val callback = shadowOf(cm).networkCallbacks.single()
+        val wifi = ShadowNetwork.newInstance(1)
+        val cell = ShadowNetwork.newInstance(2)
+        callback.onAvailable(wifi)
+        callback.onCapabilitiesChanged(wifi, caps(NetworkCapabilities.TRANSPORT_WIFI, NetworkCapabilities.NET_CAPABILITY_NOT_METERED))
+        ShadowLooper.idleMainLooper(NetworkMonitor.DEBOUNCE_MS, TimeUnit.MILLISECONDS)
+        val before = sent.size
+        callback.onAvailable(cell)
+        // Metered and unmetered in turn, each before the last has settled.
+        repeat(6) { i ->
+            val c = if (i % 2 == 0) caps(NetworkCapabilities.TRANSPORT_CELLULAR)
+            else caps(NetworkCapabilities.TRANSPORT_CELLULAR, NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+            callback.onCapabilitiesChanged(cell, c)
+            ShadowLooper.idleMainLooper(NetworkMonitor.DEBOUNCE_MS / 2, TimeUnit.MILLISECONDS)
+        }
+        // Reported within twice the debounce of the first change, not held back by the rest.
+        assertEquals(NetworkKind.Cellular, sent.drop(before).first().kind)
+        m.stop()
+    }
+
+    @Test
+    fun followsTheDefaultNetworkCallbackAndSkipsRepeats() {
+        val cm = context.getSystemService(ConnectivityManager::class.java)
+        val sent = mutableListOf<NetworkState>()
+        val online = mutableListOf<Boolean>()
+        val m = NetworkMonitor(context, { c -> if (c is Command.SetNetworkState) sent += c.data.state }, onConnectivity = { online += it }, debounceMs = 0)
         m.start()
         // Whatever the default network is now, it is reported once at start.
         assertEquals(1, sent.size)
@@ -103,7 +206,7 @@ class NetworkMonitorTest {
     fun aBlockedDefaultNetworkIsOffline() {
         val sent = mutableListOf<NetworkState>()
         val online = mutableListOf<Boolean>()
-        val m = NetworkMonitor(context, { c -> if (c is Command.SetNetworkState) sent += c.data.state }, onConnectivity = { online += it })
+        val m = NetworkMonitor(context, { c -> if (c is Command.SetNetworkState) sent += c.data.state }, onConnectivity = { online += it }, debounceMs = 0)
         m.start()
         val callback = shadowOf(context.getSystemService(ConnectivityManager::class.java)).networkCallbacks.single()
         val wifi = ShadowNetwork.newInstance(1)
@@ -127,7 +230,7 @@ class NetworkMonitorTest {
     @Test
     fun theStartUpReadIsDroppedOnceTheCallbackHasSpoken() {
         val sent = mutableListOf<NetworkState>()
-        val m = NetworkMonitor(context, { c -> if (c is Command.SetNetworkState) sent += c.data.state })
+        val m = NetworkMonitor(context, { c -> if (c is Command.SetNetworkState) sent += c.data.state }, debounceMs = 0)
         m.start()
         val callback = shadowOf(context.getSystemService(ConnectivityManager::class.java)).networkCallbacks.single()
         val cell = ShadowNetwork.newInstance(2)

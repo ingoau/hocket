@@ -166,6 +166,8 @@ pub enum Internal {
     },
     /// The server half of a two-batch search.
     ServerSearch {
+        /// The search's sequence number (`Actor::server_search`).
+        seq: u64,
         results: SearchResults,
     },
     /// A lyrics fetch (server or external) finished.
@@ -175,6 +177,10 @@ pub enum Internal {
         lyrics: Option<Lyrics>,
         /// Emit `LyricsChanged` (false for a silent prefetch).
         announce: bool,
+        /// Nothing found because a request failed (not "no lyrics").
+        failed: bool,
+        /// The fetch's generation (`Actor::lyrics_inflight`).
+        generation: u64,
     },
     /// A background refresh of an artist's cached top songs ended;
     /// `changed` when the cache now holds a different list.
@@ -596,7 +602,15 @@ impl Core {
             .tx
             .send(ActorMsg::Query(query, tx))
             .map_err(|_| CoreError::ShutDown)?;
-        rx.await.map_err(|_| CoreError::ShutDown)
+        // A reply dropped by a running core is a query that failed (a live
+        // page that couldn't be fetched), not a shutdown.
+        rx.await.map_err(|_| {
+            if self.inner.tx.is_closed() {
+                CoreError::ShutDown
+            } else {
+                CoreError::Other("the query failed".into())
+            }
+        })
     }
 
     pub async fn query_json(&self, json: &str) -> Result<String, CoreError> {

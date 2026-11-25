@@ -5,6 +5,8 @@ import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/rea
 import type { ActionTarget, SortOrder, Track, TrackRef } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp, useOfflineDimming, useSetting } from "../store/app";
+import { useLibraryVersion } from "../store/queries";
+import { settledIds, type LibraryDeps } from "../store/library-changes";
 import { SK } from "@shared/settings-keys";
 import { useSurfaceTuning } from "../lib/gesture-prefs";
 import { useSettle, useSwipe } from "../lib/swipe-hook";
@@ -505,7 +507,7 @@ function Cell({ col, track, index, playing, serverId, onPlay, primer, omitArtist
         </div>
       );
     case "art":
-      return <div className="td" role="gridcell"><Artwork id={track.coverArt} size={64} className="art" /></div>;
+      return <div className="td" role="gridcell"><Artwork id={track.coverArt} size={64} className="art" dwell /></div>;
     case "title":
       return <div className={`${cls} title`} role="gridcell" title={track.title}>{track.title}{track.explicit ? <span className="badge" style={{ marginLeft: 6 }}><span aria-hidden="true">E</span><span className="sr-only">{t("a11y.explicit")}</span></span> : null}</div>;
     case "artist":
@@ -537,14 +539,15 @@ function Cell({ col, track, index, playing, serverId, onPlay, primer, omitArtist
 }
 
 /** Hook to keep a paged window of tracks loaded for the virtualiser. */
-export function usePagedTracks(fetchPage: ((offset: number, limit: number) => Promise<{ items: Track[]; total: number }>) | null, deps: unknown[], pageSize = 200) {
+export function usePagedTracks(fetchPage: ((offset: number, limit: number) => Promise<{ items: Track[]; total: number }>) | null, deps: unknown[], library?: LibraryDeps, pageSize = 200) {
   const [rows, setRows] = useState<(Track | undefined)[]>([]);
   const [total, setTotal] = useState(0);
   const loading = useRef(new Set<number>());
   const generation = useRef(0);
   const pages = useRef(new Map<number, Track[]>());
   const around = useRef(0);
-  const libraryVersion = useApp((s) => s.libraryVersion);
+  // Refetched when a library change touches what the list reads (`library`, anything by default).
+  const libraryVersion = useLibraryVersion(library, () => settledIds(loading.current.size > 0, () => [...pages.current.values()].flatMap((p) => p.map((t) => t.id))));
   const load = useCallback((page: number) => {
     if (!fetchPage || loading.current.has(page) || pages.current.has(page)) return;
     loading.current.add(page);
@@ -557,7 +560,10 @@ export function usePagedTracks(fetchPage: ((offset: number, limit: number) => Pr
         setTotal(res.total);
         setRows(materializePages(pages.current, res.total, pageSize));
       })
-      .finally(() => loading.current.delete(page));
+      .finally(() => {
+        // A page from before a reload must not mark the reload's request for it done.
+        if (gen === generation.current) loading.current.delete(page);
+      });
   }, [fetchPage, pageSize]);
   // A new list (deps) starts empty; a library refresh keeps the rows on screen
   // and reloads the pages that were loaded, so nothing flashes or loses focus.

@@ -38,7 +38,7 @@ use super::queries::{
     set_playlist_tracks_in, sweep, upsert_albums_in, upsert_artists_in, upsert_playlists_in,
     upsert_tracks_in,
 };
-use super::{Db, DbError};
+use super::{Db, DbError, DbResult};
 
 /// Page size for `search3` / `getAlbumList2` (Navidrome's maximum).
 pub const PAGE_SIZE: u32 = 500;
@@ -175,6 +175,10 @@ impl From<JobError> for SyncError {
 pub trait SyncObserver: Send + Sync {
     fn progress(&self, progress: SyncProgress);
     fn checkpoint(&self) -> BoxFuture<'_, Result<(), SyncError>>;
+    /// Cancelled now (checked before each write, without waiting).
+    fn cancelled(&self) -> bool {
+        false
+    }
 }
 
 /// No-op observer (tests, one-off runs).
@@ -192,6 +196,9 @@ impl SyncObserver for JobContext {
     }
     fn checkpoint(&self) -> BoxFuture<'_, Result<(), SyncError>> {
         Box::pin(async move { JobContext::checkpoint(self).await.map_err(SyncError::from) })
+    }
+    fn cancelled(&self) -> bool {
+        self.is_cancelled()
     }
 }
 
@@ -362,7 +369,7 @@ impl LibrarySync {
             obs.checkpoint().await?;
             match c.phase {
                 Phase::Artists => {
-                    let n = self.sync_artists(c.gen).await?;
+                    let n = self.sync_artists(obs, c.gen).await?;
                     stats.artists += n;
                     c.ready_tables.push("artists".into());
                     c.phase = Phase::Albums;
@@ -372,7 +379,7 @@ impl LibrarySync {
                 }
                 Phase::Albums => {
                     if c.full {
-                        let (n, done) = self.sync_albums_page(c.gen, c.offset).await?;
+                        let (n, done) = self.sync_albums_page(obs, c.gen, c.offset).await?;
                         stats.albums += n;
                         c.offset += n as u32;
                         if done {
@@ -381,11 +388,12 @@ impl LibrarySync {
                             c.offset = 0;
                         }
                     } else {
-                        let (n, tracks) =
-                            self.sync_new_albums(c.gen, c.newest_album_created).await?;
+                        let (n, tracks) = self
+                            .sync_new_albums(obs, c.gen, c.newest_album_created)
+                            .await?;
                         stats.albums += n;
                         stats.tracks += tracks;
-                        self.sync_starred(c.gen).await?;
+                        self.sync_starred(obs, c.gen).await?;
                         c.phase = Phase::Playlists;
                         c.offset = 0;
                     }
@@ -393,7 +401,7 @@ impl LibrarySync {
                     self.report(obs, &c, c.offset, total_tracks, false);
                 }
                 Phase::Tracks => {
-                    let (n, done) = self.sync_tracks_page(c.gen, c.offset).await?;
+                    let (n, done) = self.sync_tracks_page(obs, c.gen, c.offset).await?;
                     stats.tracks += n;
                     c.offset += n as u32;
                     if done {
@@ -406,9 +414,9 @@ impl LibrarySync {
                 }
                 Phase::Playlists => {
                     if !c.full {
-                        stats.tracks += self.sync_recent_plays().await?;
+                        stats.tracks += self.sync_recent_plays(obs).await?;
                     }
-                    let n = self.sync_playlists(c.gen, c.full).await?;
+                    let n = self.sync_playlists(obs, c.gen, c.full).await?;
                     stats.playlists += n;
                     if !c.ready_tables.iter().any(|t| t == "playlists") {
                         c.ready_tables.push("playlists".into());
@@ -419,7 +427,7 @@ impl LibrarySync {
                     self.report(obs, &c, 0, None, false);
                 }
                 Phase::Genres => {
-                    self.sync_genres(c.gen).await?;
+                    self.sync_genres(obs, c.gen).await?;
                     if !c.ready_tables.iter().any(|t| t == "genres") {
                         c.ready_tables.push("genres".into());
                     }
@@ -462,6 +470,36 @@ impl LibrarySync {
         Ok(stats)
     }
 
+    /// A cancelled job (its account removed while a request was in
+    /// flight) writes nothing more: every write follows a network await.
+    fn alive(&self, obs: &dyn SyncObserver) -> Result<(), SyncError> {
+        if obs.cancelled() {
+            Err(SyncError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Write what a request brought, unless the sync was cancelled meanwhile.
+    fn write<T>(
+        &self,
+        obs: &dyn SyncObserver,
+        f: impl FnOnce(&rusqlite::Transaction) -> DbResult<T>,
+    ) -> Result<T, SyncError> {
+        self.alive(obs)?;
+        // Again under the lock: removing the account may cancel the job
+        // (and delete its rows) while this waits for it.
+        self.db
+            .with_tx(|tx| {
+                if obs.cancelled() {
+                    Ok(None)
+                } else {
+                    f(tx).map(Some)
+                }
+            })?
+            .ok_or(SyncError::Cancelled)
+    }
+
     async fn run_provider(
         &self,
         p: &dyn crate::provider::Provider,
@@ -487,7 +525,7 @@ impl LibrarySync {
             let page = p.library_page(offset, self.page_size).await?;
             let changed = vec![None; page.tracks.len()];
             let none_a = vec![None; page.albums.len()];
-            self.db.with_tx(|tx| {
+            self.write(obs, |tx| {
                 upsert_artists_in(tx, &page.artists, gen)?;
                 upsert_albums_in(tx, &page.albums, &none_a, gen)?;
                 upsert_tracks_in(tx, &page.tracks, &changed, gen)?;
@@ -516,7 +554,7 @@ impl LibrarySync {
             Err(SubsonicError::Unsupported(_)) => vec![],
             Err(e) => return Err(e.into()),
         };
-        self.db.with_tx(|tx| {
+        self.write(obs, |tx| {
             upsert_playlists_in(tx, &playlists, gen)?;
             sweep(tx, "playlists", &mid, gen)?;
             Ok(())
@@ -539,7 +577,7 @@ impl LibrarySync {
                 .collect();
             let changed = vec![None; tracks.len()];
             let ids = contents.visible_ids();
-            self.db.with_tx(|tx| {
+            self.write(obs, |tx| {
                 upsert_tracks_in(tx, &tracks, &changed, gen)?;
                 set_playlist_tracks_in(tx, &mid, &pl.id, &ids)?;
                 Ok(())
@@ -564,7 +602,7 @@ impl LibrarySync {
         Ok(stats)
     }
 
-    async fn sync_artists(&self, gen: i64) -> Result<usize, SyncError> {
+    async fn sync_artists(&self, obs: &dyn SyncObserver, gen: i64) -> Result<usize, SyncError> {
         let index = self.api().artists().await?;
         let sid = self.server_id();
         let artists: Vec<api::Artist> = index
@@ -574,12 +612,17 @@ impl LibrarySync {
             .map(|a| artist_from_id3(sid, a))
             .collect();
         let n = artists.len();
-        self.db.with_tx(|tx| upsert_artists_in(tx, &artists, gen))?;
+        self.write(obs, |tx| upsert_artists_in(tx, &artists, gen))?;
         Ok(n)
     }
 
     /// One page of `getAlbumList2 alphabeticalByName`. Returns (count, done).
-    async fn sync_albums_page(&self, gen: i64, offset: u32) -> Result<(usize, bool), SyncError> {
+    async fn sync_albums_page(
+        &self,
+        obs: &dyn SyncObserver,
+        gen: i64,
+        offset: u32,
+    ) -> Result<(usize, bool), SyncError> {
         let page = self
             .api()
             .album_list2(AlbumListType::AlphabeticalByName, self.page_size, offset)
@@ -588,13 +631,17 @@ impl LibrarySync {
         let albums: Vec<api::Album> = page.iter().map(|a| album_from_id3(sid, a)).collect();
         let changed: Vec<Option<f64>> = page.iter().map(album_changed_ms).collect();
         let n = albums.len();
-        self.db
-            .with_tx(|tx| upsert_albums_in(tx, &albums, &changed, gen))?;
+        self.write(obs, |tx| upsert_albums_in(tx, &albums, &changed, gen))?;
         Ok((n, (n as u32) < self.page_size))
     }
 
     /// One page of `search3` with an empty query. Returns (count, done).
-    async fn sync_tracks_page(&self, gen: i64, offset: u32) -> Result<(usize, bool), SyncError> {
+    async fn sync_tracks_page(
+        &self,
+        obs: &dyn SyncObserver,
+        gen: i64,
+        offset: u32,
+    ) -> Result<(usize, bool), SyncError> {
         let r = self
             .api()
             .search3("", Search3Page::songs(self.page_size, offset))
@@ -613,14 +660,14 @@ impl LibrarySync {
             .map(child_changed_ms)
             .collect();
         let n = tracks.len();
-        self.db
-            .with_tx(|tx| upsert_tracks_in(tx, &tracks, &changed, gen))?;
+        self.write(obs, |tx| upsert_tracks_in(tx, &tracks, &changed, gen))?;
         Ok((n, (r.song.len() as u32) < self.page_size))
     }
 
     /// Incremental: walk `newest` albums until one we already knew about.
     async fn sync_new_albums(
         &self,
+        obs: &dyn SyncObserver,
         gen: i64,
         newest_known: Option<f64>,
     ) -> Result<(usize, usize), SyncError> {
@@ -679,7 +726,7 @@ impl LibrarySync {
                     ..Default::default()
                 })
                 .collect();
-            self.db.with_tx(|tx| {
+            self.write(obs, |tx| {
                 // Artists first (only fills in unknown ones: album_count 0 keeps the existing value via the upsert's CASE).
                 for ar in &artists {
                     let exists: i64 = tx.query_row(
@@ -709,7 +756,7 @@ impl LibrarySync {
     /// already agrees with (anything played earlier is unchanged too).
     /// Albums the mirror does not have are left to the new-albums pass.
     /// Returns how many songs were refreshed.
-    async fn sync_recent_plays(&self) -> Result<usize, SyncError> {
+    async fn sync_recent_plays(&self, obs: &dyn SyncObserver) -> Result<usize, SyncError> {
         let sid = self.server_id();
         let page = self
             .api()
@@ -740,7 +787,7 @@ impl LibrarySync {
             let album = album_from_id3(sid, &full.album);
             let tracks: Vec<api::Track> =
                 full.song.iter().map(|c| track_from_child(sid, c)).collect();
-            self.db.with_tx(|tx| {
+            self.write(obs, |tx| {
                 tx.execute(
                     "UPDATE albums SET play_count = ?3, last_played = ?4 WHERE server_id = ?1 AND id = ?2",
                     rusqlite::params![sid, album.id, album.play_count, album.last_played],
@@ -761,10 +808,10 @@ impl LibrarySync {
     /// Reconcile loved flags from `getStarred2` (cheap and catches changes
     /// made on other clients; ratings have no such endpoint and wait for the
     /// full pass).
-    async fn sync_starred(&self, _gen: i64) -> Result<(), SyncError> {
+    async fn sync_starred(&self, obs: &dyn SyncObserver, _gen: i64) -> Result<(), SyncError> {
         let starred = self.api().starred2().await?;
         let sid = self.server_id();
-        self.db.with_tx(|tx| {
+        self.write(obs, |tx| {
             for (table, ids) in [
                 (
                     "tracks",
@@ -807,7 +854,12 @@ impl LibrarySync {
         Ok(())
     }
 
-    async fn sync_playlists(&self, gen: i64, full: bool) -> Result<usize, SyncError> {
+    async fn sync_playlists(
+        &self,
+        obs: &dyn SyncObserver,
+        gen: i64,
+        full: bool,
+    ) -> Result<usize, SyncError> {
         let sid = self.server_id();
         let username = self.api().username();
         let list = self.api().playlists().await?;
@@ -816,7 +868,7 @@ impl LibrarySync {
             .iter()
             .map(|p| playlist_from_body(sid, username.as_deref(), p))
             .collect();
-        self.db.with_tx(|tx| {
+        self.write(obs, |tx| {
             upsert_playlists_in(tx, &playlists, gen)?;
             sweep(tx, "playlists", sid, gen)?;
             Ok(())
@@ -843,7 +895,7 @@ impl LibrarySync {
                 .collect();
             let changed: Vec<Option<f64>> = detail.entry.iter().map(child_changed_ms).collect();
             let ids: Vec<String> = detail.entry.iter().map(|c| c.id.clone()).collect();
-            self.db.with_tx(|tx| {
+            self.write(obs, |tx| {
                 // Entries may reference tracks not yet paged in on a first run; keep them.
                 upsert_tracks_in(tx, &tracks, &changed, gen)?;
                 set_playlist_tracks_in(tx, sid, &p.id, &ids)?;
@@ -854,7 +906,7 @@ impl LibrarySync {
         Ok(refreshed)
     }
 
-    async fn sync_genres(&self, gen: i64) -> Result<(), SyncError> {
+    async fn sync_genres(&self, obs: &dyn SyncObserver, gen: i64) -> Result<(), SyncError> {
         let genres: Vec<api::Genre> = self
             .api()
             .genres()
@@ -862,8 +914,10 @@ impl LibrarySync {
             .iter()
             .map(genre_from_body)
             .collect();
-        self.db.replace_genres(self.server_id(), &genres, gen)?;
-        Ok(())
+        let sid = self.server_id().to_string();
+        self.write(obs, |tx| {
+            super::queries::replace_genres(tx, &sid, &genres, gen)
+        })
     }
 
     /// Mark-and-sweep plus derived counts.
@@ -1096,6 +1150,33 @@ mod tests {
             db.accounts().unwrap().is_empty(),
             "sync doesn't create server rows"
         );
+    }
+
+    #[tokio::test]
+    async fn a_page_arriving_after_cancel_is_not_written() {
+        let db = Db::open_in_memory().unwrap();
+        let s = server();
+        let sync = sync_for(&db, &s, Arc::new(Mutex::new(vec![])));
+        // The account was removed (its sync cancelled) while the first
+        // request was in flight: the checkpoint before it had passed.
+        struct CancelledInFlight;
+        impl SyncObserver for CancelledInFlight {
+            fn progress(&self, _: SyncProgress) {}
+            fn checkpoint(&self) -> BoxFuture<'_, Result<(), SyncError>> {
+                Box::pin(async { Ok(()) })
+            }
+            fn cancelled(&self) -> bool {
+                true
+            }
+        }
+        let e = sync.run(true, &CancelledInFlight).await.unwrap_err();
+        assert!(matches!(e, SyncError::Cancelled));
+        assert!(s.calls_to("getArtists") > 0, "the request went out");
+        assert_eq!(db.track_count("srv", &None).unwrap(), 0);
+        let artists: i64 = db
+            .with_conn(|c| Ok(c.query_row("SELECT count(*) FROM artists", [], |r| r.get(0))?))
+            .unwrap();
+        assert_eq!(artists, 0, "nothing written for the removed account");
     }
 
     #[tokio::test]

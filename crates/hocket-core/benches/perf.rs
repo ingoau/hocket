@@ -38,11 +38,13 @@ fn playing_doc(n: usize) -> SessionDocument {
         entropy: &e,
     };
     let context = QueueContext {
-        server_id: "srv".into(),
+        source: "srv".into(),
         kind: ContextKind::Album { id: "a".into() },
         label: "Album".into(),
         sort: SortOrder::Default,
-        tracks: (0..n).map(|i| format!("t{i:05}")).collect(),
+        tracks: (0..n)
+            .map(|i| TrackRef::new("srv", format!("t{i:05}")))
+            .collect(),
     };
     reduce(
         &new_document("s", "id".into(), 0.0),
@@ -61,10 +63,11 @@ fn playing_doc(n: usize) -> SessionDocument {
     .0
 }
 
-fn resolve(id: &TrackId) -> TrackSummary {
+fn resolve(track: &TrackRef) -> TrackSummary {
     TrackSummary {
-        id: id.clone(),
-        title: id.clone(),
+        id: track.id.clone(),
+        server_id: track.source.clone(),
+        title: track.id.clone(),
         artist: Some("Artist".into()),
         album: Some("Album".into()),
         duration_ms: 180_000,

@@ -59,7 +59,8 @@ function fetchArtistCover(key: string, id: string, version: number): void {
 /** The pictures of [ids] on [serverId] (a lookup), and a tick that moves whenever one arrives. */
 function useArtistCovers(serverId: string, ids: readonly string[]): [(id: string) => string | undefined, number] {
   const [tick, setTick] = useState(0);
-  const libraryVersion = useApp((s) => s.libraryVersion);
+  // The cache is shared, so its entries carry the store-wide change count (a local mirror read).
+  const libraryVersion = useApp((s) => s.libraryChanges.seq);
   useEffect(() => {
     const listener = () => setTick((n) => n + 1);
     artistListeners.add(listener);
@@ -301,7 +302,7 @@ const LibraryRow = memo(function LibraryRow({ entry: e, index, count, tabStop, o
         {...libraryDragProps(target, e.title, { allowControls: true })}
         {...(e.kind === "playlist" ? playlistDropZone(e.id, e.title) : {})}
         data-testid="sidebar-library-item" data-entry={key}>
-        <span className={`lib-thumb ${e.kind}`} aria-hidden="true"><Artwork id={e.coverArt} size={96} round={e.kind === "artist"} /></span>
+        <span className={`lib-thumb ${e.kind}`} aria-hidden="true"><Artwork id={e.coverArt} size={96} round={e.kind === "artist"} dwell /></span>
         <span className="lib-text">
           <span className="lib-title">{e.title}</span>
           <span className="lib-sub">{sub}</span>

@@ -78,11 +78,16 @@ impl ReqwestFetcher {
 
 impl Default for ReqwestFetcher {
     fn default() -> Self {
-        // Audio bytes as the server has them: ranges count those.
+        // Audio bytes as the server has them: ranges count those. A dead
+        // host fails fast instead of waiting out the OS connect timeout, and
+        // a redirect never carries the Subsonic token to another host (as
+        // the core's own clients).
         Self::new(
             reqwest::Client::builder()
                 .no_gzip()
                 .no_brotli()
+                .connect_timeout(std::time::Duration::from_secs(15))
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .unwrap_or_default(),
         )

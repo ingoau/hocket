@@ -12,6 +12,7 @@ use hocket_core::lyrics::{LyricsError, LyricsHttp};
 use hocket_core::sim::SimTime;
 use hocket_core::subsonic::fake::FakeServer;
 use hocket_core::subsonic::types::{CueLine, LyricCue, LyricLineBody, StructuredLyrics};
+use hocket_core::subsonic::SubsonicError;
 use hocket_core::Core;
 
 async fn synced(name: &str, server: FakeServer) -> TestCore {
@@ -648,6 +649,122 @@ async fn lyrics_degrade_honestly_across_tiers_and_external_is_opt_in() {
     .await;
     let l0 = lyrics_of(&t, "t0").await.unwrap();
     assert_eq!(l0.offset_ms, 250);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_lyrics_fetch_is_not_retried_on_every_ask() {
+    let server = seeded_server(2, 180.0);
+    server
+        .state
+        .lock()
+        .lyrics
+        .insert("t0".into(), vec![syllable_entry()]);
+    let t = synced("lyrics-fail", server).await;
+    // The server stops answering (the platform still says online).
+    t.server.set_offline(true);
+    assert!(lyrics_of(&t, "t0").await.is_none());
+    let calls = t.server.calls_to("getLyricsBySongId");
+    assert_eq!(calls, 1);
+    t.server.set_offline(false);
+    for _ in 0..3 {
+        assert!(lyrics_of(&t, "t0").await.is_none());
+    }
+    assert_eq!(
+        t.server.calls_to("getLyricsBySongId"),
+        calls,
+        "the failure is remembered"
+    );
+    // Asked for explicitly, it is tried again.
+    t.run(Command::FetchLyrics {
+        track_id: "t0".into(),
+    })
+    .await;
+    t.core.settle().await;
+    assert_eq!(t.server.calls_to("getLyricsBySongId"), calls + 1);
+    assert!(lyrics_of(&t, "t0").await.is_some());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_forced_lyrics_fetch_asks_a_server_marked_unreachable() {
+    let server = seeded_server(2, 180.0);
+    server
+        .state
+        .lock()
+        .lyrics
+        .insert("t0".into(), vec![syllable_entry()]);
+    let t = synced("lyrics-force", server).await;
+    // A probe fails: the account is marked unreachable.
+    t.core
+        .post_internal(hocket_core::core::Internal::Probed {
+            account_id: t.server_id.clone(),
+            result: Err((ErrorKind::Network, "no route".into())),
+        })
+        .unwrap();
+    t.core.settle().await;
+    match t.query(Query::Accounts).await {
+        QueryResult::Accounts(a) => assert!(!a[0].reachable),
+        other => panic!("{other:?}"),
+    }
+    // Unasked, it isn't bothered.
+    let calls = t.server.calls_to("getLyricsBySongId");
+    assert!(lyrics_of(&t, "t0").await.is_none());
+    assert_eq!(t.server.calls_to("getLyricsBySongId"), calls);
+    // Asked for explicitly, it is.
+    t.events.clear();
+    t.run(Command::FetchLyrics {
+        track_id: "t0".into(),
+    })
+    .await;
+    t.core.settle().await;
+    assert_eq!(t.server.calls_to("getLyricsBySongId"), calls + 1);
+    assert!(t.events.all().iter().any(
+        |e| matches!(e, Event::LyricsChanged { track_id, lyrics: Some(_) } if track_id == "t0")
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stale_lyrics_answer_leaves_the_newer_fetch_alone() {
+    use hocket_core::core::Internal;
+    let server = seeded_server(2, 180.0);
+    server
+        .state
+        .lock()
+        .lyrics
+        .insert("t0".into(), vec![syllable_entry()]);
+    let t = synced("lyrics-stale", server).await;
+    t.server.set_delay(
+        "getLyricsBySongId",
+        Some(std::time::Duration::from_millis(300)),
+    );
+    t.events.clear();
+    t.dispatch(Command::FetchLyrics {
+        track_id: "t0".into(),
+    });
+    // What an aborted earlier fetch of the same track had already sent: it
+    // must not end (or answer for) the one now running.
+    t.core
+        .post_internal(Internal::LyricsFetched {
+            server_id: t.server_id.clone(),
+            track_id: "t0".into(),
+            lyrics: None,
+            announce: true,
+            failed: true,
+            generation: 0,
+        })
+        .unwrap();
+    t.core.settle().await;
+    let announced: Vec<bool> = t
+        .events
+        .all()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::LyricsChanged { track_id, lyrics } if track_id == "t0" => Some(lyrics.is_some()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(announced, vec![true], "only the running fetch answers");
+    // Nor is its failure remembered: asked again, it is answered.
+    assert!(lyrics_of(&t, "t0").await.is_some());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1539,6 +1656,223 @@ async fn search_asking_the_server_always_gets_one_server_batch() {
     let server = only_server(&b);
     assert_eq!(server.len(), 1, "{b:?}");
     assert!(server[0].tracks.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_newer_search_replaces_the_one_still_asking_the_server() {
+    let api = seeded_server(4, 180.0);
+    let t = synced("search-typing", api.clone()).await;
+    // Typed quickly: the second query arrives before the first is answered
+    // (the server takes its time, so the first is still asking).
+    api.set_delay("search3", Some(std::time::Duration::from_millis(300)));
+    let asked = api.calls_to("search3");
+    for (q, id) in [("Tra", "k1"), ("Track", "k2")] {
+        t.query(Query::Search {
+            server_id: t.server_id.clone(),
+            query: q.into(),
+            limit: 20,
+            include_server: true,
+            request_id: id.into(),
+        })
+        .await;
+    }
+    t.core.settle().await;
+    assert_eq!(api.calls_to("search3"), asked + 2, "both asked the server");
+    let server: Vec<SearchResults> = t
+        .events
+        .all()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::SearchResults { results } if results.from_server => Some(results),
+            _ => None,
+        })
+        .collect();
+    for id in ["k1", "k2"] {
+        let mine: Vec<_> = server.iter().filter(|b| b.request_id == id).collect();
+        assert_eq!(
+            mine.len(),
+            1,
+            "exactly one server batch for {id}: {server:?}"
+        );
+    }
+    let k1 = server.iter().find(|b| b.request_id == "k1").unwrap();
+    assert_eq!(k1.query, "Tra");
+    assert!(k1.tracks.is_empty(), "replaced, answered empty: {k1:?}");
+    let k2 = server.iter().find(|b| b.request_id == "k2").unwrap();
+    assert_eq!(k2.query, "Track");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_newer_search_not_asking_the_server_stops_the_one_still_asking() {
+    let api = seeded_server(4, 180.0);
+    let t = synced("search-reuse-local", api.clone()).await;
+    api.set_delay("search3", Some(std::time::Duration::from_millis(300)));
+    // The same request id; the second search doesn't ask the server (the
+    // text was cleared), so it answers its server batch at once, empty.
+    for q in ["Tra", ""] {
+        t.query(Query::Search {
+            server_id: t.server_id.clone(),
+            query: q.into(),
+            limit: 20,
+            include_server: true,
+            request_id: "same".into(),
+        })
+        .await;
+    }
+    // Long enough for the first search's server answer, had it kept on.
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    t.core.settle().await;
+    let server: Vec<SearchResults> = t
+        .events
+        .all()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::SearchResults { results } if results.from_server => Some(results),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(server.len(), 1, "one server batch for the id: {server:?}");
+    assert_eq!(server[0].query, "", "the newer search's");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_newer_search_reusing_the_request_id_gets_one_server_batch() {
+    let api = seeded_server(4, 180.0);
+    let t = synced("search-reuse", api.clone()).await;
+    api.set_delay("search3", Some(std::time::Duration::from_millis(300)));
+    // One request id for both (a caller that keeps it while the source or
+    // the text changes): the first is still asking when the second arrives.
+    for q in ["Tra", "Track"] {
+        t.query(Query::Search {
+            server_id: t.server_id.clone(),
+            query: q.into(),
+            limit: 20,
+            include_server: true,
+            request_id: "same".into(),
+        })
+        .await;
+    }
+    t.core.settle().await;
+    let server: Vec<SearchResults> = t
+        .events
+        .all()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::SearchResults { results } if results.from_server => Some(results),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(server.len(), 1, "one server batch for the id: {server:?}");
+    assert_eq!(server[0].query, "Track", "the newer search's");
+}
+
+fn net(kind: NetworkKind, metered: bool) -> Command {
+    Command::SetNetworkState {
+        state: NetworkState {
+            kind,
+            metered,
+            network_id: Some("home".into()),
+        },
+    }
+}
+
+fn downloaded(t: &TestCore) -> bool {
+    t.events.all().iter().any(|e| {
+        matches!(e, Event::PinsChanged { pins } if pins.iter().any(|p| p.downloaded_count == 1))
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_downloads_are_retried_on_a_network_handover() {
+    let t = synced("dl-retry", seeded_server(2, 180.0)).await;
+    t.run(net(NetworkKind::Wifi, false)).await;
+    // The server stops answering while the track downloads (an outage its
+    // probe never notices: the account stays reachable): it fails.
+    t.server.set_offline(true);
+    t.run(Command::Pin {
+        target: PinTarget::Track { id: "t0".into() },
+        transcode: false,
+    })
+    .await;
+    t.run_for(1_000.0).await;
+    let tries = t.server.calls_to("download");
+    assert!(tries >= 1);
+    assert!(!downloaded(&t));
+    t.server.set_offline(false);
+    t.events.clear();
+    // Wi-Fi to cellular, with no offline in between: fetched again.
+    t.run(net(NetworkKind::Cellular, false)).await;
+    t.wait_until(10_000.0, |t| downloaded(t)).await;
+    assert_eq!(t.server.calls_to("download"), tries + 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refused_download_waits_for_the_users_retry() {
+    let t = synced("dl-refused", seeded_server(2, 180.0)).await;
+    t.run(net(NetworkKind::Wifi, false)).await;
+    // The server says the file isn't there: no network change fixes that.
+    t.server
+        .fail_next(SubsonicError::NotFound("http 404".into()), 1);
+    t.run(Command::Pin {
+        target: PinTarget::Track { id: "t0".into() },
+        transcode: false,
+    })
+    .await;
+    t.run_for(1_000.0).await;
+    let tries = t.server.calls_to("download");
+    assert_eq!(tries, 1);
+    t.run(net(NetworkKind::Cellular, false)).await;
+    t.run(net(NetworkKind::Wifi, false)).await;
+    t.run_for(1_000.0).await;
+    assert_eq!(t.server.calls_to("download"), tries, "not retried unasked");
+    // The user's retry fetches it, and clears what made the core skip it.
+    t.events.clear();
+    t.run(Command::Pin {
+        target: PinTarget::Track { id: "t0".into() },
+        transcode: false,
+    })
+    .await;
+    t.wait_until(10_000.0, |t| downloaded(t)).await;
+    assert_eq!(t.server.calls_to("download"), tries + 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retrying_a_failed_download_job_clears_its_failure_counts() {
+    let t = synced("dl-retry-job", seeded_server(2, 180.0)).await;
+    t.run(net(NetworkKind::Wifi, false)).await;
+    t.server
+        .fail_next(SubsonicError::NotFound("http 404".into()), 1);
+    t.run(Command::Pin {
+        target: PinTarget::Track { id: "t0".into() },
+        transcode: false,
+    })
+    .await;
+    t.run_for(1_000.0).await;
+    let failures = |t: &TestCore| -> (i64, bool) {
+        t.open_db()
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT failures, permanent FROM pin_tracks WHERE track_id = 't0'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .unwrap()
+    };
+    assert_eq!(failures(&t), (1, true));
+    let job = match t.query(Query::Jobs).await {
+        QueryResult::Jobs(jobs) => {
+            jobs.into_iter()
+                .find(|j| j.kind == JobKind::Download && j.state == JobState::Failed)
+                .expect("the failed download job")
+                .id
+        }
+        other => panic!("{other:?}"),
+    };
+    // Held back, so the reset is seen before the job runs again.
+    t.run(net(NetworkKind::Offline, false)).await;
+    t.run(Command::RetryJob { id: job }).await;
+    assert_eq!(failures(&t), (0, false));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

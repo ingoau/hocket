@@ -1,16 +1,18 @@
 // Paged loading for virtualised grids/lists over Query results with `total`.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useApp } from "../store/app";
+import { useLibraryVersion } from "../store/queries";
+import { settledIds, type LibraryDeps } from "../store/library-changes";
 import { evictPages, materializePages } from "../lib/paged-window";
 
-export function usePagedGrid<T>(fetchPage: (offset: number, limit: number) => Promise<{ items: T[]; total: number }>, deps: unknown[], pageSize = 100) {
+export function usePagedGrid<T extends { id: string }>(fetchPage: (offset: number, limit: number) => Promise<{ items: T[]; total: number }>, deps: unknown[], library?: LibraryDeps, pageSize = 100) {
   const [rows, setRows] = useState<(T | undefined)[]>([]);
   const [total, setTotal] = useState(0);
   const loading = useRef(new Set<number>());
   const gen = useRef(0);
   const pages = useRef(new Map<number, T[]>());
   const around = useRef(0);
-  const libraryVersion = useApp((s) => s.libraryVersion);
+  // Refetched when a library change touches what the grid reads (`library`, anything by default).
+  const libraryVersion = useLibraryVersion(library, () => settledIds(loading.current.size > 0, () => [...pages.current.values()].flatMap((p) => p.map((x) => x.id))));
   const load = useCallback((page: number) => {
     if (loading.current.has(page) || pages.current.has(page)) return;
     loading.current.add(page);
@@ -24,7 +26,10 @@ export function usePagedGrid<T>(fetchPage: (offset: number, limit: number) => Pr
         setRows(materializePages(pages.current, res.total, pageSize));
       })
       .catch((err: unknown) => console.warn("[paged] load failed", err))
-      .finally(() => loading.current.delete(page));
+      .finally(() => {
+        // A page from before a reload must not mark the reload's request for it done.
+        if (g === gen.current) loading.current.delete(page);
+      });
   }, [fetchPage, pageSize]);
   const depsKey = JSON.stringify(deps);
   const lastDeps = useRef<string | undefined>(undefined);

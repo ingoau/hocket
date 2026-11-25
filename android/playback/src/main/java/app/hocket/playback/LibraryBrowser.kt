@@ -1,5 +1,6 @@
 package app.hocket.playback
 
+import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
 import android.os.Bundle
@@ -7,6 +8,7 @@ import android.provider.MediaStore
 import android.util.Log
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.annotation.DrawableRes
 import androidx.media3.session.MediaConstants
 import app.hocket.core.Commands
 import app.hocket.core.CoreHandle
@@ -16,12 +18,19 @@ import app.hocket.core.api.TrackRef
 import app.hocket.core.api.Album
 import app.hocket.core.api.Artist
 import app.hocket.core.api.Command
+import app.hocket.core.api.Filter
+import app.hocket.core.api.FilterField
+import app.hocket.core.api.FilterNode
+import app.hocket.core.api.FilterOp
+import app.hocket.core.api.FilterRule
+import app.hocket.core.api.FilterValue
 import app.hocket.core.api.Genre
 import app.hocket.core.api.MediaSessionAction
 import app.hocket.core.api.Page
 import app.hocket.core.api.Playlist
 import app.hocket.core.api.QueryResult
 import app.hocket.core.api.SearchResults
+import app.hocket.core.api.SortOrder
 import app.hocket.core.api.Track
 import app.hocket.core.api.TrackSummary
 import app.hocket.core.toSummary
@@ -47,6 +56,10 @@ import kotlinx.coroutines.launch
  * session to resume, as one playable item: [resumeItem]) and "suggested" (quick plays and recently
  * played albums, for surfaces that suggest something to play). System UI's own recent root (playback
  * resumption) is Media3's, which asks the session's callback for the same [resumeItem].
+ *
+ * While the core's network is offline ([offline]) the root leads with the `offline` section, what
+ * plays with no network (the app's "Available offline" filter), in place of genres: Auto shows four
+ * root tabs, and in a car with no signal the rest of the mirror mostly can't play.
  */
 class LibraryBrowser(
     private val context: Context,
@@ -67,6 +80,15 @@ class LibraryBrowser(
         private const val ARTWORK_DATA_MAX_BYTES = 512 * 1024
         /** Enough to enqueue a whole playlist in one query. */
         private const val PLAYLIST_ALL = 10_000
+        /** The app's built-in "Available offline" filter (`BUILTIN_AVAILABLE_OFFLINE` in the app). */
+        private const val OFFLINE_FILTER_ID = "builtin:available-offline"
+        private val OFFLINE_SORT = SortOrder.Artist
+        private val OFFLINE_RULE: FilterNode = FilterNode.All(listOf(FilterNode.Rule(FilterRule(FilterField.AvailableOffline, FilterOp.IsTrue, FilterValue.Bool(true)))))
+
+        /** The root's sections: [LibrarySection.Offline] first while offline, in place of genres (four at most, for Auto's tabs). */
+        fun rootSections(offline: Boolean): List<LibrarySection> =
+            if (offline) listOf(LibrarySection.Offline, LibrarySection.Albums, LibrarySection.Artists, LibrarySection.Playlists)
+            else listOf(LibrarySection.Albums, LibrarySection.Artists, LibrarySection.Playlists, LibrarySection.Genres)
 
         private const val STYLE_LIST = MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
         private const val STYLE_GRID = MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM
@@ -85,20 +107,24 @@ class LibraryBrowser(
         }
     }
 
+    /** The core's network is offline (or offline mode is on); the service keeps this current. */
+    @Volatile
+    var offline: Boolean = false
+
     // -- browse tree -------------------------------------------------------------------------------
 
     fun root(): MediaItem = folder(MediaId.Root, context.getString(R.string.browse_root), MediaMetadata.MEDIA_TYPE_FOLDER_MIXED, rootExtras())
 
-    fun recentRoot(): MediaItem = folder(MediaId.Recent, context.getString(R.string.browse_recent), MediaMetadata.MEDIA_TYPE_FOLDER_MIXED, style(STYLE_LIST))
+    fun recentRoot(): MediaItem = folder(MediaId.Recent, context.getString(R.string.browse_recent), MediaMetadata.MEDIA_TYPE_FOLDER_MIXED, style(STYLE_LIST), artwork = icon(R.drawable.browse_recent))
 
-    fun suggestedRoot(): MediaItem = folder(MediaId.Suggested, context.getString(R.string.browse_suggested), MediaMetadata.MEDIA_TYPE_FOLDER_MIXED, style(STYLE_GRID, STYLE_GRID))
+    fun suggestedRoot(): MediaItem = folder(MediaId.Suggested, context.getString(R.string.browse_suggested), MediaMetadata.MEDIA_TYPE_FOLDER_MIXED, style(STYLE_GRID, STYLE_GRID), artwork = icon(R.drawable.browse_suggested))
 
     /** The children of [parentId], one page; null when [parentId] is not a browsable id of ours. */
     suspend fun children(parentId: String, page: Int, pageSize: Int): List<MediaItem>? {
         val id = MediaId.parse(parentId) ?: return null
         val window = Page((page.coerceAtLeast(0).toLong() * pageSize).coerceAtMost(UInt.MAX_VALUE.toLong()).toUInt(), pageSize.coerceAtLeast(1).toUInt())
         return when (id) {
-            MediaId.Root -> LibrarySection.entries.map(::section).window(window)
+            MediaId.Root -> rootSections(offline).map(::section).window(window)
             MediaId.Recent -> listOfNotNull(resumeItem()).window(window)
             MediaId.Suggested -> suggestions().window(window)
             is MediaId.Section -> {
@@ -108,6 +134,10 @@ class LibraryBrowser(
                     LibrarySection.Artists -> (query(Queries.artists("", window)) as? QueryResult.Artists)?.data?.items.orEmpty().map(::artist)
                     LibrarySection.Playlists -> (query(Queries.playlists("")) as? QueryResult.Playlists)?.data.orEmpty().map(::playlist).window(window)
                     LibrarySection.Genres -> (query(Queries.genres("")) as? QueryResult.Genres)?.data.orEmpty().map { genre(server, it) }.window(window)
+                    LibrarySection.Offline -> {
+                        val tracks = (query(offlineTracks(server, window)) as? QueryResult.Tracks)?.data ?: return emptyList()
+                        tracks.items.mapIndexed { i, t -> track(t.toSummary(), MediaId.OfflineTrack(server, tracks.offset.toInt() + i)) }
+                    }
                 }
             }
             is MediaId.Album -> albumTracks(id.id).mapIndexed { i, t -> track(t.toSummary(), MediaId.AlbumTrack(id.serverId, id.id, i)) }.window(window)
@@ -133,6 +163,7 @@ class LibraryBrowser(
         is MediaId.PlaylistTrack -> playlistTrack(id.playlistId, id.index)?.let { track(it, id) }
         is MediaId.Genre -> folder(id, id.name, MediaMetadata.MEDIA_TYPE_GENRE, style(STYLE_GRID), playable = true)
         is MediaId.Track -> trackDetail(TrackRef(id.serverId, id.id))?.let { track(it.toSummary(), id) }
+        is MediaId.OfflineTrack -> offlineTrack(id)?.let { track(it, id) }
         is MediaId.QueueItem -> null
         MediaId.Recent -> recentRoot()
         MediaId.Suggested -> suggestedRoot()
@@ -210,9 +241,11 @@ class LibraryBrowser(
             is MediaId.PlaylistTrack -> playlistDetail(id.playlistId)?.let { Commands.playContext(Commands.playlistContext(id.serverId, id.playlistId, it.name), startIndex = id.index) }
             is MediaId.Genre -> Commands.playContext(Commands.genreContext(id.serverId, id.name))
             is MediaId.Track -> TrackRef(id.serverId, id.id).let { Commands.playTracks(listOf(it), 0, label(it)) }
+            is MediaId.OfflineTrack -> Commands.playContext(Commands.filterContext(id.serverId, offlineFilter()), startIndex = id.index)
             is MediaId.QueueItem -> Commands.jumpToQueueItem(id.key)
             is MediaId.Shuffle -> quickPlay(id)
-            MediaId.Root, is MediaId.Section, MediaId.Recent, MediaId.Suggested, null -> null
+            is MediaId.Section -> if (id.section == LibrarySection.Offline) serverId()?.let { Commands.playContext(Commands.filterContext(it, offlineFilter())) } else null
+            MediaId.Root, MediaId.Recent, MediaId.Suggested, null -> null
         } ?: return false
         dispatch(command)
         return true
@@ -227,6 +260,7 @@ class LibraryBrowser(
                 is MediaId.AlbumTrack -> id.serverId to listOfNotNull(albumTracks(id.albumId).getOrNull(id.index)?.id)
                 is MediaId.Album -> id.serverId to albumTracks(id.id).map { it.id }
                 is MediaId.PlaylistTrack -> id.serverId to listOfNotNull(playlistTrack(id.playlistId, id.index)?.id)
+                is MediaId.OfflineTrack -> id.serverId to listOfNotNull(offlineTrack(id)?.id)
                 is MediaId.Playlist -> id.serverId to ((query(Queries.playlistTracks(id.id, Page(0u, PLAYLIST_ALL.toUInt()))) as? QueryResult.Tracks)?.data?.items.orEmpty().map { it.id })
                 else -> continue // artists, genres and sections are too broad to enqueue
             }
@@ -250,6 +284,7 @@ class LibraryBrowser(
         is MediaId.Track -> id.id
         is MediaId.AlbumTrack -> albumTracks(id.albumId).getOrNull(id.index)?.id
         is MediaId.PlaylistTrack -> playlistTrack(id.playlistId, id.index)?.id
+        is MediaId.OfflineTrack -> offlineTrack(id)?.id
         else -> null
     }
 
@@ -327,11 +362,24 @@ class LibraryBrowser(
 
     // -- items -------------------------------------------------------------------------------------
 
+    // Root tabs carry a monochrome icon (an `android.resource` URI to a vector drawable), which Auto
+    // shows on the tab next to the title.
     private fun section(section: LibrarySection): MediaItem = when (section) {
-        LibrarySection.Albums -> folder(MediaId.Section(section), context.getString(R.string.browse_albums), MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS, style(STYLE_GRID))
-        LibrarySection.Artists -> folder(MediaId.Section(section), context.getString(R.string.browse_artists), MediaMetadata.MEDIA_TYPE_FOLDER_ARTISTS, style(STYLE_LIST))
-        LibrarySection.Playlists -> folder(MediaId.Section(section), context.getString(R.string.browse_playlists), MediaMetadata.MEDIA_TYPE_FOLDER_PLAYLISTS, style(STYLE_LIST))
-        LibrarySection.Genres -> folder(MediaId.Section(section), context.getString(R.string.browse_genres), MediaMetadata.MEDIA_TYPE_FOLDER_GENRES, style(STYLE_LIST))
+        LibrarySection.Albums -> folder(MediaId.Section(section), context.getString(R.string.browse_albums), MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS, style(STYLE_GRID), artwork = icon(R.drawable.browse_albums))
+        LibrarySection.Artists -> folder(MediaId.Section(section), context.getString(R.string.browse_artists), MediaMetadata.MEDIA_TYPE_FOLDER_ARTISTS, style(STYLE_LIST), artwork = icon(R.drawable.browse_artists))
+        LibrarySection.Playlists -> folder(MediaId.Section(section), context.getString(R.string.browse_playlists), MediaMetadata.MEDIA_TYPE_FOLDER_PLAYLISTS, style(STYLE_LIST), artwork = icon(R.drawable.browse_playlists))
+        LibrarySection.Genres -> folder(MediaId.Section(section), context.getString(R.string.browse_genres), MediaMetadata.MEDIA_TYPE_FOLDER_GENRES, style(STYLE_LIST), artwork = icon(R.drawable.browse_genres))
+        LibrarySection.Offline -> folder(MediaId.Section(section), context.getString(R.string.browse_offline), MediaMetadata.MEDIA_TYPE_FOLDER_MIXED, style(STYLE_LIST), playable = true, artwork = icon(R.drawable.browse_offline))
+    }
+
+    private fun icon(@DrawableRes id: Int): Uri {
+        val res = context.resources
+        return Uri.Builder()
+            .scheme(ContentResolver.SCHEME_ANDROID_RESOURCE)
+            .authority(res.getResourcePackageName(id))
+            .appendPath(res.getResourceTypeName(id))
+            .appendPath(res.getResourceEntryName(id))
+            .build()
     }
 
     private fun folder(id: MediaId, title: String, type: Int, extras: Bundle, playable: Boolean = false, artwork: Uri? = null, subtitle: String? = null): MediaItem =
@@ -376,6 +424,10 @@ class LibraryBrowser(
     private suspend fun albumTracks(id: String): List<Track> = (query(Queries.albumTracks(id)) as? QueryResult.TrackList)?.data.orEmpty()
     private suspend fun playlistDetail(id: String): Playlist? = (query(Queries.playlist(id)) as? QueryResult.PlaylistDetail)?.data
     private suspend fun trackDetail(track: TrackRef): Track? = (query(Queries.track(track)) as? QueryResult.TrackDetail)?.data
+    private fun offlineFilter(): Filter = Filter(OFFLINE_FILTER_ID, context.getString(R.string.browse_offline), OFFLINE_RULE, OFFLINE_SORT, false, null)
+    private fun offlineTracks(server: String, page: Page) = Queries.tracks(server, page, OFFLINE_SORT, filter = OFFLINE_RULE)
+    private suspend fun offlineTrack(id: MediaId.OfflineTrack): TrackSummary? =
+        (query(offlineTracks(id.serverId, Page(id.index.toUInt(), 1u))) as? QueryResult.Tracks)?.data?.items?.firstOrNull()?.toSummary()
     private suspend fun playlistTrack(id: String, index: Int): TrackSummary? =
         (query(Queries.playlistTracks(id, Page(index.toUInt(), 1u))) as? QueryResult.Tracks)?.data?.items?.firstOrNull()?.toSummary()
 

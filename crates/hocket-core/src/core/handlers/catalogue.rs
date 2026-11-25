@@ -114,8 +114,11 @@ impl Actor {
                             })
                         }
                         Err(e) => {
+                            // Not "no such album" (that would read as not in
+                            // the library, with nothing to retry): the
+                            // reply is dropped and the query fails.
                             tracing::debug!(target: "hocket_core", error = %e, "catalogue album");
-                            None
+                            return;
                         }
                     }
                 }

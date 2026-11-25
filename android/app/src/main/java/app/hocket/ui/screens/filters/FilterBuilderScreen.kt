@@ -4,6 +4,7 @@ import app.hocket.ui.components.maxWidthListPadding
 import androidx.compose.foundation.layout.BoxWithConstraints
 import android.content.Intent
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -531,16 +532,76 @@ private fun ValueEditor(value: FilterValue, onChange: (FilterValue) -> Unit) {
     val shape = RoundedCornerShape(16.dp)
     when (value) {
         is FilterValue.Text -> OutlinedTextField(value = value.data, onValueChange = { onChange(FilterValue.Text(it)) }, label = { Text(stringResource(R.string.filter_value)) }, singleLine = true, shape = shape, modifier = Modifier.fillMaxWidth())
-        is FilterValue.Number -> OutlinedTextField(value = value.data.toString().removeSuffix(".0"), onValueChange = { onChange(FilterValue.Number(it.toDoubleOrNull() ?: 0.0)) }, label = { Text(stringResource(R.string.filter_value)) }, singleLine = true, shape = shape, modifier = Modifier.fillMaxWidth())
+        is FilterValue.Number -> NumberField(value.data, stringResource(R.string.filter_value), shape, Modifier.fillMaxWidth()) { onChange(FilterValue.Number(it)) }
         is FilterValue.Range -> Row {
-            OutlinedTextField(value = value.data.low.toString().removeSuffix(".0"), onValueChange = { onChange(FilterValue.Range(value.data.copy(low = it.toDoubleOrNull() ?: 0.0))) }, label = { Text(stringResource(R.string.filter_value_low)) }, singleLine = true, shape = shape, modifier = Modifier.weight(1f))
+            NumberField(value.data.low, stringResource(R.string.filter_value_low), shape, Modifier.weight(1f)) { onChange(FilterValue.Range(value.data.copy(low = it))) }
             Spacer(Modifier.width(8.dp))
-            OutlinedTextField(value = value.data.high.toString().removeSuffix(".0"), onValueChange = { onChange(FilterValue.Range(value.data.copy(high = it.toDoubleOrNull() ?: 0.0))) }, label = { Text(stringResource(R.string.filter_value_high)) }, singleLine = true, shape = shape, modifier = Modifier.weight(1f))
+            NumberField(value.data.high, stringResource(R.string.filter_value_high), shape, Modifier.weight(1f)) { onChange(FilterValue.Range(value.data.copy(high = it))) }
         }
-        is FilterValue.Date -> OutlinedTextField(value = value.data, onValueChange = { onChange(FilterValue.Date(it)) }, label = { Text("YYYY-MM-DD") }, singleLine = true, shape = shape, modifier = Modifier.fillMaxWidth())
-        is FilterValue.Days -> OutlinedTextField(value = value.data.toString(), onValueChange = { onChange(FilterValue.Days(it.toUIntOrNull() ?: 0u)) }, label = { Text(stringResource(R.string.filter_days)) }, singleLine = true, shape = shape, modifier = Modifier.fillMaxWidth())
+        is FilterValue.Date -> DateField(value.data, shape) { onChange(FilterValue.Date(it)) }
+        is FilterValue.Days -> NumberField(value.data.toDouble(), stringResource(R.string.filter_days), shape, Modifier.fillMaxWidth(), whole = true) { onChange(FilterValue.Days(it.toUInt())) }
         is FilterValue.Bool -> Unit
         is FilterValue.List -> OutlinedTextField(value = value.data.joinToString(", "), onValueChange = { onChange(FilterValue.List(it.split(",").map { s -> s.trim() }.filter { s -> s.isNotEmpty() })) }, label = { Text(stringResource(R.string.filter_value)) }, shape = shape, modifier = Modifier.fillMaxWidth())
+    }
+}
+
+/** [v] as typed: no ".0" on a whole number, and no exponent for a big one. */
+internal fun formatFilterNumber(v: Double): String =
+    if (v == kotlin.math.floor(v) && kotlin.math.abs(v) < 1e15) v.toLong().toString() else v.toBigDecimal().stripTrailingZeros().toPlainString()
+
+/**
+ * What the user typed into a number field, as the value to keep, or null while it isn't one yet ("", "-", "1e").
+ * A decimal comma (the decimal keyboard's separator in many locales: "2,5") reads as a point.
+ */
+internal fun parseFilterNumber(text: String, whole: Boolean): Double? {
+    val t = text.trim()
+    if (whole) return t.toUIntOrNull()?.toDouble()
+    val decimal = if (t.count { it == ',' } == 1 && '.' !in t) t.replace(',', '.') else t
+    return decimal.toDoubleOrNull()?.takeIf { it.isFinite() }
+}
+
+/**
+ * A number typed on the number keyboard ([whole]: digits only). The text stays as typed, so clearing
+ * the field or typing "1." doesn't snap it to 0; only text that reads as a number is [onCommit]ted.
+ */
+@Composable
+private fun NumberField(value: Double, label: String, shape: androidx.compose.ui.graphics.Shape, modifier: Modifier, whole: Boolean = false, onCommit: (Double) -> Unit) {
+    var text by remember { mutableStateOf(formatFilterNumber(value)) }
+    // A new value from outside (another condition picked): show it, unless it is what's typed already.
+    LaunchedEffect(value) { if (parseFilterNumber(text, whole) != value) text = formatFilterNumber(value) }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { typed -> text = typed; parseFilterNumber(typed, whole)?.let(onCommit) },
+        label = { Text(label) }, singleLine = true, shape = shape, modifier = modifier,
+        isError = text.isNotBlank() && parseFilterNumber(text, whole) == null,
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = if (whole) androidx.compose.ui.text.input.KeyboardType.Number else androidx.compose.ui.text.input.KeyboardType.Decimal),
+    )
+}
+
+/** A date ("YYYY-MM-DD", what the rule stores), shown in the locale's format and picked from a calendar. */
+@Composable
+private fun DateField(value: String, shape: androidx.compose.ui.graphics.Shape, onPick: (String) -> Unit) {
+    var picking by remember { mutableStateOf(false) }
+    val date = remember(value) { runCatching { java.time.LocalDate.parse(value) }.getOrNull() }
+    val shown = remember(date, value) { date?.format(java.time.format.DateTimeFormatter.ofLocalizedDate(java.time.format.FormatStyle.MEDIUM)) ?: value }
+    Box(Modifier.fillMaxWidth()) {
+        OutlinedTextField(value = shown, onValueChange = {}, readOnly = true, label = { Text(stringResource(R.string.filter_date)) }, singleLine = true, shape = shape, modifier = Modifier.fillMaxWidth(),
+            trailingIcon = { Icon(HocketIcons.Filled.CalendarToday, null) })
+        // The whole field opens the calendar (a read-only field takes no taps of its own).
+        Box(Modifier.matchParentSize().clickable(onClickLabel = stringResource(R.string.filter_date_pick)) { picking = true }.testTag("filter.date"))
+    }
+    if (picking) {
+        val state = androidx.compose.material3.rememberDatePickerState(initialSelectedDateMillis = (date ?: java.time.LocalDate.now()).atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toEpochMilli())
+        androidx.compose.material3.DatePickerDialog(
+            onDismissRequest = { picking = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    state.selectedDateMillis?.let { onPick(java.time.Instant.ofEpochMilli(it).atZone(java.time.ZoneOffset.UTC).toLocalDate().toString()) }
+                    picking = false
+                }, enabled = state.selectedDateMillis != null) { Text(stringResource(R.string.action_ok)) }
+            },
+            dismissButton = { TextButton(onClick = { picking = false }) { Text(stringResource(R.string.action_cancel)) } },
+        ) { androidx.compose.material3.DatePicker(state) }
     }
 }
 

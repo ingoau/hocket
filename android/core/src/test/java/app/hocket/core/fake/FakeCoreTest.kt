@@ -370,6 +370,28 @@ class FakeCoreTest {
     }
 
     @Test
+    fun aSearchAskingForServerResultsGetsExactlyOneServerBatch() = runTest {
+        val core = core()
+        val batches = mutableListOf<SearchResults>()
+        val job = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            core.events.filterIsInstance<Event.SearchResults>().collect { if (it.data.results.fromServer) batches += it.data.results }
+        }
+        val needle = core.library.tracks[0].title.take(4)
+        suspend fun search(text: String, id: String, includeServer: Boolean = true) =
+            core.query(Queries.search(core.library.serverId, text, 10, includeServer = includeServer, requestId = id))
+        search(needle, "asked")
+        search("", "blank")
+        search(needle, "local-only", includeServer = false)
+        core.dispatch(Commands.setNetworkState(NetworkState(NetworkKind.Offline, false, null)))
+        search(needle, "offline")
+        advanceUntilIdle()
+        assertEquals(listOf("asked", "blank", "offline"), batches.map { it.requestId })
+        // Not asked: empty, so the caller stops waiting.
+        assertTrue(batches.drop(1).all { it.tracks.isEmpty() && it.albums.isEmpty() && it.artists.isEmpty() })
+        job.cancel()
+    }
+
+    @Test
     fun pagingQueriesRespectOffsets() = runTest {
         val core = core()
         val p1 = (core.query(Queries.tracks(core.library.serverId, Page(0u, 50u), SortOrder.Title)) as QueryResult.Tracks).data

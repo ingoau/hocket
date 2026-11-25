@@ -15,6 +15,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentType
+import androidx.compose.ui.autofill.ContentType
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
@@ -129,7 +131,17 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
     var pairedAccount by rememberSaveable { mutableStateOf<String?>(null) }
     val sync by client.syncProgress.collectAsStateWithLifecycle()
 
-    LaunchedEffect(client) { client.errors.collect { e -> connecting = false; ytmBusy = false; error = e.detail?.let { "${e.message}\n$it" } ?: e.message } }
+    val loginContext = androidx.compose.ui.platform.LocalContext.current
+    val formAccount by androidx.compose.runtime.rememberUpdatedState(existing?.id)
+    LaunchedEffect(client) {
+        client.errors.collect { e ->
+            // Another account's background trouble (a server of its gone unreachable) isn't this form's.
+            if (!isSetupError(e.account_id, attempting = connecting || ytmBusy || pairing, formAccount)) return@collect
+            connecting = false; ytmBusy = false
+            // The server form says what went wrong in words; YouTube Music's step keeps the core's text.
+            error = setupErrorText(if (ytm) null else loginErrorText(e.kind)?.let(loginContext::getString), e.message, e.detail)
+        }
+    }
     LaunchedEffect(existing) { if (existing != null) connecting = false }
 
     val step = when {
@@ -211,6 +223,8 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
 
     BoxWithConstraints(Modifier.fillMaxSize().background(ground)) {
         val tooOld = existing != null && !CoreHost.meetsFloor(existing)
+        // Room for the username and password side by side (each with room for its label and icon).
+        val wideForm = maxWidth >= 520.dp
         // The mark: centred and large on the welcome, small over the form, mid-size over the summary.
         val tile by animateDpAsState(when (step) { SetupStep.Welcome -> 104.dp; SetupStep.Form -> 72.dp; SetupStep.Summary, SetupStep.Another, SetupStep.Ytm, SetupStep.Add -> 104.dp }, label = "setupTile")
         val mark by animateDpAsState(when (step) { SetupStep.Welcome -> 40.dp; SetupStep.Form -> 26.dp; SetupStep.Summary, SetupStep.Another, SetupStep.Ytm, SetupStep.Add -> 30.dp }, label = "setupMark")
@@ -285,7 +299,8 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
                         placeholder = { Text(stringResource(R.string.setup_url_hint)) }, singleLine = true, isError = urlError, shape = field,
                         supportingText = if (urlError) ({ Text(stringResource(R.string.setup_error_url)) }) else null,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
-                        modifier = Modifier.fillMaxWidth().testTag("setup.url"), enabled = !connecting,
+                        // No standard autofill hint names a server address; "url" is the HTML token for one.
+                        modifier = Modifier.fillMaxWidth().semantics { contentType = ContentType("url") }.testTag("setup.url"), enabled = !connecting,
                     )
                     if (cleartext) {
                         Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp).testTag("setup.cleartextWarning")) {
@@ -294,7 +309,7 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
                     }
                     val user = @Composable { m: Modifier ->
                         OutlinedTextField(value = username, onValueChange = { username = it }, label = { Text(stringResource(R.string.setup_username)) }, singleLine = true, shape = field,
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next), modifier = m.testTag("setup.username"), enabled = !connecting)
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next), modifier = m.semantics { contentType = ContentType.Username }.testTag("setup.username"), enabled = !connecting)
                     }
                     val pass = @Composable { m: Modifier ->
                         OutlinedTextField(
@@ -307,11 +322,11 @@ fun ServerSetupScreen(existing: AccountInfo?, needsRelogin: Boolean = false, sum
                                     Icon(if (showPassword) HocketIcons.Filled.VisibilityOff else HocketIcons.Filled.Visibility, stringResource(if (showPassword) R.string.setup_hide_password else R.string.setup_show_password))
                                 }
                             },
-                            modifier = m.testTag("setup.password"), enabled = !connecting,
+                            modifier = m.semantics { contentType = ContentType.Password }.testTag("setup.password"), enabled = !connecting,
                         )
                     }
-                    // Side by side as on the board; stacked when the text is large.
-                    if (LocalDensity.current.fontScale < 1.3f) Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) { user(Modifier.weight(1f)); pass(Modifier.weight(1f)) }
+                    // Side by side as on the board when there's room; stacked on phones and when the text is large.
+                    if (LocalDensity.current.fontScale < 1.3f && wideForm) Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) { user(Modifier.weight(1f)); pass(Modifier.weight(1f)) }
                     else Column(Modifier.padding(top = 14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) { user(Modifier.fillMaxWidth()); pass(Modifier.fillMaxWidth()) }
                     error?.let {
                         Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().padding(top = 16.dp).testTag("setup.error")) {
@@ -510,4 +525,24 @@ fun CapabilitySummary(server: AccountInfo) {
             CapChip(stringResource(R.string.setup_caps_native), caps.nativeApi)
         }
     }
+}
+
+/** Friendly text for the sign-in failures people hit most, or null to show the core's own. */
+/**
+ * Whether an error about [accountId] belongs on the setup form: any while it is [attempting] (signing
+ * in, adding YouTube Music or pairing: the new account's id isn't known yet), else only one about no
+ * account or about [formAccount], the account the form is for.
+ */
+internal fun isSetupError(accountId: String?, attempting: Boolean, formAccount: String?): Boolean =
+    attempting || accountId == null || accountId == formAccount
+
+/** What the form shows: [friendly] words (else the core's [message]), and the core's [detail] (a certificate's reason, say) under them. */
+internal fun setupErrorText(friendly: String?, message: String, detail: String?): String =
+    listOfNotNull(friendly ?: message, detail?.takeIf { it.isNotBlank() }).joinToString("\n")
+
+private fun loginErrorText(kind: app.hocket.core.api.ErrorKind): Int? = when (kind) {
+    app.hocket.core.api.ErrorKind.Auth -> R.string.setup_error_auth
+    app.hocket.core.api.ErrorKind.Network -> R.string.setup_error_unreachable
+    app.hocket.core.api.ErrorKind.Protocol -> R.string.setup_error_not_subsonic
+    else -> null
 }
