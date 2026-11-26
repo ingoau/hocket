@@ -2,7 +2,7 @@
 // the splitter in the gutter between the two panes moves it; the toggle folds the sidebar to a rail), chrome is not selectable, nothing is underlined or
 // pointer-cursored, the UI font is 13px Geist (bundled), and focus rings
 // appear only for keyboard focus.
-import { completeSetup, expect, test, openPlace } from "./fixtures";
+import { completeSetup, expect, test, openPlace, playFirstAlbum } from "./fixtures";
 
 /** The gutter between the sidebar pane and the content pane (panes.css --pane-gap). */
 const GAP = 8;
@@ -175,6 +175,25 @@ test.describe("window chrome", () => {
     await genres.click();
     await expect(page.getByTestId("sidebar").getByTestId("nav-genres")).toHaveCount(0);
     await expect(genres).not.toBeChecked();
+  });
+
+  test("switching a context menu item off keeps the actions its list can't show", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await playFirstAlbum(page);
+    // The list shows the actions for songs; Remove from queue is for queue rows, so it isn't listed.
+    await page.getByTestId("nav-settings").click();
+    await page.getByTestId("settings-nav-customisation").click();
+    const list = page.getByTestId("order-contextMenu");
+    await expect(list.getByRole("switch", { name: "Remove from queue" })).toHaveCount(0);
+    const item = list.getByRole("switch", { name: "Go to album", exact: true });
+    await expect(item).toBeChecked();
+    await item.click();
+    await expect(item).not.toBeChecked();
+    const menu = page.getByTestId("context-menu");
+    await page.getByTestId("queue-row-rest").first().click({ button: "right" });
+    await expect(menu).toBeVisible();
+    await expect(menu.getByRole("menuitem", { name: "Remove from queue" })).toBeVisible();
   });
 
   test("settings stays pinned below the sidebar list, and a long server row never scrolls the settings page sideways", async ({ hocket }) => {
