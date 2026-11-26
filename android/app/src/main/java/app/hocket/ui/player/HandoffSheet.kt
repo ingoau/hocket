@@ -55,9 +55,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.content.Intent
@@ -137,7 +139,10 @@ fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpe
                 // Bluetooth settings (to connect another output) on the group's label, not a row of its
                 // own under it, so the groups stay evenly spaced; the end pad lines its text up with
                 // the rows' trailing icons.
-                GroupLabel(stringResource(R.string.handoff_this_device), Modifier.padding(top = GroupGap, end = 4.dp), color = MaterialTheme.colorScheme.primary) {
+                LabelWithAction(
+                    label = { GroupLabel(stringResource(R.string.handoff_this_device), color = MaterialTheme.colorScheme.primary) },
+                    modifier = Modifier.padding(top = GroupGap, end = 4.dp),
+                ) {
                     TextButton(onClick = { runCatching { context.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }, shapes = ButtonDefaults.shapes(), modifier = Modifier.testTag("handoff.bluetooth")) {
                         Icon(HocketIcons.Filled.Bluetooth, null, Modifier.size(ButtonDefaults.IconSize))
                         Spacer(Modifier.width(ButtonDefaults.IconSpacing))
@@ -227,6 +232,35 @@ private fun BluetoothClassPermission(bluetoothConnected: Boolean) {
         val prefs = context.getSharedPreferences(PERMISSION_PREFS, android.content.Context.MODE_PRIVATE)
         if (prefs.getBoolean(ASKED_BLUETOOTH, false)) return@LaunchedEffect
         runCatching { launcher.launch(permission) }.onSuccess { prefs.edit { putBoolean(ASKED_BLUETOOTH, true) } }
+    }
+}
+
+/**
+ * [label] with [action] at its end, or, when the two don't fit side by side (a narrow phone, a large
+ * font), the action on a line of its own under the label, still at the end, so neither is squeezed.
+ */
+@Composable
+private fun LabelWithAction(label: @Composable () -> Unit, modifier: Modifier = Modifier, action: @Composable () -> Unit) {
+    Layout(contents = listOf(label, action), modifier = modifier.fillMaxWidth()) { (labelMeasurables, actionMeasurables), constraints ->
+        val width = constraints.maxWidth
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val actionPlaceable = actionMeasurables.single().measure(loose)
+        val labelMeasurable = labelMeasurables.single()
+        val sideBySide = labelMeasurable.maxIntrinsicWidth(Constraints.Infinity) + actionPlaceable.width <= width
+        if (sideBySide) {
+            val labelPlaceable = labelMeasurable.measure(loose.copy(maxWidth = width - actionPlaceable.width))
+            val height = maxOf(labelPlaceable.height, actionPlaceable.height)
+            layout(width, height) {
+                labelPlaceable.placeRelative(0, (height - labelPlaceable.height) / 2)
+                actionPlaceable.placeRelative(width - actionPlaceable.width, (height - actionPlaceable.height) / 2)
+            }
+        } else {
+            val labelPlaceable = labelMeasurable.measure(loose)
+            layout(width, labelPlaceable.height + actionPlaceable.height) {
+                labelPlaceable.placeRelative(0, 0)
+                actionPlaceable.placeRelative(width - actionPlaceable.width, labelPlaceable.height)
+            }
+        }
     }
 }
 
