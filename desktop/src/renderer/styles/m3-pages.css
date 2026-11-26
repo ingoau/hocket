@@ -11,7 +11,7 @@
 /* Settings section headings (h2.section-title) read like every other page's section heading. */
 /* Settings subheadings within a section: an accent title over its group of rows. */
 .page-settings .section-title {
-  font-size: 16px; font-weight: 700; letter-spacing: 0; line-height: 1.3; text-transform: none; color: var(--accent-text); padding: 24px 4px 4px;
+  font-size: 16px; font-weight: 700; letter-spacing: 0; line-height: 1.3; text-transform: none; color: var(--accent-text); padding: 24px var(--page-title-inset) 4px;
 }
 
 
@@ -31,13 +31,13 @@
 .settings-account-sub { font-size: var(--fs-md); color: var(--fg-muted); }
 .settings-account-sync { width: 100%; height: 40px; justify-content: center; gap: 8px; }
 .settings-account-links { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2px; }
-.settings-account-link { min-width: 0; padding: 0 8px; height: 44px; justify-content: center; gap: 8px; background: var(--bg-elev); color: var(--fg); font-weight: 600; border-radius: var(--shape-xs); }
-/* Stats and Devices side by side, Set up another device across the row below: one rounded block. */
-.settings-account-link:nth-child(1) { border-radius: var(--shape-lg) var(--shape-xs) var(--shape-xs) var(--shape-xs); }
-.settings-account-link:nth-child(2) { border-radius: var(--shape-xs) var(--shape-lg) var(--shape-xs) var(--shape-xs); }
-.settings-account-link:nth-child(3) { grid-column: 1 / -1; border-radius: var(--shape-xs) var(--shape-xs) var(--shape-lg) var(--shape-lg); }
+.settings-account-link { min-width: 0; padding: 0 6px; height: 44px; justify-content: center; gap: 6px; background: var(--bg-elev); color: var(--fg); font-weight: 600; border-radius: var(--shape-xs); }
+/* Listening stats across the top (its label doesn't fit half the card), then the two device links. */
+.settings-account-link:nth-child(1) { grid-column: 1 / -1; border-radius: var(--shape-lg) var(--shape-lg) var(--shape-xs) var(--shape-xs); }
+.settings-account-link:nth-child(2) { border-radius: var(--shape-xs) var(--shape-xs) var(--shape-xs) var(--shape-lg); }
+.settings-account-link:nth-child(3) { border-radius: var(--shape-xs) var(--shape-xs) var(--shape-lg) var(--shape-xs); }
 .settings-account-link:hover { background: color-mix(in srgb, var(--fg) 5%, var(--bg-elev)); }
-.settings-account-link .icon { color: var(--accent-text); }
+.settings-account-link .icon { flex: 0 0 auto; color: var(--accent-text); }
 /* Settings search: an M3 search bar at the top of the nav; typing swaps the
    sections for the matching settings, each naming its section. */
 .settings-search { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
@@ -70,6 +70,8 @@
 .page-settings .settings-heading { margin: 0 0 20px; padding-left: var(--page-title-inset); font-size: 32px; line-height: 40px; }
 .page-settings .settings-heading + .section-title { padding-top: 4px; }
 .page-settings .settings-body > .muted.small, .page-settings .settings-lede { font-size: var(--fs-md); margin-bottom: 16px !important; padding-left: var(--page-title-inset); }
+/* A note under a subheading, at the subheading's inset. */
+.page-settings .section-title + .muted.small, .page-settings .section-title + .muted.small + .muted.small { font-size: var(--fs-md); padding-left: var(--page-title-inset); }
 
 /* Grouped ("segmented") lists: consecutive rows share one container, split by
    2px gaps, with big corners only on the ends of each run. */
@@ -92,6 +94,10 @@
 .page-settings .setting-row[data-testid="server-row"] .label .title { font-size: var(--fs-lg); font-weight: 700; }
 .page-settings .setting-row[data-testid="server-row"] .label .title .muted { font-size: var(--fs-md); font-weight: 400; }
 .page-settings .setting-row[data-testid="server-row"] .control { flex-wrap: wrap; }
+/* Joining a coordinator: the address takes the room the code and buttons leave, and wraps. */
+.page-settings .coordinator-join .control { flex-wrap: wrap; }
+.page-settings .coordinator-join .coordinator-url { flex: 1 1 220px; min-width: 0; }
+.page-settings .coordinator-join .coordinator-code { flex: 0 1 120px; min-width: 0; }
 
 /* Storage: cache usage as an M3 linear progress (rounded segments with gaps and a stop dot). */
 .page-settings .cache-usage { gap: 10px; }
@@ -136,7 +142,7 @@
 
 /* Diagnostics and about. */
 .page-settings .settings-body > .textarea { border-radius: var(--shape-lg); padding: 14px 16px; }
-.page-settings .settings-body > p:first-of-type { font-size: var(--fs-lg); }
+.page-settings .settings-version { margin: 0 0 12px; padding-left: var(--page-title-inset); font-size: var(--fs-lg); }
 
 /* The in-memory credentials notice: an error-tinted card with an icon. */
 .credential-warning { display: flex; align-items: flex-start; gap: 12px; border-radius: var(--shape-lg); padding: 14px 18px; font-size: var(--fs-md); border: 0; margin-bottom: 12px; }
@@ -332,6 +338,27 @@
   .setup .brand { font-size: 48px; }
   .setup .setup-title { font-size: 22px; }
   .setup-card { padding: 20px; }
+}
+
+/* The same compact settings when the page is narrow in a wider window (the side panel open in a
+   window up to about 1200px wide, or the library's Edit pins panel open too): beside the 300px nav
+   the body would be squeezed to a few letters a line. */
+.page-settings { container: settings-page / inline-size; }
+@container settings-page (max-width: 600px) {
+  .page-settings .settings { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto; overflow: auto; }
+  .page-settings .settings-nav { flex-direction: row; flex-wrap: wrap; gap: 6px; padding: 12px 16px 4px; border-bottom: 0; border-right: 0; overflow: visible; }
+  .page-settings .settings-nav .nav-item { height: 36px; padding: 0 14px 0 10px; gap: 8px; font-size: var(--fs-md); background: var(--bg-sunken); }
+  .page-settings .settings-nav .nav-item .icon { width: 18px; height: 18px; }
+  .page-settings .settings-nav-group { display: contents; }
+  .page-settings .settings-search { flex: 1 0 100%; margin-bottom: 4px; }
+  .page-settings .settings-nav-heading, .page-settings .settings-account, .page-settings .settings-nav-title { display: none; }
+  .page-settings .settings-body { overflow: visible; padding: 16px var(--page-gutter) 28px; }
+  .page-settings .setting-row { grid-template-columns: minmax(0, 1fr); padding: 12px 16px; gap: 10px; }
+  .page-settings .setting-row .control { flex-wrap: wrap; justify-content: flex-start; }
+  .page-settings .setting-row:has(> .control > .m3-switch:only-child) { grid-template-columns: minmax(0, 1fr) auto; }
+  .page-settings .shortcut-row { padding-left: 16px; grid-template-columns: minmax(0, 1fr) auto auto; }
+  .page-settings .shortcut-row > :last-child { grid-column: auto; }
+  .page-settings .shortcut-row .rec { min-width: 0; }
 }
 
 /* ---- Home: customisable sections (home.sections) -------------------------

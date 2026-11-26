@@ -4,7 +4,7 @@
 // for sidebar / context menu / media session), keyboard shortcuts editor,
 // config backup, diagnostics, about.
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AccountKind, ActionDescriptor, AudioSettings, EqBand, ReplayGainMode, Setting, TransitionMode, TransitionSettings } from "@core/api";
+import type { AccountKind, ActionDescriptor, ActionTarget, AudioSettings, EqBand, ReplayGainMode, Setting, TransitionMode, TransitionSettings } from "@core/api";
 import { TransitionModeValues } from "@core/api";
 import { t, type StringId } from "@shared/strings";
 import { useApp, useSetting } from "../store/app";
@@ -220,7 +220,7 @@ function General() {
         </Select>
       </Row>
       <Toggle anchor="searchServer" settingKey={SK.searchIncludeServer} title={t("settings.searchServer")} desc={t("settings.searchServerDesc")} fallback />
-      <Row anchor="closeToTray" title={t("settings.closeToTray")} desc={t("settings.scope.local")}>
+      <Row anchor="closeToTray" title={t("settings.closeToTray")} local>
         <Switch checked={prefs.closeToTray} onChange={(checked) => setPrefs({ closeToTray: checked })} aria-label={t("settings.closeToTray")} data-testid="pref-closeToTray" />
       </Row>
       <Toggle anchor="settingsSync" settingKey={SK.syncEnabled} title={t("settings.settingsSync")} />
@@ -767,7 +767,7 @@ function SwipeChoice({ anchor, settingKey, fallback, choices, title, testId }: {
 
 function OrderList({ surface, anchor, title }: { surface: string; anchor: string; title: string }) {
   const version = useApp((s) => s.actionsVersion);
-  const target = { type: surface === "contextMenu" ? "tracks" : "none", data: surface === "contextMenu" ? { ids: ["__all__"] } : undefined } as never;
+  const target: ActionTarget = surface === "contextMenu" ? { type: "tracks", data: { tracks: [] } } : { type: "none" };
   // The chosen ones, in order, from Query.Actions (an empty stored order = the default); the
   // switched-off rest of CUSTOMISABLE after them, described by the palette (which lists everything).
   const chosen = useQuery(() => ({ type: "actions", data: { surface, target } }), "actions", [surface, version], { static: true });
@@ -890,8 +890,10 @@ function Backup() {
   return (
     <>
       <Row anchor="exportConfig" title={t("settings.exportConfig")} settingKey="backup">
-        <label className="switch small"><Switch checked={secrets} onChange={(checked) => setSecrets(checked)} data-testid="export-secrets" /> {t("settings.exportConfigSecrets")}</label>
         <button type="button" className="btn" onClick={() => { setPending(String(Date.now())); bridge().dispatch({ type: "exportConfig", data: { include_secrets: secrets } }); }} data-testid="export-config">{t("settings.exportConfig")}</button>
+      </Row>
+      <Row title={t("settings.exportConfigSecrets")}>
+        <Switch checked={secrets} onChange={(checked) => setSecrets(checked)} aria-label={t("settings.exportConfigSecrets")} data-testid="export-secrets" />
       </Row>
       <Row anchor="importConfig" title={t("settings.importConfig")} settingKey="backup"><button type="button" className="btn" onClick={() => void doImport()} data-testid="import-config">{t("settings.importConfig")}</button></Row>
     </>
@@ -960,7 +962,7 @@ function About() {
   const meta = useApp((s) => s.meta);
   return (
     <>
-      <p>{t("settings.about", { version: meta?.version ?? "" })}</p>
+      <p className="settings-version">{t("settings.about", { version: meta?.version ?? "" })}</p>
       <p className="muted small">{t("settings.licence")}</p>
       <div className="row">
         <button type="button" className="btn" onClick={() => bridge().shell.openExternal("https://www.gnu.org/licenses/agpl-3.0.html")}><Icon name="external" size={13} /> {t("settings.licenceOpen")}</button>
