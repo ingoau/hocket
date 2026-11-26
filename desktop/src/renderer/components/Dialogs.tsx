@@ -259,7 +259,9 @@ function ConnectDialog() {
           })}
         </ul>
       ) : <p className="small muted connect-empty">{t("connect.noDevices")}</p>}
-      <button type="button" className="btn tonal connect-settings" onClick={() => { close(); navigate({ view: "settings", param: "connect" }); }} data-testid="connect-settings"><Icon name="devices" size={20} />{t("connect.settings")}</button>
+      <div className="connect-foot">
+        <button type="button" className="btn tonal connect-settings" onClick={() => { close(); navigate({ view: "settings", param: "connect" }); }} data-testid="connect-settings"><Icon name="devices" size={18} />{t("connect.settings")}</button>
+      </div>
     </>
   );
 }
@@ -270,11 +272,13 @@ function ConnectVolume() {
   const silent = v.muted || v.shown === 0;
   return (
     <div className="connect-volume" role="group" aria-labelledby="connect-volume-label">
-      <div id="connect-volume-label" className="connect-volume-label">{t("connect.volume")}</div>
-      <div className="connect-volume-row">
-        <button type="button" className="btn icon sm" aria-label={t("player.mute")} aria-pressed={v.muted} title={v.muted ? t("a11y.unmute") : t("player.mute")} disabled={v.unknown} onClick={v.toggleMute}><Icon name={silent ? "mute" : "volume"} size={20} /></button>
-        <Slider min={0} max={1} step={0.01} value={v.shown} disabled={v.unknown} aria-label={v.label} aria-valuetext={v.valueText} onKeyDown={v.onKeyDown} onChange={v.set} onWheel={v.onWheel} className="grow" data-testid="connect-volume" />
-        <span className="connect-volume-pct">{v.unknown ? "–" : `${Math.round(v.shown * 100)}%`}</span>
+      <button type="button" className="btn icon connect-mute" aria-label={t("player.mute")} aria-pressed={v.muted} title={v.muted ? t("a11y.unmute") : t("player.mute")} disabled={v.unknown} onClick={v.toggleMute}><Icon name={silent ? "mute" : "volume"} size={22} /></button>
+      <div className="connect-volume-body">
+        <div className="connect-volume-top">
+          <span id="connect-volume-label" className="connect-volume-label">{t("connect.volume")}</span>
+          <span className="connect-volume-pct">{v.unknown ? "–" : `${Math.round(v.shown * 100)}%`}</span>
+        </div>
+        <Slider min={0} max={1} step={0.01} value={v.shown} disabled={v.unknown} aria-label={v.label} aria-valuetext={v.valueText} onKeyDown={v.onKeyDown} onChange={v.set} onWheel={v.onWheel} data-testid="connect-volume" />
       </div>
     </div>
   );
