@@ -153,7 +153,8 @@ export function describeActions(surface: string, target: ActionTarget, order: st
         return (ia === -1 ? 1e6 : ia) - (ib === -1 ? 1e6 : ib);
       })
     : applicable;
-  const filtered = sequence && (surface === "sidebar" || surface === "mediaSession") ? sorted.filter((e) => sequence.includes(e.id)) : sorted;
+  // Like the core, a choose-and-order surface offers only what its order holds.
+  const filtered = sequence && (surface === "sidebar" || surface === "mediaSession" || surface === "contextMenu") ? sorted.filter((e) => sequence.includes(e.id)) : sorted;
   return filtered
     .filter((e) => {
       if (e.id === "preview") {

@@ -186,7 +186,7 @@ test.describe("window chrome", () => {
     await page.getByTestId("settings-nav-customisation").click();
     const list = page.getByTestId("order-contextMenu");
     await expect(list.getByRole("switch", { name: "Remove from queue" })).toHaveCount(0);
-    const item = list.getByRole("switch", { name: "Go to album", exact: true });
+    const item = list.getByRole("switch", { name: "Snooze", exact: true });
     await expect(item).toBeChecked();
     await item.click();
     await expect(item).not.toBeChecked();
