@@ -187,11 +187,11 @@ fun SubScreen(nav: NavHostController, title: String, content: @Composable androi
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection).testTag("settings.screen"),
         topBar = {
-            LargeFlexibleTopAppBar(
+            app.hocket.ui.components.ContentWidthTopBar { insets -> LargeFlexibleTopAppBar(windowInsets = insets,
                 title = { Text(title, modifier = Modifier.semantics { heading() }.testTag("settings.title")) },
                 navigationIcon = { if (!LocalSettingsPane.current) IconButton(onClick = { nav.popBackStack() }, modifier = Modifier.testTag("settings.back")) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
                 scrollBehavior = scroll,
-            )
+            ) }
         },
     ) { padding ->
         // Top only: the shell already keeps content clear of the navigation bar.

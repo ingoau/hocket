@@ -69,7 +69,10 @@ fun SpotlightCarousel(
     modifier: Modifier = Modifier,
 ) {
     BoxWithConstraints(modifier.fillMaxWidth().testTag("home.spotlight")) {
-        val height = (maxWidth * 1.18f).coerceIn(440.dp, 600.dp)
+        // Never taller than most of the window: on a phone in landscape the slide's words and buttons
+        // would start below the fold.
+        val window = with(androidx.compose.ui.platform.LocalDensity.current) { androidx.compose.ui.platform.LocalWindowInfo.current.containerSize.height.toDp() }
+        val height = (maxWidth * 1.18f).coerceIn(440.dp, 600.dp).coerceAtMost((window * 0.85f).coerceAtLeast(320.dp))
         HorizontalPager(pager, Modifier.fillMaxWidth().height(height), key = { slides.getOrNull(it)?.key ?: it }) { page ->
             val slide = slides.getOrNull(page) ?: return@HorizontalPager
             MaterialTheme(colorScheme = schemes.getOrNull(page) ?: MaterialTheme.colorScheme) {
@@ -79,7 +82,7 @@ fun SpotlightCarousel(
         if (slides.size > 1) {
             // Outside the pager, so the dots stay put while slides move; level with the buttons.
             Row(
-                Modifier.align(Alignment.BottomEnd).padding(end = 24.dp, bottom = 24.dp).height(56.dp).clearAndSetSemantics { },
+                Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 24.dp).height(56.dp).clearAndSetSemantics { },
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -115,7 +118,8 @@ private fun SpotlightPage(slide: SpotlightSlide, page: Int, count: Int, onOpen: 
             0f to Color.Transparent, 0.42f to cs.surface.copy(alpha = if (LocalDarkTheme.current) 0.12f else 0f),
             0.62f to cs.surface.copy(alpha = 0.8f), 0.8f to cs.surface.copy(alpha = 0.95f), 1f to cs.surface,
         )))
-        Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 24.dp)) {
+        // On Home's 16 dp keyline, with the bar's mark and the shelves below.
+        Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 24.dp)) {
             // The words open the album, artist or playlist (not the whole slide: its top is under the bar's buttons).
             Column(Modifier.fillMaxWidth().clickable { onOpen(slide) }.clearAndSetSemantics { contentDescription = a11y; role = Role.Button }.testTag("home.spotlight.open")) {
                 Text(

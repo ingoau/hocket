@@ -1,5 +1,6 @@
 package app.hocket.ui.screens.search
 
+import app.hocket.ui.components.contentMaxWidth
 import app.hocket.ui.components.SourceChips
 import app.hocket.ui.components.SourceFilter
 import app.hocket.ui.components.maxWidthListPadding
@@ -179,7 +180,9 @@ fun SearchScreen(nav: NavHostController) {
     var kindQuery by rememberSaveable { mutableStateOf(query) }
     LaunchedEffect(query) { if (query != kindQuery) { kindQuery = query; kind = SearchKind.All } }
     Column(Modifier.fillMaxSize().testTag("search.screen").statusBarsPadding()) {
-        Row(Modifier.padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+        // The field, the chips and the note keep to the results' width (ContentMaxWidth, centred), so on
+        // a wide screen they start where the results do.
+        Row(Modifier.contentMaxWidth().padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             // The M3 search bar: a full-round 56dp field on the highest container, no outline.
             TextField(
                 value = query, onValueChange = { query = it }, singleLine = true, placeholder = { Text(stringResource(R.string.search_hint)) },
@@ -214,9 +217,9 @@ fun SearchScreen(nav: NavHostController) {
         )
         val empty = counts.values.all { it == 0 }
         val show = { k: SearchKind -> (kind == SearchKind.All || kind == k) && (counts[k] ?: 0) > 0 }
-        SourceChips()
+        SourceChips(modifier = Modifier.contentMaxWidth())
         // The kinds to narrow to, each with its count; one with nothing found can't be picked.
-        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 6.dp).testTag("search.kinds")) {
+        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.contentMaxWidth().padding(bottom = 6.dp).testTag("search.kinds")) {
             items(SearchKind.entries.toList(), key = { it.name }) { k ->
                 val n = counts[k]
                 FilterChip(
@@ -231,7 +234,7 @@ fun SearchScreen(nav: NavHostController) {
             stringResource(R.string.search_lyrics_scope),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 6.dp).testTag("search.lyrics.scope"),
+            modifier = Modifier.contentMaxWidth().padding(horizontal = 16.dp).padding(bottom = 6.dp).testTag("search.lyrics.scope"),
         )
         val density = LocalDensity.current
         Box(Modifier.heightIn(min = with(density) { minHeightPx.toDp() }).onSizeChangedKeepMax { if (it > minHeightPx) minHeightPx = it }) {

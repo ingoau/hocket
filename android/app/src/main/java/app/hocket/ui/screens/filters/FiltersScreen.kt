@@ -68,7 +68,7 @@ fun FiltersScreen(nav: NavHostController) {
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
-        topBar = { MediumFlexibleTopAppBar(title = { Text(stringResource(R.string.filters_title), style = app.hocket.ui.brand.brandTitleStyle(), maxLines = 1, modifier = Modifier.semantics { heading() }) }, actions = { AccountButton() }, navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } }, scrollBehavior = scroll) },
+        topBar = { app.hocket.ui.components.ContentWidthTopBar { insets -> MediumFlexibleTopAppBar(windowInsets = insets, title = { Text(stringResource(R.string.filters_title), style = app.hocket.ui.brand.brandTitleStyle(), maxLines = 1, modifier = Modifier.semantics { heading() }) }, actions = { AccountButton() }, navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } }, scrollBehavior = scroll) } },
         floatingActionButton = {
             val newLabel = stringResource(R.string.filters_new)
             // M3 Expressive's medium extended FAB, on the primary colour as the boards show it.
@@ -107,8 +107,9 @@ fun FiltersScreen(nav: NavHostController) {
                             }
                         },
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(f.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        // The badge goes under a name it doesn't fit beside, rather than cutting the name short.
+                        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(2.dp), itemVerticalAlignment = Alignment.CenterVertically) {
+                            Text(f.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             if (local) Badge(stringResource(R.string.filter_this_device), container = MaterialTheme.colorScheme.surfaceContainerHigh)
                         }
                     }
