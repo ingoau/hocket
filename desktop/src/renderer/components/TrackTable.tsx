@@ -1,6 +1,6 @@
 // Virtualised, keyboard-navigable, multi-select track table. Selection is
 // keyed by id; Ctrl+A selects the predicate ("all matching") using `total`.
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, type CSSProperties, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
 import type { ActionTarget, SortOrder, Track, TrackRef } from "@core/api";
 import { t } from "@shared/strings";
@@ -132,12 +132,18 @@ export function TrackTable(props: TrackTableProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
+  // The body's own scrollbar, when it scrolls itself: the header stops short of it too, so the
+  // column labels stay over their columns.
+  const [gutter, setGutter] = useState(0);
   useLayoutEffect(() => {
     const el = tableRef.current;
-    if (!el) return;
-    setWidth(el.clientWidth);
-    const ro = new ResizeObserver(() => setWidth(el.clientWidth));
+    const body = parentRef.current;
+    if (!el || !body) return;
+    const measure = () => { setWidth(el.clientWidth); setGutter(body.offsetWidth - body.clientWidth); };
+    measure();
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
+    ro.observe(body);
     return () => ro.disconnect();
   }, []);
   const columns = useMemo(() => fitColumns(props.columns, width), [props.columns, width]);
@@ -392,7 +398,7 @@ export function TrackTable(props: TrackTableProps) {
   const count = selectionCount(selection);
   const label = props.label ?? t("a11y.tracksTable");
   return (
-    <div ref={tableRef} className="table" role="grid" aria-label={count ? `${label}, ${t("selection.count", { count })}` : label} aria-rowcount={total + 1} aria-colcount={columns.length} aria-multiselectable="true" data-testid={props.testId ?? "track-table"}>
+    <div ref={tableRef} className="table" style={gutter ? { "--table-gutter": `${gutter}px` } as CSSProperties : undefined} role="grid" aria-label={count ? `${label}, ${t("selection.count", { count })}` : label} aria-rowcount={total + 1} aria-colcount={columns.length} aria-multiselectable="true" data-testid={props.testId ?? "track-table"}>
       <div role="rowgroup" style={{ display: "contents" }}>
         <div className="table-head" style={{ gridTemplateColumns: template }} role="row" aria-rowindex={1}>
           {columns.map((c) => {

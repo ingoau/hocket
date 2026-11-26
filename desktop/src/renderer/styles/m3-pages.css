@@ -450,15 +450,22 @@ button.m3-switch { border: 0; padding: 0; background: none; }
 .lib-tile-label { font-size: var(--fs-lg); font-weight: 700; }
 /* The links: an M3 Expressive connected group. Tonal tiles 3px apart, large corners at the group's
    ends and tight ones where tiles meet; each icon sits in its own shape. One row when there's room,
-   a stacked list on a narrow window. */
-.lib-links { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 3px; margin: 3px 0 28px; }
+   a stacked list on a narrow window. Six links: one row of six when the page is wide enough for
+   their labels, two rows of three otherwise, so no link is left on a row of its own. */
+.page-library { container-type: inline-size; }
+.lib-links { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; margin: 3px 0 28px; }
 .lib-link {
   display: flex; flex-direction: column; align-items: flex-start; justify-content: space-between; gap: 10px; min-width: 0; min-height: 92px; padding: 12px 14px; border: 0;
   border-radius: 6px; background: var(--surface-tonal); color: var(--fg); font: inherit; font-size: var(--fs-md); font-weight: 600; text-align: left;
   transition: border-radius var(--dur-spring) var(--spring-fast), background var(--dur-short) var(--ease-emphasized);
 }
-.lib-link:first-child { border-radius: 6px 6px 6px 24px; }
+.lib-link:nth-child(4) { border-radius: 6px 6px 6px 24px; }
 .lib-link:last-child { border-radius: 6px 6px 24px 6px; }
+@container (min-width: 1040px) {
+  .lib-links { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .lib-link:nth-child(4) { border-radius: 6px; }
+  .lib-link:first-child { border-radius: 6px 6px 6px 24px; }
+}
 .lib-link:hover { background: color-mix(in srgb, var(--accent) 10%, var(--surface-tonal)); border-radius: 18px; }
 .lib-link:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
 .lib-link-icon { display: grid; place-items: center; flex: 0 0 auto; width: 40px; height: 40px; background: var(--accent-soft); color: var(--accent-text); }
@@ -472,7 +479,7 @@ button.m3-switch { border: 0; padding: 0; background: none; }
 @media (max-width: 760px) {
   .lib-links { grid-template-columns: minmax(0, 1fr); }
   .lib-link { flex-direction: row; align-items: center; justify-content: flex-start; min-height: 64px; }
-  .lib-link:first-child { border-radius: 6px; }
+  .lib-link:first-child, .lib-link:nth-child(4) { border-radius: 6px; }
   .lib-link:last-child { border-radius: 6px 6px 24px 24px; }
 }
 @media (prefers-reduced-motion: reduce) { .lib-link { transition: none; } }
@@ -495,7 +502,7 @@ button.m3-switch { border: 0; padding: 0; background: none; }
 .brand-mark .v2 { stroke: var(--brand-voice-2); }
 .lib-recent-head { display: flex; align-items: baseline; justify-content: space-between; margin-right: var(--page-title-inset); }
 @media (max-width: 900px) {
-  .lib-browse { grid-template-columns: repeat(3, minmax(0, 1fr)); } .lib-tile.wide { grid-column: span 3; }
+  .lib-browse { grid-template-columns: repeat(4, minmax(0, 1fr)); } .lib-tile.wide { grid-column: span 4; }
   .lib-browse .lib-tile:first-child { border-radius: 28px 28px 6px 6px; }
   .lib-browse .lib-tile:last-child { border-radius: 6px; }
 }
@@ -623,7 +630,7 @@ button.m3-switch { border: 0; padding: 0; background: none; }
 .dl-table td:first-child { border-radius: var(--shape-md) 0 0 var(--shape-md); }
 .dl-table td:last-child { border-radius: 0 var(--shape-md) var(--shape-md) 0; }
 .dl-table tr:hover td { background: var(--bg-hover); }
-.dl-table th:nth-child(2) { width: 30%; }
+.dl-table th:nth-child(2) { width: 20%; }
 .dl-table th:nth-child(3) { width: 96px; }
 .dl-table th:nth-child(4) { width: 132px; }
 .dl-table th:nth-child(5) { width: 56px; }
@@ -682,7 +689,7 @@ button.m3-switch { border: 0; padding: 0; background: none; }
 /* Narrow (a small window, 200% zoom): the Files column goes, so the title keeps room for its name. */
 @container (max-width: 640px) {
   .dl-table th:nth-child(4), .dl-table td:nth-child(4) { display: none; }
-  .dl-table th:nth-child(2) { width: 28%; }
+  .dl-table th:nth-child(2) { width: 24%; }
 }
 
 /* Stats: the period chips, and each chart's readout of the bar under the pointer (or the peak). */
@@ -729,7 +736,7 @@ button.m3-switch { border: 0; padding: 0; background: none; }
 /* ---- Filter editor ---------------------------------------------------------- */
 .page-filter-builder { --fb-pad: clamp(16px, 2.4vw, 32px); padding: 0 var(--fb-pad) 32px; container-type: inline-size; }
 .fb-head { display: flex; align-items: center; gap: 12px; padding: 28px 0 16px; }
-.fb-name { flex: 1; min-width: 0; height: 52px; padding: 0 10px; margin-left: -10px; border: 0; border-radius: var(--shape-md); background: transparent; color: var(--fg); font: inherit; font-size: 34px; font-weight: 800; letter-spacing: -0.01em; }
+.fb-name { flex: 1; min-width: 0; height: 52px; padding: 0 10px; margin-left: -10px; border: 0; border-radius: var(--shape-md); background: transparent; color: var(--fg); font: inherit; font-size: 34px; font-weight: 800; letter-spacing: -0.01em; text-overflow: ellipsis; }
 .fb-name:hover { background: var(--bg-hover); }
 .fb-name:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 0; background: var(--bg-elev); }
 .fb-save { height: 44px; padding: 0 20px; font-size: 15px; font-weight: 600; }
