@@ -718,3 +718,87 @@ fn a_soft_noise_to_the_edge_is_not_a_solid_margin() {
     let l = c.auto();
     assert_ne!(l.bottom.reason, "extend:flat", "{:?}", l.bottom);
 }
+
+/// A plain cover with a faint texture across it: each pixel up to `amp` levels off `rgb`.
+fn textured(rgb: [u8; 3], amp: i32) -> Canvas {
+    let mut c = Canvas::new(S, S, rgb);
+    let mut seed = 0x9e37_79b9_u32;
+    for y in 0..S {
+        for x in 0..S {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            let n = (seed % (2 * amp as u32 + 1)) as i32 - amp;
+            c.set(x, y, rgb.map(|v| (v as i32 + n).clamp(0, 255) as u8));
+        }
+    }
+    c
+}
+
+fn channels(c: u32) -> [i32; 3] {
+    [
+        (c >> 16) as i32 & 0xff,
+        (c >> 8) as i32 & 0xff,
+        c as i32 & 0xff,
+    ]
+}
+
+#[test]
+fn a_flat_top_strip_smooths_a_texture_away() {
+    // Fog or grain across the top: stretched upwards as it is, it would be streaks.
+    let c = textured([110, 120, 125], 2);
+    let l = c.auto();
+    assert_eq!(l.top.reason, "extend:flat", "{:?}", l.top);
+    assert_eq!(l.top_row.len(), S);
+    for (x, &p) in l.top_row.iter().enumerate() {
+        let [r, g, b] = channels(p);
+        assert!(
+            (r - 110).abs() <= 1 && (g - 120).abs() <= 1 && (b - 125).abs() <= 1,
+            "{x}: {p:06x}"
+        );
+    }
+}
+
+#[test]
+fn a_flat_top_strip_keeps_lines_that_stand_out() {
+    // A rope running off the top and a thin border down the right: they carry on crisp.
+    let mut c = textured([240, 220, 40], 2);
+    c.fill(100, 0, 2, 60, [30, 20, 10]);
+    c.fill(S - 3, 0, 3, S, [200, 30, 60]);
+    let l = c.auto();
+    assert_eq!(l.top.reason, "extend:flat", "{:?}", l.top);
+    let at = |x: usize| channels(l.top_row[x]);
+    assert!(at(100)[0] < 60, "rope {:06x}", l.top_row[100]);
+    assert!(at(S - 1)[1] < 60, "border {:06x}", l.top_row[S - 1]);
+    // Just beside them, the background, barely touched by the blur.
+    for x in [90, 112, S - 12] {
+        let [r, g, b] = at(x);
+        assert!(
+            (r - 240).abs() <= 6 && (g - 220).abs() <= 6 && (b - 40).abs() <= 6,
+            "{x}: {:06x}",
+            l.top_row[x]
+        );
+    }
+}
+
+#[test]
+fn only_a_flat_top_has_a_strip_row() {
+    let l = noise().auto();
+    assert_ne!(l.top.reason, "extend:flat");
+    assert!(l.top_row.is_empty());
+}
+
+#[test]
+fn a_flat_top_strip_drops_dots_that_do_not_carry_on() {
+    // Stars on a night sky: a bright pixel in the first rows only would stretch into a streak.
+    let mut c = textured([12, 14, 30], 1);
+    for x in [40, 41, 130, 200] {
+        c.fill(x, 0, 1, 2, [230, 230, 240]);
+    }
+    let l = c.auto();
+    assert_eq!(l.top.reason, "extend:flat", "{:?}", l.top);
+    for x in [40, 41, 130, 200] {
+        let [r, g, b] = channels(l.top_row[x]);
+        assert!(r < 30 && g < 30 && b < 50, "{x}: {:06x}", l.top_row[x]);
+    }
+}

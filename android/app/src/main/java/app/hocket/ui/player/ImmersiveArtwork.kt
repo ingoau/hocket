@@ -35,6 +35,7 @@ import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.ImageShader
 import androidx.compose.ui.graphics.ShaderBrush
@@ -49,6 +50,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import app.hocket.core.ArtworkLayouts
 import app.hocket.core.ArtworkSizes
@@ -303,6 +305,35 @@ half4 main(float2 p) {
  */
 internal fun ArtworkEdge.isFlat(): Boolean = style == ArtworkStyle.Extend && reason == "extend:flat"
 
+/**
+ * How much of the artwork's top fades onto the strip above it ([ImmersiveTopStrip]): [FEATHER] onto
+ * a blurred copy; onto a flat edge's colours, [CRISP_FEATHER] where the cover is smooth there, up
+ * to [TEXTURED_FEATHER] the grainier it is ([ArtworkMetrics.grain] from [GRAIN_SMOOTH] to
+ * [GRAIN_TEXTURED]), so a texture dissolves into the strip instead of stopping on a line.
+ */
+internal fun ArtworkEdge.topFeather(): Float {
+    if (!isFlat()) return FEATHER
+    val t = (((metrics.grain ?: 0.0).toFloat() - GRAIN_SMOOTH) / (GRAIN_TEXTURED - GRAIN_SMOOTH)).coerceIn(0f, 1f)
+    return CRISP_FEATHER + (TEXTURED_FEATHER - CRISP_FEATHER) * t
+}
+
+/** [topFeather] onto a flat edge whose cover is as grainy as a flat edge may be. */
+private const val TEXTURED_FEATHER = 0.12f
+/** Grain ([ArtworkMetrics.grain], sRGB levels) up to which a flat top fades over [CRISP_FEATHER] alone. */
+private const val GRAIN_SMOOTH = 0.8f
+/** Grain from which a flat top fades over all of [TEXTURED_FEATHER] (the core's most for a flat edge is 2). */
+private const val GRAIN_TEXTURED = 2.0f
+
+/**
+ * A flat top edge's row ([ArtworkLayout.topRow], `0xRRGGBB` left to right) as a one-pixel-high
+ * image to stretch over the strip, or null when the core sent none.
+ */
+internal fun stripRow(row: List<UInt>?): ImageBitmap? {
+    if (row.isNullOrEmpty()) return null
+    val px = IntArray(row.size) { row[it].toInt() or 0xFF000000.toInt() }
+    return Bitmap.createBitmap(px, row.size, 1, Bitmap.Config.ARGB_8888).asImageBitmap()
+}
+
 /** The share of the artwork that fades into the continuation. */
 internal const val FEATHER = 0.18f
 /** The share of the artwork that fades into a flat extension (onto its colour, not a blurred copy). */
@@ -459,7 +490,7 @@ private const val BOTTOM_FADE = 0.6f
  * The immersive artwork's own last [FEATHER] fading out onto the continuation's blurred copy, as
  * much as [fraction] (1 in artwork mode, 0 as a thumbnail), and, where its [top] strip is not a
  * flat colour, its first [FEATHER] fading in from that strip's blurred copy as much as [topFraction]. A flat
- * extension (either end) fades over only [CRISP_FEATHER], onto its colour, unless [evenFlat] (the artwork
+ * extension fades over less, onto its colour: the top over [topFeather], the bottom over [CRISP_FEATHER] unless [evenFlat] (the artwork
  * in flight, whose flat continuation fades out under it: its edge fades as wide as any other).
  */
 internal fun Modifier.immersiveFade(edge: ArtworkEdge?, fraction: () -> Float, evenFlat: Boolean = false, top: ArtworkEdge? = null, topFraction: () -> Float = fraction, crispFraction: () -> Float = { 0f }): Modifier {
@@ -467,7 +498,7 @@ internal fun Modifier.immersiveFade(edge: ArtworkEdge?, fraction: () -> Float, e
     val bottomFeather = if (edge?.isFlat() == true && !evenFlat) CRISP_FEATHER else FEATHER
     // The top fades onto [ImmersiveTopStrip]'s blurred copy (or its flat colour, over less).
     val fadeTop = edge != null && top != null
-    val topFeather = if (top?.isFlat() == true) CRISP_FEATHER else FEATHER
+    val topFeather = top?.topFeather() ?: FEATHER
     if (!bottom && !fadeTop) return this
     return this
         .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
@@ -530,8 +561,8 @@ internal fun immersiveHeaderColor(layout: ArtworkLayout): Color = if (stripLight
 /**
  * The room above an immersive artwork (under the status bar and the player's handle,
  * [HeroGeometry.immersiveSlot]'s top down to the page's), filled from the artwork's top edge
- * ([ArtworkLayout.top]): a flat edge (a white cover, say) carries on upwards in its colour, the
- * artwork's first [CRISP_FEATHER] fading onto it and the cover's grain over it, so the cover just
+ * ([ArtworkLayout.top]): a flat edge (a white cover, say) carries on upwards in its colours, the
+ * artwork's first [topFeather] fading onto it and the cover's grain over it, so the cover just
  * looks taller; any other fades the artwork's top ([immersiveFade])
  * onto a blurred copy of itself that carries on upwards as calm, blurred colour (never a sharp
  * mirror). Drawn in the continuation's layer, so it moves with the artwork in flight and in a swipe.
@@ -545,7 +576,8 @@ internal fun ImmersiveTopStrip(coverArt: String?, layout: ArtworkLayout, hero: H
     val far = with(density) { (hero.immersiveSlot().width * BLUR_FAR).toDp() }
     /** The artwork's top in this box, and how far under it its fading top runs. */
     val artTop = { hero.immersiveSlot().top }
-    val under = { hero.immersiveSlot().width * if (flat) CRISP_FEATHER else FEATHER }
+    val feather = edge.topFeather()
+    val under = { hero.immersiveSlot().width * feather }
     Box(
         modifier
             .clearAndSetSemantics { }
@@ -556,27 +588,20 @@ internal fun ImmersiveTopStrip(coverArt: String?, layout: ArtworkLayout, hero: H
             },
     ) {
         if (flat) {
-            // The edge's colour, then the cover's own first rows stretched upwards over it: they
-            // meet the artwork's top exactly (a flat edge is rarely one colour to the last level).
+            // The edge's colour, then the cover's first rows as the core smoothed them
+            // ([ArtworkLayout.topRow]) stretched upwards over it: they meet the artwork's top in its
+            // colours (a flat edge is rarely one colour to the last level), and a line running off
+            // the top carries on, but a texture there (grain, fog, stars) has been smoothed away
+            // rather than stretching into streaks.
             Box(Modifier.fillMaxSize().background(colors.firstOrNull() ?: argb(edge.baseColor)))
-            Box(Modifier.fillMaxSize().clipToBounds()) {
-                Artwork(
-                    coverArt, ArtworkSizes.FULL, null,
-                    Modifier
-                        .layout { m, c ->
-                            val side = hero.immersiveSlot().width.roundToInt().coerceAtLeast(1)
-                            val p = m.measure(Constraints.fixed(c.maxWidth, side))
-                            layout(c.maxWidth, c.maxHeight) { p.place(0, 0) }
-                        }
-                        .graphicsLayer {
-                            // The first two of the cover's ArtworkSizes.FULL rows, over the whole strip.
-                            val rows = 2f * hero.immersiveSlot().width / ArtworkSizes.FULL
-                            transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 0f)
-                            scaleY = (artTop() / rows.coerceAtLeast(1f)).coerceAtLeast(1f)
-                        },
-                    RectangleShape,
+            val row = remember(layout.topRow) { stripRow(layout.topRow) }
+            if (row != null) Box(Modifier.fillMaxSize().drawBehind {
+                drawImage(
+                    row,
+                    dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()),
+                    filterQuality = FilterQuality.Low,
                 )
-            }
+            })
             Box(Modifier.fillMaxSize().background(grainBrush(edge.metrics.grain)))
             return@Box
         }
