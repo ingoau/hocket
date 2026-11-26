@@ -34,7 +34,7 @@ export function Downloads({ tab }: { tab?: string }) {
       <div className="view-header dl-header">
         {current === "offline" ? <button type="button" className="btn icon dl-back" aria-label={t("downloads.title")} title={t("downloads.title")} onClick={() => navigate({ view: "downloads" }, true)} data-testid="downloads-back"><Icon name="back" size={22} /></button> : null}
         <h1 className="brand-type">{current === "offline" ? t("downloads.tab.offline") : t("downloads.title")}</h1>
-        {summary ? <p className="dl-summary" data-testid="downloads-summary">{current === "offline" ? t("downloads.offlineHint") : summary}</p> : null}
+        {current === "offline" || summary ? <p className="dl-summary" data-testid="downloads-summary">{current === "offline" ? t("downloads.offlineHint") : summary}</p> : null}
       </div>
       {current === "pins" ? <Pins /> : <AvailableOffline />}
     </div>
@@ -156,8 +156,7 @@ function AvailableOffline() {
   return (
     <div className="view-body no-pad" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }} data-testid="available-offline">
       <div className="row offline-head">
-        <span className="muted small grow">{t("downloads.offlineHint")}</span>
-        <span className="muted small" data-testid="available-offline-count">{t("downloads.offlineCount", { count: total })}</span>
+        <span className="muted small grow" data-testid="available-offline-count">{t("downloads.offlineCount", { count: total })}</span>
         <button type="button" className="btn sm text" onClick={() => bridge().dispatch({ type: "clearStreamCache" })}>{t("downloads.clearCache")}</button>
         <button type="button" className="btn sm tonal" disabled={!total} onClick={() => play(0)}><Icon name="play" size={12} filled /> {t("downloads.playOffline")}</button>
       </div>

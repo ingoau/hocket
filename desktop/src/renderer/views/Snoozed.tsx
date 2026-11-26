@@ -4,6 +4,7 @@ import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
 import { openContextMenu } from "../components/ContextMenu";
 import { Artwork } from "../components/Artwork";
+import { EmptyState } from "../components/EmptyState";
 
 function ends(item: SnoozeItem): string {
   if (item.until == null) return t("snooze.untilNever");
@@ -16,9 +17,9 @@ export function Snoozed() {
   const play = (item: SnoozeItem) => bridge().dispatch({ type: "playTracks", data: { tracks: [item.trackRef], start_index: 0, label: item.track.title, shuffle: false } });
   return (
     <div className="view" data-testid="view-snoozed">
-      <div className="view-header"><h1 className="brand-type">{t("snooze.title")}</h1><span className="muted count-chip">{items.length}</span></div>
+      <div className="view-header"><h1 className="brand-type">{t("snooze.title")}</h1>{items.length ? <span className="muted count-chip">{items.length}</span> : null}</div>
       <div className="view-body">
-        {items.length === 0 ? <p className="empty" data-testid="snoozed-empty">{t("snooze.empty")}</p> : (
+        {items.length === 0 ? <EmptyState message={t("snooze.empty")} icon="sleep" testId="snoozed-empty" /> : (
           <ul className="snoozed-list" data-testid="snoozed-list">
             {items.map((item) => (
               <li key={item.trackRef.id}>

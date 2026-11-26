@@ -222,7 +222,7 @@
    On a detail page the header sticks while the rows scroll under it, so it is
    filled with the content pane's surface rather than see-through. */
 .table-head {
-  height: 40px; margin: 0 var(--table-inset) 4px; padding: 0 8px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0;
+  height: 40px; margin: 0 calc(var(--table-inset) + var(--table-gutter, 0px)) 4px var(--table-inset); padding: 0 8px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0;
   background: var(--bg-elev); color: var(--fg-muted); font-size: var(--fs-md); font-weight: 500; letter-spacing: 0.01em;
   z-index: 2; /* above a row being swiped (z-index 1) as it passes under */
 }
