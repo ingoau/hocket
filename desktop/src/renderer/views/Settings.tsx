@@ -14,7 +14,7 @@ import { Icon } from "../components/Icon";
 import { fmtBytes, fmtRelative } from "../lib/format";
 import { chordFromEvent, chordToString, formatChord, parseChord } from "../store/shortcuts";
 import { useKeymap } from "../store/keyboard";
-import { CUSTOMISABLE, NOT_LISTED, mergeOrder } from "@shared/action-orders";
+import { CUSTOMISABLE, DEFAULT_ORDER, NOT_LISTED, mergeOrder } from "@shared/action-orders";
 import { DEFAULT_KEYMAP } from "@shared/keymap";
 import { executeAction } from "../store/actions";
 import { CredentialWarning } from "../components/CredentialWarning";
@@ -789,7 +789,7 @@ function OrderList({ surface, anchor, title }: { surface: string; anchor: string
     setItems(next);
     let stored: unknown = [];
     try { stored = JSON.parse(storedRaw ?? "[]"); } catch { /* the default */ }
-    const base = Array.isArray(stored) && stored.length ? (stored as string[]) : (CUSTOMISABLE[surface] ?? []);
+    const base = Array.isArray(stored) && stored.length ? (stored as string[]) : (DEFAULT_ORDER[surface] ?? []);
     const ids = mergeOrder(base, new Set(next.map((x) => x.a.id)), next.filter((x) => x.on).map((x) => x.a.id));
     bridge().dispatch({ type: "setActionOrder", data: { surface, action_ids: ids } });
   };

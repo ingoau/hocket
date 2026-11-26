@@ -9,6 +9,14 @@ export const CUSTOMISABLE: Record<string, readonly string[]> = {
   mediaSession: ["previous", "next", "shuffle", "repeat", "love", "stash"],
 };
 
+// The core's default order per surface (`default_order` in
+// crates/hocket-core/src/actions/defs.rs): what an empty stored order means.
+export const DEFAULT_ORDER: Record<string, readonly string[]> = {
+  sidebar: ["navigateHome", "navigateLibrary"],
+  contextMenu: CUSTOMISABLE.contextMenu ?? [],
+  mediaSession: ["previous", "togglePlay", "next", "shuffle", "repeat", "love"],
+};
+
 // Never listed, even when a stored order names them, because their switch would
 // do nothing: Settings isn't a sidebar place (it's always in the sidebar's
 // footer), and play/pause is always on every media session.
