@@ -105,7 +105,7 @@ fun DownloadsScreen(nav: NavHostController) {
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
         topBar = {
-            LargeFlexibleTopAppBar(
+            app.hocket.ui.components.ContentWidthTopBar { insets -> LargeFlexibleTopAppBar(windowInsets = insets,
                 title = { Text(stringResource(R.string.downloads_title), style = app.hocket.ui.brand.brandTitleStyle(), maxLines = 1, modifier = Modifier.semantics { heading() }) },
                 subtitle = { Text(storage.freeBytes?.let { stringResource(R.string.downloads_storage, formatBytes(storage.downloadsBytes), formatBytes(storage.cacheBytes), formatBytes(it)) }
                     // Free space unknown: leave it out rather than show "? free".
@@ -113,7 +113,7 @@ fun DownloadsScreen(nav: NavHostController) {
                 navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
                 actions = { AccountButton() },
                 scrollBehavior = scroll,
-            )
+            ) }
         },
     ) { padding ->
         BoxWithConstraints(Modifier.fillMaxSize()) {

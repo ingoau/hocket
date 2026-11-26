@@ -158,11 +158,11 @@ private fun SettingsList(nav: NavHostController, selected: SettingsCategory?, on
     Scaffold(
         modifier = modifier.nestedScroll(scroll.nestedScrollConnection).testTag("settings.categories"),
         topBar = {
-            LargeFlexibleTopAppBar(
+            app.hocket.ui.components.ContentWidthTopBar { insets -> LargeFlexibleTopAppBar(windowInsets = insets,
                 title = { Text(stringResource(R.string.settings_title), style = brandTitleStyle(), modifier = Modifier.semantics { heading() }) },
                 navigationIcon = { if (nav.previousBackStackEntry != null) androidx.compose.material3.IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
                 scrollBehavior = scroll,
-            )
+            ) }
         },
     ) { padding ->
         // The scroll spans the screen; its rows stop at ContentMaxWidth, centred.
@@ -253,7 +253,9 @@ private fun AccountCard(onOpen: () -> Unit, onStats: () -> Unit, onDevices: () -
                     Icon(HocketIcons.Filled.Sync, null, Modifier.size(ButtonDefaults.MediumIconSize))
                     Spacer(Modifier.width(ButtonDefaults.MediumIconSpacing))
                     val last = s.lastSync?.let { stringResource(R.string.settings_last_sync, formatAgoPhrase(it)) } ?: stringResource(R.string.settings_never_synced)
-                    Text(if (syncing) stringResource(R.string.settings_syncing) else stringResource(R.string.settings_last_sync_now, last), style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(if (syncing) stringResource(R.string.settings_syncing) else stringResource(R.string.settings_last_sync_now, last), style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight),
+                        // Wraps rather than cut "Sync now", the button's action, off on a narrow screen or at a large font.
+                        maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                 }
             }
             Spacer(Modifier.height(16.dp))

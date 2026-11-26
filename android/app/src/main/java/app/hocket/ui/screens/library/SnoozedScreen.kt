@@ -52,12 +52,12 @@ fun SnoozedScreen(nav: NavHostController) {
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection).testTag("library.snoozed"),
         topBar = {
-            MediumFlexibleTopAppBar(
+            app.hocket.ui.components.ContentWidthTopBar { insets -> MediumFlexibleTopAppBar(windowInsets = insets,
                 title = { Text(stringResource(R.string.snooze_title), style = brandTitleStyle(), maxLines = 1, modifier = Modifier.semantics { heading() }) },
                 navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
                 actions = { AccountButton() },
                 scrollBehavior = scroll,
-            )
+            ) }
         },
     ) { padding ->
         if (snoozes.isEmpty()) {

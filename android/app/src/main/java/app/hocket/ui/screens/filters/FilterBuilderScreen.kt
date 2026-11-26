@@ -273,11 +273,11 @@ fun FilterBuilderScreen(nav: NavHostController, id: String?) {
     val smartOk = server?.capabilities?.nativeApi == true && preview?.capability?.serverExpressible == true
     Scaffold(
         topBar = {
-            TopAppBar(
+            app.hocket.ui.components.ContentWidthTopBar { insets -> TopAppBar(windowInsets = insets,
                 title = { Text(filter.name.ifBlank { untitled }, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
                 actions = { FilledTonalButton(onClick = { client.dispatch(Commands.saveFilter(filter)) }, shapes = ButtonDefaults.shapes(), modifier = Modifier.padding(end = 8.dp).testTag("filter.save")) { Text(stringResource(R.string.filter_save)) } },
-            )
+            ) }
         },
         bottomBar = {
             // The live count and what the filter can become, over its outputs: Play (with the rest behind its arrow) and Share.

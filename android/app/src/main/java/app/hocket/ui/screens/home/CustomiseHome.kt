@@ -108,7 +108,7 @@ fun CustomiseHomeSheet(onDismiss: () -> Unit) {
                                 modifier = Modifier.semantics { contentDescription = showLabel }.testTag("home.customise.${pref.id}.switch"))
                         }
                         if (pref.on && pref.styles.size > 1) {
-                            StyleButtonGroup(pref.styles, pref.resolvedStyle, Modifier.padding(top = 4.dp, end = 12.dp)) { st -> save(HomeSections.update(prefs, pref.id) { it.copy(style = st.id) }) }
+                            StyleButtonGroup(pref.styles, pref.resolvedStyle, Modifier.padding(top = 4.dp)) { st -> save(HomeSections.update(prefs, pref.id) { it.copy(style = st.id) }) }
                         }
                     }
                 }

@@ -51,16 +51,19 @@ private fun SheetRow(label: String, icon: ImageVector, enabled: Boolean = true, 
     )
 }
 
-/** "When tapped: Open / Play / Shuffle" and moving the pin, at the top of a pin's menu. */
+/**
+ * "When tapped: Open / Play / Shuffle" and moving the pin, at the top of a pin's menu. [inset]: the
+ * sheet's text keyline (an item's menu has its header, rating and rows on 16 dp).
+ */
 @Composable
-private fun PinControls(pin: ResolvedPin, shown: List<PinEntry>, onDone: () -> Unit) {
+private fun PinControls(pin: ResolvedPin, shown: List<PinEntry>, onDone: () -> Unit, inset: androidx.compose.ui.unit.Dp = 16.dp) {
     val client = LocalCoreClient.current
     val settings by client.settings.collectAsStateWithLifecycle()
     val pins = LibraryPins.parse(settings[SettingKeys.LIBRARY_PINS]?.value)
     val tap = pins.firstOrNull { it.same(pin.entry) }?.pinTap ?: pin.entry.pinTap
     if (pin.kind.choosesTap) {
-        Text(stringResource(R.string.library_pin_when_tapped), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 24.dp, top = 4.dp))
-        Row(Modifier.padding(horizontal = 24.dp, vertical = 4.dp).testTag("pin.tap"), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(stringResource(R.string.library_pin_when_tapped), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = inset, top = 4.dp))
+        Row(Modifier.padding(horizontal = inset, vertical = 4.dp).testTag("pin.tap"), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             PinTap.entries.forEach { t ->
                 FilterChip(
                     selected = tap == t,
@@ -96,7 +99,7 @@ fun PinMenuSheet(pin: ResolvedPin, shown: List<PinEntry>, nav: NavHostController
             Text(pin.title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 24.dp).semantics { heading() })
             Text(kindLabel, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 24.dp))
             Spacer(Modifier.height(8.dp))
-            PinControls(pin, shown, onDismiss)
+            PinControls(pin, shown, onDismiss, inset = 24.dp)
             HorizontalDivider()
             SheetRow(stringResource(R.string.library_pin_tap_open), HocketIcons.Filled.ChevronRight) { onDismiss(); performPin(client, nav, serverId, pin, PinTap.Open) }
             SheetRow(stringResource(R.string.action_play), HocketIcons.Filled.PlayArrow) {

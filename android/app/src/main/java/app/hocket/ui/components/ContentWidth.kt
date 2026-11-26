@@ -1,5 +1,6 @@
 package app.hocket.ui.components
 
+import androidx.compose.foundation.layout.add
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
@@ -53,4 +54,18 @@ fun adaptiveColumns(width: Dp, minCell: Dp, gap: Dp = 0.dp, max: Int = Int.MAX_V
 fun maxWidthListPadding(width: Dp, top: Dp = 0.dp, bottom: Dp = 0.dp, horizontal: Dp = 0.dp): androidx.compose.foundation.layout.PaddingValues {
     val side = contentSideInset(width) + horizontal
     return androidx.compose.foundation.layout.PaddingValues(start = side, end = side, top = top, bottom = bottom)
+}
+
+/**
+ * A top app bar over content kept at [ContentMaxWidth]: [bar] gets window insets that bring its
+ * navigation icon, title and actions in by the content's own side inset, so on a wide screen the
+ * title lines up with the rows under it (on a phone nothing changes). Its background still spans.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@androidx.compose.runtime.Composable
+fun ContentWidthTopBar(bar: @androidx.compose.runtime.Composable (androidx.compose.foundation.layout.WindowInsets) -> Unit) {
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val side = contentSideInset(maxWidth)
+        bar(androidx.compose.material3.TopAppBarDefaults.windowInsets.add(androidx.compose.foundation.layout.WindowInsets(left = side, right = side)))
+    }
 }
