@@ -75,6 +75,17 @@ const CRISP_MIN: f64 = 0.95;
 const GRAIN_MAX: f64 = 2.0;
 /// A step between neighbours this big (sRGB levels) is a shape's edge, not grain.
 const GRAIN_EDGE: f32 = 16.0;
+/// The rows a flat top edge's strip carries upwards ([strip_row]): the cover's first, about what
+/// the apps' full-size artwork shows in its first two.
+const STRIP_ROWS: usize = 2;
+/// The rows under [STRIP_ROWS] a line must carry on through for [strip_row] to keep it (~3%).
+const STRIP_DEEP: usize = 8;
+/// How far [strip_row] blurs along the row (a Gaussian's sigma, a share of the width): wide
+/// enough that fog and grain leave only slow changes in colour.
+const STRIP_SIGMA: f32 = 0.05;
+/// Off the blurred row by less than this (sRGB levels), a pixel is texture and smooths away in
+/// [strip_row]; from here up to [GRAIN_EDGE] it keeps more and more of its own colour.
+const STRIP_TEXTURE: f32 = 6.0;
 /// This many small marks in the reflection zone rule a mirror out.
 const MARKS_MAX: u32 = 2;
 /// Busier than this (mean neighbour distance) rules a mirror out.
@@ -159,14 +170,121 @@ pub fn layout(
             request.theme,
         )
     };
+    let top_edge = decide(&img.flipped(), Side::Top, &flipped_faces);
+    let top_row = if top_edge.reason == "extend:flat" {
+        strip_row(rgba, w, h)
+    } else {
+        Vec::new()
+    };
     ArtworkLayout {
         bottom: decide(&img, Side::Bottom, &faces),
         right: decide(&img.transposed(), Side::Right, &transposed_faces),
         left: decide(&img.mirrored().transposed(), Side::Left, &mirrored_faces),
-        top: decide(&img.flipped(), Side::Top, &flipped_faces),
+        top: top_edge,
         top_light: luminance(top) > 0.4,
         top_marks: img.marks(0..TOP_ROWS) >= MARKS_MAX,
+        top_row,
     }
+}
+
+/// [`ArtworkLayout::top_row`] for a cover `w` px wide: its first [STRIP_ROWS] rows averaged, each
+/// pixel then pulled onto the row blurred sideways ([STRIP_SIGMA]) as far as it differs from it
+/// like a texture does: all the way under [STRIP_TEXTURE] levels, not at all from [GRAIN_EDGE]
+/// (a shape's edge). A pixel stays only as far as the rows under it ([STRIP_DEEP]) stand out in the
+/// same place too: a line running off the top (a rope, a border) carries on crisp, a dot there (a
+/// star, a speck) smooths away with the texture rather than stretching into a streak.
+fn strip_row(rgba: &[u8], w: usize, h: usize) -> Vec<u32> {
+    if w == 0 || h < STRIP_ROWS + STRIP_DEEP {
+        return Vec::new();
+    }
+    let top = mean_rows(rgba, w, 0..STRIP_ROWS);
+    let (base, kept) = stand_out(&top);
+    let (_, kept_deep) = stand_out(&mean_rows(rgba, w, STRIP_ROWS..STRIP_ROWS + STRIP_DEEP));
+    (0..w)
+        .map(|x| {
+            let k = kept[x].min(kept_deep[x]);
+            let [r, g, b] = [0, 1, 2].map(|c| {
+                (base[x][c] + (top[x][c] - base[x][c]) * k)
+                    .round()
+                    .clamp(0.0, 255.0) as u32
+            });
+            (r << 16) | (g << 8) | b
+        })
+        .collect()
+}
+
+/// Rows `rows` of a cover `w` px wide, averaged: sRGB levels, transparency over black (as [luma]).
+fn mean_rows(rgba: &[u8], w: usize, rows: std::ops::Range<usize>) -> Vec<[f32; 3]> {
+    let n = rows.len().max(1) as f32;
+    (0..w)
+        .map(|x| {
+            let mut c = [0.0f32; 3];
+            for y in rows.clone() {
+                let p = &rgba[(y * w + x) * 4..(y * w + x) * 4 + 4];
+                let a = p[3] as f32 / 255.0;
+                for k in 0..3 {
+                    c[k] += p[k] as f32 * a;
+                }
+            }
+            c.map(|v| v / n)
+        })
+        .collect()
+}
+
+/// `row` blurred sideways ([STRIP_SIGMA]), and how far each pixel stands out from that (0 within
+/// [STRIP_TEXTURE] levels, 1 from [GRAIN_EDGE]). The blur is taken twice, the second time without
+/// what the first found standing out, so a line does not shade the row around it.
+fn stand_out(row: &[[f32; 3]]) -> (Vec<[f32; 3]>, Vec<f32>) {
+    let w = row.len();
+    let sigma = (STRIP_SIGMA * w as f32).max(0.5);
+    let reach = (3.0 * sigma).ceil() as isize;
+    let kernel: Vec<f32> = (-reach..=reach)
+        .map(|i| (-((i * i) as f32) / (2.0 * sigma * sigma)).exp())
+        .collect();
+    // Mirrored at the ends, so a border there is not carried on as if the row went on in it.
+    let at = |i: isize| -> usize {
+        let n = w as isize;
+        let i = if i < 0 {
+            -i - 1
+        } else if i >= n {
+            2 * n - 1 - i
+        } else {
+            i
+        };
+        i.clamp(0, n - 1) as usize
+    };
+    // The row blurred with each pixel counted as much as `weight`.
+    let blur = |weight: &[f32]| -> Vec<[f32; 3]> {
+        (0..w)
+            .map(|x| {
+                let (mut b, mut total) = ([0.0f32; 3], 0.0f32);
+                for (j, k) in kernel.iter().enumerate() {
+                    let i = at(x as isize + j as isize - reach);
+                    let k = k * weight[i];
+                    total += k;
+                    for c in 0..3 {
+                        b[c] += row[i][c] * k;
+                    }
+                }
+                // Nothing but lines in reach: their own colour.
+                if total < 1e-3 {
+                    row[x]
+                } else {
+                    b.map(|v| v / total)
+                }
+            })
+            .collect()
+    };
+    let out = |p: [f32; 3], b: [f32; 3]| -> f32 {
+        let off = (0..3).fold(0.0f32, |m, c| m.max((p[c] - b[c]).abs()));
+        let t = ((off - STRIP_TEXTURE) / (GRAIN_EDGE - STRIP_TEXTURE)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    let first = blur(&vec![1.0; w]);
+    let weight: Vec<f32> = (0..w).map(|x| 1.0 - out(row[x], first[x])).collect();
+    let base = blur(&weight);
+    let kept = (0..w).map(|x| out(row[x], base[x])).collect();
+    (base, kept)
 }
 
 #[derive(Clone, Copy)]
@@ -300,6 +418,7 @@ fn card_layout(reason: &str) -> ArtworkLayout {
         top: edge,
         top_light: false,
         top_marks: false,
+        top_row: Vec::new(),
     }
 }
 

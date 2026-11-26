@@ -1499,6 +1499,12 @@ pub struct ArtworkLayout {
     pub top_light: bool,
     /// Text or a logo sits in the top strip: start the artwork below the status bar.
     pub top_marks: bool,
+    /// What a flat [`ArtworkLayout::top`] (`extend:flat`) carries upwards: the cover's first rows,
+    /// one `0xRRGGBB` per pixel left to right, smoothed along the row so a texture (grain, fog,
+    /// noise) does not stretch into streaks, while a line that stands out (a border, a rope running
+    /// off the top) stays. Empty for any other top edge.
+    #[serde(default)]
+    pub top_row: Vec<u32>,
 }
 
 fn default_left_edge() -> ArtworkEdge {
