@@ -144,7 +144,7 @@ export function ReportDialog({ allDevices }: { allDevices: boolean }) {
   return (
     <form className="report-dialog" onSubmit={send} onPaste={onPaste} data-testid="report-form">
       <h2 className="dialog-title" id="dialog-title">{t("report.title")}</h2>
-      <p className="muted small" id="report-intro">{t("report.intro")}{allDevices ? ` ${t("report.allDevices")}` : ""}</p>
+      <p className="dialog-body" id="report-intro">{t("report.intro")}{allDevices ? ` ${t("report.allDevices")}` : ""}</p>
       <label>
         {t("report.note")}
         <textarea className="textarea report-note" rows={5} maxLength={8000} value={note} placeholder={t("report.notePlaceholder")} onChange={(e) => setNote(e.target.value)} aria-describedby="report-intro" data-testid="report-note" />

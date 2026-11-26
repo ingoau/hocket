@@ -21,11 +21,11 @@ export function PairDeviceDialog() {
   return (
     <>
       <h2 className="dialog-title" id="dialog-title">{t("pairDevice.title")}</h2>
-      <p className="muted small">{t("pairDevice.body")}</p>
+      <p className="dialog-body">{t("pairDevice.body")}</p>
       <div className="setup-device-code" role="img" aria-label={t("pairDevice.code")} data-testid="pair-device-code">
         {invite ? <QrCode text={invite.link} /> : null}
       </div>
-      <p className="small" role="status" data-testid="pair-device-status">
+      <p className="dialog-status" role="status" data-testid="pair-device-status">
         {pairing.paired
           ? t("pairDevice.paired", { name: pairing.paired.name })
           : pairing.error
@@ -53,10 +53,10 @@ export function RemoveDeviceDialog({ deviceId, name, self }: { deviceId: string;
   return (
     <>
       <h2 className="dialog-title" id="dialog-title">{t("identity.removeTitle", { name })}</h2>
-      <p className="muted small" id="dialog-message">{self ? t("identity.removeSelfBody") : t("identity.removeBody")}</p>
+      <p className="dialog-body" id="dialog-message">{self ? t("identity.removeSelfBody") : t("identity.removeBody")}</p>
       <div className="buttons">
         <button type="button" className="btn" onClick={close} data-autofocus>{t("dialog.cancel")}</button>
-        <button type="button" className="btn primary danger" onClick={() => { bridge().dispatch({ type: "removeDevice", data: { device_id: deviceId } }); close(); }} data-testid="remove-device-confirm">{t("identity.removeConfirm")}</button>
+        <button type="button" className="btn danger" onClick={() => { bridge().dispatch({ type: "removeDevice", data: { device_id: deviceId } }); close(); }} data-testid="remove-device-confirm">{t("identity.removeConfirm")}</button>
       </div>
     </>
   );

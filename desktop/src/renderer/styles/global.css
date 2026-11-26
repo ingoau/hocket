@@ -317,7 +317,6 @@ h3 { font-size: var(--fs-lg); }
 .report-bar .link-button { display: inline; color: var(--fg); text-decoration: underline; font-size: inherit; }
 .report-bar .report-progress { width: 160px; }
 .dialog.dialog-report { width: 560px; max-height: 90vh; overflow-y: auto; }
-.report-dialog { display: flex; flex-direction: column; gap: 14px; }
 .report-dialog .report-note { font-family: inherit; font-size: var(--fs-md); min-height: 96px; }
 .report-section { display: flex; flex-direction: column; gap: 6px; }
 .report-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -782,11 +781,19 @@ button.qrow { width: 100%; }
 .info-list dt, .info-list dd { margin: 0; }
 .dialog .list .li:hover { background: var(--bg-hover); }
 .dialog label { display: flex; flex-direction: column; gap: 6px; font-size: var(--fs-md); font-weight: 500; color: var(--fg-muted); }
+/* A dialog that is a form lays its parts out like any other dialog: one column, the dialog's gap. */
+.dialog > form { display: flex; flex-direction: column; gap: inherit; }
+/* Supporting text under the title, the same in every dialog. */
+.dialog-body { margin: 0; font-size: var(--fs-md); color: var(--fg-muted); line-height: 1.45; }
+.dialog-status { margin: 0; font-size: var(--fs-sm); }
+/* A field with its message: the message sits with its input, not a dialog gap below it. */
+.dialog-field { display: flex; flex-direction: column; gap: 6px; }
+.dialog-field-error { font-size: var(--fs-sm); color: var(--danger); }
 
-.toasts { position: fixed; bottom: calc(var(--player-h) + 12px); left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 80; align-items: center; pointer-events: none; }
+.toasts { position: fixed; bottom: calc(var(--player-h) + 12px); left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100vw - 48px); display: flex; flex-direction: column; gap: 8px; z-index: 80; align-items: center; pointer-events: none; }
 .toasts > * { pointer-events: auto; }
 /* Snackbars: inverse-surface pills that spring up from below. */
-.toast { display: flex; align-items: center; gap: 12px; background: var(--fg); color: var(--bg); min-height: 40px; padding: 6px 8px 6px 18px; border-radius: var(--shape-lg); box-shadow: var(--shadow); font-size: var(--fs-md); }
+.toast { display: flex; align-items: center; gap: 12px; max-width: min(560px, calc(100vw - 48px)); box-sizing: border-box; background: var(--fg); color: var(--bg); min-height: 40px; padding: 6px 8px 6px 18px; border-radius: var(--shape-lg); box-shadow: var(--shadow); font-size: var(--fs-md); }
 .toast.fade-in { animation: toast-in var(--dur-spring-long) var(--spring-fast); }
 /* Transform only: a toast is never drawn part-transparent, so its text keeps full contrast from the first frame. */
 @keyframes toast-in { from { transform: translateY(16px) scale(0.94); } to { transform: none; } }
@@ -794,6 +801,8 @@ button.qrow { width: 100%; }
 .toast.closing { animation: toast-out var(--dur-short) var(--ease-emphasized-accel) forwards; }
 @keyframes toast-out { to { opacity: 0; transform: translateY(12px) scale(0.94); } }
 .toast:not(:has(.btn)) { padding-right: 18px; }
+.toast > span { flex: 1 1 auto; min-width: 0; padding: 4px 0; overflow-wrap: anywhere; }
+.toast .btn { flex: none; }
 .toast .spin { flex: none; animation: spin 1.2s linear infinite; }
 .toast .btn { background: transparent; color: var(--accent-inverse); border-color: transparent; font-weight: 600; }
 /* The action is --accent-inverse at 4.5:1 on the toast itself; a lighter hover layer would drop it below that, so hover draws a ring in the text colour instead. */
@@ -1001,7 +1010,6 @@ button.qrow { width: 100%; }
   .volume { width: auto; }
   .volume input { width: 64px; }
   .toasts { bottom: 150px; max-width: calc(100vw - 24px); }
-  .toast { flex-wrap: wrap; }
   .view-header { padding: 16px var(--page-pad) 12px; }
   .view-body { padding: 4px var(--page-gutter) 16px; }
   .detail-head { flex-wrap: wrap; gap: 16px; min-height: 0; padding-top: 24px; }
