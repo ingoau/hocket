@@ -28,9 +28,9 @@ export function Dialogs() {
   useReturnFocus(!!live);
   useEffect(() => {
     if (!live) return;
-    // Initial focus: the field, else the safe (non-destructive) button, else the first control.
+    // Initial focus: what the dialog marks (a safe button, the device playing), else the field, else the first control.
     const root = ref.current;
-    const first = root?.querySelector<HTMLElement>("input, textarea, select") ?? root?.querySelector<HTMLElement>("[data-autofocus]") ?? root?.querySelector<HTMLElement>("button, [tabindex='0']");
+    const first = root?.querySelector<HTMLElement>("[data-autofocus]") ?? root?.querySelector<HTMLElement>("input, textarea, select") ?? root?.querySelector<HTMLElement>("button, [tabindex='0']");
     first?.focus();
     if (live.kind === "connect") return () => bridge().dispatch({ type: "closeHandoffPicker" });
     return undefined;
@@ -220,9 +220,12 @@ function ConnectDialog() {
     close();
   };
   const tier = connection.tier === "coordinator" ? t("connect.tier.coordinator") : connection.tier === "lan" ? t("connect.tier.lan") : t("connect.tier.local");
+  // Opens on the device playing (else this computer), not the volume slider, whose focus ring
+  // would show as soon as the popover opens.
+  const focusId = (devices.find((d) => d.playing) ?? self)?.id;
   const row = (d: DeviceInfo, name: string, sub: string, trailing: React.ReactNode, testId?: string) => (
     <li key={d.id}>
-      <button type="button" className={`connect-row ${d.playing ? "on" : ""}`} aria-current={d.playing || undefined} onClick={() => pick(d.id)} data-testid={testId}>
+      <button type="button" className={`connect-row ${d.playing ? "on" : ""}`} aria-current={d.playing || undefined} onClick={() => pick(d.id)} data-testid={testId} data-autofocus={d.id === focusId || undefined}>
         <span className="connect-row-icon"><Icon name={d.isSelf ? "laptop" : deviceIcon(d.platform)} size={22} /></span>
         <span className="grow" style={{ minWidth: 0 }}>
           <span className="truncate connect-row-name">{name}</span>
