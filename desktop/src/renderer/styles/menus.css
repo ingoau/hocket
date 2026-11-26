@@ -149,17 +149,31 @@
    centred modal: no scrim, anchored bottom right. */
 .overlay.overlay-popover { background: transparent; align-items: flex-end; justify-content: flex-end; padding: 0 64px calc(var(--popover-bottom, var(--player-h)) - 4px) 0; }
 /* Never taller than the room above the player bar: it scrolls instead (an overflow at the top of a flex-end box can't be scrolled to). */
-.dialog.connect-popover { max-height: calc(100vh - var(--popover-bottom, var(--player-h)) - 12px); overflow-y: auto; width: 380px; padding: 12px 10px 10px; gap: 8px; border-radius: var(--shape-xl); background: var(--surface-tonal); box-shadow: var(--shadow-2); transform-origin: bottom right; }
-.connect-head { display: flex; align-items: center; gap: 8px; padding: 4px 4px 0 14px; }
+/* One content inset throughout: the popover's 12px padding plus the cards' 14px, so the title, the
+   volume's and the rows' icons, the Connect heading and the empty note all start on the same line. */
+.dialog.connect-popover { max-height: calc(100vh - var(--popover-bottom, var(--player-h)) - 12px); overflow-y: auto; width: 380px; padding: 12px; gap: 8px; border-radius: var(--shape-xl); background: var(--surface-tonal); box-shadow: var(--shadow-2); transform-origin: bottom right; }
+.connect-head { display: flex; align-items: center; gap: 8px; padding: 2px 0 2px 14px; }
 .connect-head .dialog-title { flex: 1; font-size: 22px; }
-.connect-volume { padding: 12px 14px 10px; border-radius: var(--shape-lg); background: var(--bg-sunken); display: flex; flex-direction: column; gap: 4px; }
+.connect-head .btn.icon { width: 40px; height: 40px; }
+/* Volume: a card shaped like a device row, the mute button in the rows' icon slot. */
+.connect-volume { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: var(--shape-lg); background: var(--bg-sunken); }
+.connect-volume .btn.icon.connect-mute { flex: 0 0 auto; width: 40px; height: 40px; border-radius: 20px; background: var(--accent-soft); color: var(--accent-text); }
+.connect-volume .btn.icon.connect-mute:hover { background: var(--selection); }
+.connect-volume .btn.icon.connect-mute[aria-pressed="true"] { color: var(--fg-muted); }
+.connect-volume-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+/* A column item (its own flex basis is a row's width), its focus ring kept clear of the label above. */
+.connect-volume-body .m3-slider { flex: 0 0 auto; }
+.connect-volume-body .m3-slider:has(.m3-slider-input:focus-visible) { outline-offset: 2px; }
+.connect-volume-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .connect-volume-label { font-weight: 600; }
-.connect-volume-row { display: flex; align-items: center; gap: 8px; margin-left: -8px; }
-.connect-volume-pct { min-width: 40px; text-align: right; font-variant-numeric: tabular-nums; color: var(--fg-muted); }
-.connect-popover .connect-heading { padding: 6px 8px 0; }
+.connect-volume-pct { font-size: var(--fs-sm); font-variant-numeric: tabular-nums; color: var(--fg-muted); }
+/* The heading belongs to the list under it: more room above than below. */
+.connect-popover .connect-heading { margin: 0; padding: 10px 14px 0; }
+.connect-popover .connect-empty { padding: 0 14px 4px; }
 .connect-seen { flex: none; opacity: 1; }
 .connect-row.on .connect-seen { color: inherit; }
-.connect-settings { width: 100%; height: 48px; justify-content: center; gap: 8px; margin-top: 4px; border-radius: var(--shape-lg); }
+.connect-foot { display: flex; justify-content: flex-end; padding-top: 4px; }
+.connect-settings { height: 40px; padding: 0 18px 0 14px; gap: 8px; }
 
 /* Song info: a wide dialog, two scrolling columns under the song's header. */
 /* Song info: one page in a wide dialog that scrolls as a whole. */

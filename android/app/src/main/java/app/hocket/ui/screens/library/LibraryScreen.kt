@@ -8,7 +8,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
 import app.hocket.ui.components.ListPaneWidth
 import app.hocket.ui.components.TwoPaneMinWidth
 import app.hocket.ui.components.maxWidthListPadding
@@ -518,17 +520,21 @@ fun LibraryListScreen(nav: NavHostController, list: LibraryList) {
                 if (!twoPane && target != null) { paneTarget = null; push(target) }
             }
         }
+        val accounts by client.accounts.collectAsStateWithLifecycle()
+        val hasSourceChips = app.hocket.ui.components.SourceFilter.options(accounts, mixed = list == LibraryList.Playlists).isNotEmpty()
         Row(Modifier.fillMaxSize()) {
             Scaffold(
                 modifier = (if (twoPane) Modifier.width(ListPaneWidth).fillMaxHeight() else Modifier.fillMaxSize()).nestedScroll(scroll.nestedScrollConnection).testTag("libraryList.${list.name.lowercase()}"),
                 topBar = {
-                    MediumFlexibleTopAppBar(
+                    app.hocket.ui.components.ContentWidthTopBar { insets -> MediumFlexibleTopAppBar(windowInsets = insets,
                         title = { Text(stringResource(list.title), style = app.hocket.ui.brand.brandTitleStyle(), maxLines = 1, modifier = Modifier.semantics { heading() }) },
                         navigationIcon = { if (fromLibrary) IconButton(onClick = { nav.popBackStack() }) { Icon(HocketIcons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
                         actions = { AccountButton() },
-                        subtitle = if (list == LibraryList.Genres) null else ({ SourceChips(mixed = list == LibraryList.Playlists) }),
+                        // No subtitle slot without chips to show (one account): an empty one still takes its
+                        // height and drops the title below where the other pages have it.
+                        subtitle = if (list == LibraryList.Genres || !hasSourceChips) null else ({ SourceChips(mixed = list == LibraryList.Playlists) }),
                         scrollBehavior = scroll,
-                    )
+                    ) }
                 },
             ) { padding ->
                 val top = padding.calculateTopPadding()
@@ -605,21 +611,22 @@ internal fun LibraryLinks(nav: NavHostController, joinedAbove: Boolean = false) 
         val rows = (links.size + columns - 1) / columns
         Column(Modifier.fillMaxWidth().testTag("library.links"), verticalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
             links.chunked(columns).forEachIndexed { r, row ->
-                Row(horizontalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
+                // As tall as the tallest tile: a label that wraps (a narrow phone, a large font) grows its row evenly.
+                Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(GROUP_GAP)) {
                     row.forEachIndexed { c, (item, iconShape) ->
                         val shape = groupShape(top = r == 0 && !joinedAbove, bottom = r == rows - 1, start = c == 0, end = c == columns - 1)
                         Surface(
                             onClick = { item.route()?.let { nav.navigate(it) { launchSingleTop = true } } ?: openQueues?.invoke() },
                             shape = shape,
                             color = MaterialTheme.colorScheme.surfaceContainer,
-                            modifier = Modifier.weight(1f).heightIn(min = 64.dp).testTag("library.link.${item.id}"),
+                            modifier = Modifier.weight(1f).fillMaxHeight().heightIn(min = 64.dp).testTag("library.link.${item.id}"),
                         ) {
                             Row(Modifier.padding(horizontal = 12.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Box(Modifier.size(40.dp).background(MaterialTheme.colorScheme.tertiaryContainer, iconShape.toShape()), contentAlignment = Alignment.Center) {
                                     Icon(item.icon(false), null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onTertiaryContainer)
                                 }
                                 Spacer(Modifier.width(12.dp))
-                                Text(item.label(), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(item.label(), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             }
                         }
                     }

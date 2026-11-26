@@ -55,9 +55,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.content.Intent
@@ -134,7 +136,21 @@ fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpe
                     onDismiss()
                 }
                 val heardHere = self.playing && castingTo == null
-                GroupLabel(stringResource(R.string.handoff_this_device), Modifier.padding(top = 16.dp), color = MaterialTheme.colorScheme.primary)
+                // Bluetooth settings (to connect another output) on the group's label, not a row of its
+                // own under it, so the groups stay evenly spaced; the end pad lines its text up with
+                // the rows' trailing icons.
+                LabelWithAction(
+                    label = { GroupLabel(stringResource(R.string.handoff_this_device), color = MaterialTheme.colorScheme.primary) },
+                    modifier = Modifier.padding(top = GroupGap, end = 4.dp),
+                ) {
+                    TextButton(onClick = { runCatching { context.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }, shapes = ButtonDefaults.shapes(), modifier = Modifier.testTag("handoff.bluetooth")) {
+                        Icon(HocketIcons.Filled.Bluetooth, null, Modifier.size(ButtonDefaults.IconSize))
+                        Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                        Text(stringResource(R.string.handoff_bluetooth_settings))
+                        Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                        Icon(HocketIcons.Filled.OpenInNew, null, Modifier.size(ButtonDefaults.IconSize))
+                    }
+                }
                 SegmentedGroup {
                     if (outputs.outputs.isEmpty()) {
                         DeviceRow(0, 1, stringResource(R.string.handoff_device_speaker), if (heardHere) stringResource(R.string.handoff_playing) else null, HocketIcons.Outlined.PhoneAndroid, heardHere, onClick = { pick(null) })
@@ -145,17 +161,8 @@ fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpe
                         DeviceRow(i, outputs.outputs.size, outputName(o), sub, outputIcon(o), on, onClick = { pick(o.id) }, modifier = Modifier.testTag("handoff.output.${o.id}"))
                     }
                 }
-                Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = { runCatching { context.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }, shapes = ButtonDefaults.shapes(), modifier = Modifier.testTag("handoff.bluetooth")) {
-                        Icon(HocketIcons.Filled.Bluetooth, null, Modifier.size(ButtonDefaults.IconSize))
-                        Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                        Text(stringResource(R.string.handoff_bluetooth_settings))
-                        Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                        Icon(HocketIcons.Filled.OpenInNew, null, Modifier.size(ButtonDefaults.IconSize))
-                    }
-                }
             }
-            GroupLabel(stringResource(R.string.handoff_other_devices), Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.primary)
+            GroupLabel(stringResource(R.string.handoff_other_devices), Modifier.padding(top = GroupGap), color = MaterialTheme.colorScheme.primary)
             if (targets.isEmpty()) {
                 Segment(0, 1) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -179,7 +186,7 @@ fun HandoffSheet(onDismiss: () -> Unit, onOpenSettings: (() -> Unit)? = LocalOpe
             if (cast.available && self != null) {
                 // This phone's Cast receivers: playback stays this phone's (its queue, its lease), heard there.
                 val elsewhere = !self.playing && devices.any { it.playing && !it.isSelf }
-                GroupLabel(stringResource(R.string.handoff_cast), Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.primary)
+                GroupLabel(stringResource(R.string.handoff_cast), Modifier.padding(top = GroupGap), color = MaterialTheme.colorScheme.primary)
                 if (cast.devices.isEmpty()) {
                     Segment(0, 1, Modifier.testTag("handoff.cast.empty")) {
                         Text(stringResource(R.string.handoff_cast_empty), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
@@ -227,6 +234,38 @@ private fun BluetoothClassPermission(bluetoothConnected: Boolean) {
         runCatching { launcher.launch(permission) }.onSuccess { prefs.edit { putBoolean(ASKED_BLUETOOTH, true) } }
     }
 }
+
+/**
+ * [label] with [action] at its end, or, when the two don't fit side by side (a narrow phone, a large
+ * font), the action on a line of its own under the label, still at the end, so neither is squeezed.
+ */
+@Composable
+private fun LabelWithAction(label: @Composable () -> Unit, modifier: Modifier = Modifier, action: @Composable () -> Unit) {
+    Layout(contents = listOf(label, action), modifier = modifier.fillMaxWidth()) { (labelMeasurables, actionMeasurables), constraints ->
+        val width = constraints.maxWidth
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val actionPlaceable = actionMeasurables.single().measure(loose)
+        val labelMeasurable = labelMeasurables.single()
+        val sideBySide = labelMeasurable.maxIntrinsicWidth(Constraints.Infinity) + actionPlaceable.width <= width
+        if (sideBySide) {
+            val labelPlaceable = labelMeasurable.measure(loose.copy(maxWidth = width - actionPlaceable.width))
+            val height = maxOf(labelPlaceable.height, actionPlaceable.height)
+            layout(width, height) {
+                labelPlaceable.placeRelative(0, (height - labelPlaceable.height) / 2)
+                actionPlaceable.placeRelative(width - actionPlaceable.width, (height - actionPlaceable.height) / 2)
+            }
+        } else {
+            val labelPlaceable = labelMeasurable.measure(loose)
+            layout(width, labelPlaceable.height + actionPlaceable.height) {
+                labelPlaceable.placeRelative(0, 0)
+                actionPlaceable.placeRelative(width - actionPlaceable.width, labelPlaceable.height)
+            }
+        }
+    }
+}
+
+/** Between the sheet's groups (the volume card, this device, other devices, Cast), as in Settings. */
+private val GroupGap = 16.dp
 
 private const val PERMISSION_PREFS = "hocket-permissions"
 private const val ASKED_BLUETOOTH = "asked_bluetooth_connect"

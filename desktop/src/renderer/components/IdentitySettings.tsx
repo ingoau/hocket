@@ -76,14 +76,13 @@ function Coordinator() {
             {/* An address without a pin (set before claiming worked, or left when the pin
                 went): shown with its connection, so it can always be forgotten. */}
             {leftover ? <CoordinatorConnection title={t("identity.coordinatorLeftover", { url: leftover })} leftover /> : null}
-            <div className="setting-row">
+            {/* What a coordinator is, then its address and code, and Claim / Join under them (wrapping
+                in a narrow column rather than running off the row). */}
+            <div className="setting-row stacked coordinator-join">
               <div className="label"><div className="desc" data-testid="identity-coordinator">{t("identity.coordinatorNone")}</div></div>
-            </div>
-            <div className="setting-row">
-              <div className="label" />
               <div className="control">
-                <input className="input" placeholder="wss://coordinator.example.org/ws" aria-label={t("identity.coordinatorUrl")} value={url} onChange={(e) => setUrl(e.target.value)} style={{ width: 220 }} data-testid="identity-coordinator-url" />
-                <input className="input" placeholder="ABCD-EFGH" aria-label={t("identity.coordinatorCode")} value={code} onChange={(e) => setCode(e.target.value)} style={{ width: 110 }} data-testid="identity-coordinator-code" />
+                <input className="input coordinator-url" placeholder="wss://coordinator.example.org/ws" aria-label={t("identity.coordinatorUrl")} value={url} onChange={(e) => setUrl(e.target.value)} data-testid="identity-coordinator-url" />
+                <input className="input coordinator-code" placeholder="ABCD-EFGH" aria-label={t("identity.coordinatorCode")} value={code} onChange={(e) => setCode(e.target.value)} data-testid="identity-coordinator-code" />
                 <button type="button" className="btn sm" disabled={!code.trim()} onClick={() => join(true)} data-testid="identity-claim">{t("identity.claim")}</button>
                 <button type="button" className="btn sm" disabled={!code.trim() || !url.trim()} onClick={() => join(false)} data-testid="identity-redeem">{t("identity.redeem")}</button>
               </div>

@@ -464,13 +464,9 @@ fun AboutScreen(nav: NavHostController) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val version = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "?" }
     SubScreen(nav, stringResource(R.string.settings_section_about)) {
-        Column(Modifier.padding(16.dp)) {
-            Text(stringResource(R.string.settings_version, version), style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(8.dp))
-            Text(stringResource(R.string.settings_licence), style = MaterialTheme.typography.bodyLarge)
-            Spacer(Modifier.height(16.dp))
-            Text(stringResource(R.string.settings_licences_title), style = MaterialTheme.typography.titleSmall)
-            Text(stringResource(R.string.settings_licences_body), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        // The other settings screens' rows and section heading, so the page reads like them.
+        SettingRow(stringResource(R.string.settings_version, version), subtitle = stringResource(R.string.settings_licence))
+        SettingsSection(stringResource(R.string.settings_licences_title))
+        Text(stringResource(R.string.settings_licences_body), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
     }
 }

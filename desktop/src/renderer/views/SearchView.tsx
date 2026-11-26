@@ -63,7 +63,7 @@ export function SearchView({ query }: { query: string }) {
         {nothing && kind !== "lyrics" ? <p className="muted search-nothing" data-testid="search-nothing">{t("search.noResults", { query })}</p> : null}
         {kind === "lyrics" && lyricHits.length === 0 ? <p className="muted search-nothing" data-testid="search-lyrics-none">{t("search.lyricsNone")}</p> : null}
         {show("songs") ? (
-          <section className="search-songs" aria-labelledby="search-tracks" style={kind === "songs" ? { flex: 1, minHeight: 300, display: "flex", flexDirection: "column" } : { display: "flex", flexDirection: "column", height: `calc(${shownSongs.length} * var(--row-h) + 64px)` }}>
+          <section className="search-songs" aria-labelledby="search-tracks" style={kind === "songs" ? { flex: 1, minHeight: 300, display: "flex", flexDirection: "column" } : { display: "flex", flexDirection: "column", flex: "none" }}>
             <div className="search-section-head">
               <h2 className="section-heading" id="search-tracks">{t("search.tracks")}</h2>
               {kind === "all" && songs.length > PREVIEW ? <button type="button" className="btn text sm" onClick={() => setKind("songs")} data-testid="search-see-all-songs">{t("search.seeAllSongs", { count: songs.length })}</button> : null}

@@ -775,7 +775,7 @@ private fun MenuHandle(expanded: Boolean, canExpand: Boolean, onToggle: () -> Un
 /** Artwork, the title (one line) with the lines under it, and the love toggle. */
 @Composable
 private fun MenuHeader(subject: MenuSubject, love: LoveToggle?, loved: Tick, tag: String, onLove: (ActionDescriptor?, ActionDescriptor?) -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, bottom = 14.dp).testTag("$tag.header"), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, bottom = 14.dp).testTag("$tag.header"), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
         Artwork(subject.coverArt, ArtworkSizes.THUMB, null, Modifier.size(64.dp), RoundedCornerShape(16.dp))
         Column(Modifier.weight(1f)) {
             Text(subject.title, style = MaterialTheme.typography.titleLarge.copy(fontSize = 19.sp, lineHeight = 24.sp), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
@@ -904,7 +904,7 @@ internal val PlayActionIds: List<String> get() = PLAY_IDS
 @Composable
 private fun RatingRow(rating: Int?, onRate: (Int) -> Unit) {
     val mixed = stringResource(R.string.menu_rating_mixed)
-    Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 16.dp, top = 10.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         // The stars speak for themselves ("Rating, 4 of 5 stars"): the label is for the eye only.
         Row(Modifier.weight(1f).clearAndSetSemantics { }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(R.string.rating_stars), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)

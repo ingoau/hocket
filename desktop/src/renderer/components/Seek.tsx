@@ -79,7 +79,7 @@ export function Seek({ durationMs, variant = "player" }: { durationMs: number | 
       if (timeEl.current) timeEl.current.textContent = v;
       if (bubbleEl.current) bubbleEl.current.textContent = v;
     });
-    put("remain", `-${fmtTime(Math.max(0, dur - shown))}`, (v) => { if (remainEl.current) remainEl.current.textContent = v; });
+    put("remain", remaining(dur, shown), (v) => { if (remainEl.current) remainEl.current.textContent = v; });
   };
 
   const onKey = (e: React.KeyboardEvent) => {
@@ -128,8 +128,13 @@ export function Seek({ durationMs, variant = "player" }: { durationMs: number | 
       {slider}
       <div className="np-seek-times" aria-hidden="true">
         <span ref={timeEl} className="time" data-testid={ids.position}>{fmtTime(0)}</span>
-        <span ref={remainEl} className="time">-{fmtTime(dur)}</span>
+        <span ref={remainEl} className="time">{remaining(dur, 0)}</span>
       </div>
     </div>
   );
+}
+
+/** Time left as "-m:ss"; with no song (no duration) just "0:00", not "-0:00". */
+function remaining(dur: number, shown: number): string {
+  return dur > 0 ? `-${fmtTime(Math.max(0, dur - shown))}` : fmtTime(0);
 }
