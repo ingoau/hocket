@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.LazyGridState
@@ -71,7 +72,8 @@ fun FastScrollbar(state: LazyGridState, modifier: Modifier = Modifier, top: Dp =
  * Where a list is, in units: items for a list, rows for a grid. [above] is how many units have
  * scrolled off the top (the first visible one in part), [below] how many are still to come under the
  * bottom; [unitPx] is a typical unit's size (the median of the ones on screen, so a page's tall header
- * doesn't skew it), [index] turns a unit back into the item to scroll to.
+ * doesn't skew it), [index] turns a unit back into the item to scroll to, [sizeOf] is a unit's own
+ * size while it's on screen.
  */
 internal class ScrollGeometry(
     val above: Float,
@@ -80,6 +82,7 @@ internal class ScrollGeometry(
     val totalUnits: Int,
     val viewportPx: Int,
     val index: (unit: Int) -> Int,
+    val sizeOf: (unit: Int) -> Int?,
 ) {
     /** How far down the list is, 0 at the top and 1 at the bottom. */
     val fraction: Float get() = if (above + below <= 0f) 0f else (above / (above + below)).coerceIn(0f, 1f)
@@ -92,7 +95,8 @@ internal class ScrollGeometry(
         if (fraction >= 1f) return index(totalUnits - 1) to 0
         val at = fraction.coerceAtLeast(0f) * (above + below)
         val unit = floor(at).toInt().coerceIn(0, (totalUnits - 1).coerceAtLeast(0))
-        return index(unit) to ((at - unit) * unitPx).roundToInt()
+        // Into a unit on screen by its own size (a page's tall header), others by the typical one.
+        return index(unit) to ((at - unit) * (sizeOf(unit) ?: unitPx)).roundToInt()
     }
 }
 
@@ -107,7 +111,8 @@ internal fun listGeometry(state: LazyListState): ScrollGeometry? {
     val contentEnd = info.viewportEndOffset - info.afterContentPadding
     val hiddenBelow = ((last.offset + last.size - contentEnd).toFloat() / last.size.coerceAtLeast(1)).coerceIn(0f, 1f)
     val below = if (!state.canScrollForward) 0f else (total - 1 - last.index) + hiddenBelow
-    return ScrollGeometry(above, below, median(items.map { it.size }), total, info.viewportSize.height, index = { it })
+    return ScrollGeometry(above, below, median(items.map { it.size }), total, info.viewportSize.height,
+        index = { it }, sizeOf = { unit -> items.firstOrNull { it.index == unit }?.size })
 }
 
 internal fun gridGeometry(state: LazyGridState): ScrollGeometry? {
@@ -115,9 +120,8 @@ internal fun gridGeometry(state: LazyGridState): ScrollGeometry? {
     val items = info.visibleItemsInfo
     val total = info.totalItemsCount
     if (items.isEmpty() || total == 0) return null
-    // The widest row on screen is the grid's column count (headers span a whole row).
+    val columns = info.maxSpan.coerceAtLeast(1)
     val rows = items.groupBy { it.row }
-    val columns = rows.values.maxOf { it.size }.coerceAtLeast(1)
     val first = items.firstOrNull { it.index == state.firstVisibleItemIndex } ?: items.first()
     val last = items.last()
     val above = if (!state.canScrollBackward) 0f else first.index.toFloat() / columns + (state.firstVisibleItemScrollOffset.toFloat() / first.size.height.coerceAtLeast(1)).coerceIn(0f, 1f)
@@ -126,7 +130,7 @@ internal fun gridGeometry(state: LazyGridState): ScrollGeometry? {
     val below = if (!state.canScrollForward) 0f else (total - 1 - last.index).toFloat() / columns + hiddenBelow
     val totalRows = (total + columns - 1) / columns
     return ScrollGeometry(above, below, median(rows.values.map { row -> row.maxOf { it.size.height } }), totalRows, info.viewportSize.height,
-        index = { (it * columns).coerceAtMost(total - 1) })
+        index = { (it * columns).coerceAtMost(total - 1) }, sizeOf = { unit -> items.firstOrNull { it.index == unit * columns }?.size?.height })
 }
 
 private fun median(sizes: List<Int>): Int = sizes.sorted().let { if (it.isEmpty()) 0 else it[it.size / 2] }
@@ -140,19 +144,23 @@ private fun FastScrollbar(
     top: Dp,
     bottom: Dp,
 ) {
-    val long by remember(geometry) { derivedStateOf { geometry()?.long == true } }
+    // Worked out once per layout; the thumb's place is read only while laying out (no recomposition).
+    val now by remember(geometry) { derivedStateOf(geometry) }
+    val long by remember { derivedStateOf { now?.long == true } }
     var dragging by remember { mutableStateOf(false) }
     // While dragged the thumb is wherever the finger put it, not where the list's estimate says.
     var dragFraction by remember { mutableFloatStateOf(0f) }
-    val fraction by remember(geometry) { derivedStateOf { geometry()?.fraction ?: 0f } }
+    val fraction by remember { derivedStateOf { now?.fraction ?: 0f } }
     var shown by remember { mutableStateOf(false) }
     LaunchedEffect(scrolling, dragging) {
         if (scrolling || dragging) shown = true
         else if (shown) { delay(HIDE_AFTER_MS); shown = false }
     }
     if (!long && !dragging) return
+    // A grab as the hide fires keeps it: the thumb shows (and takes touches) for as long as it's held.
+    val visible = shown || dragging
     val haptics = LocalHapticFeedback.current
-    val alpha by animateFloatAsState(if (shown) 1f else 0f, tween(if (shown) 150 else 400), label = "fastScroll.alpha")
+    val alpha by animateFloatAsState(if (visible) 1f else 0f, tween(if (visible) 150 else 400), label = "fastScroll.alpha")
     val width by animateDpAsState(if (dragging) 10.dp else 6.dp, label = "fastScroll.width")
     val color by animateColorAsState(if (dragging) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f), label = "fastScroll.color")
     var trackPx by remember { mutableIntStateOf(0) }
@@ -165,7 +173,8 @@ private fun FastScrollbar(
                 .size(TouchWidth, ThumbHeight)
                 .graphicsLayer { this.alpha = alpha }
                 // Only a thumb that shows can be grabbed: hidden, a touch here goes to the row under it.
-                .then(if (shown) Modifier.pointerInput(range) {
+                // Showing, it's kept out of the back gesture at that edge.
+                .then(if (visible) Modifier.systemGestureExclusion().pointerInput(range) {
                     awaitEachGesture {
                         val down = awaitFirstDown()
                         down.consume()
@@ -202,7 +211,8 @@ private const val LONG_SCREENS = 4
 private val ThumbHeight = 48.dp
 
 /**
- * The thumb's touch width from the edge: wide enough to grab, narrow enough to stay off a row's
- * trailing control (a playlist's drag handle starts 32 dp in).
+ * The thumb's touch width from the edge: wide enough to grab, narrow enough to stay (mostly) off a
+ * row's trailing More button, whose target starts 16 dp in on a library row and 20 dp in on a
+ * playlist's.
  */
-private val TouchWidth = 28.dp
+private val TouchWidth = 20.dp

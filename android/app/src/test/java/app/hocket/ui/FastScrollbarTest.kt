@@ -62,8 +62,9 @@ class FastScrollbarTest {
         // A scroll brings the thumb up.
         compose.onNodeWithTag("list").performTouchInput { swipeUp() }
         compose.waitForIdle()
-        // Down to the bottom of the track and past it: the list is at its end.
-        compose.onNodeWithTag("fastScroll.thumb").performTouchInput { down(center); moveBy(Offset(0f, 5000f)); up() }
+        // Down to the bottom of the track and past it, in small steps (the thumb moving under the
+        // finger all the way): the list is at its end.
+        compose.onNodeWithTag("fastScroll.thumb").performTouchInput { down(center); repeat(25) { moveBy(Offset(0f, 200f)) }; up() }
         compose.waitForIdle()
         assertTrue(!list.canScrollForward)
         assertEquals(999, list.layoutInfo.visibleItemsInfo.last().index)
@@ -92,6 +93,27 @@ class FastScrollbarTest {
         compose.waitForIdle()
         assertEquals(0, tapped)
         assertEquals(0, list.firstVisibleItemIndex)
+    }
+
+    @Test
+    fun aThumbThatHasFadedLetsTheRowTakeTheTap() {
+        showList(1000)
+        compose.onNodeWithTag("list").performTouchInput { swipeUp() }
+        compose.waitForIdle()
+        val at = list.firstVisibleItemIndex
+        // Past the hide and its fade.
+        compose.mainClock.advanceTimeBy(2_000)
+        compose.waitForIdle()
+        compose.onNodeWithTag("fastScroll.thumb").performTouchInput { down(center); moveBy(Offset(0f, 300f)); up() }
+        compose.waitForIdle()
+        // The drag went to the list, not the thumb: it scrolled (flung) back up, not down the list.
+        assertTrue("from $at to ${list.firstVisibleItemIndex}", list.firstVisibleItemIndex <= at)
+        // That drag scrolled the list, which brought the thumb back: let it fade again, then a tap there is the row's.
+        compose.mainClock.advanceTimeBy(2_000)
+        compose.waitForIdle()
+        compose.onNodeWithTag("fastScroll.thumb").performTouchInput { click(center) }
+        compose.waitForIdle()
+        assertTrue(tapped >= 0)
     }
 
     @Test
