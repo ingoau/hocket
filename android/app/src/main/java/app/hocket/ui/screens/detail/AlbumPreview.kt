@@ -200,6 +200,9 @@ internal class AlbumPreviewState(private val scope: CoroutineScope) {
     /** Set by the overlay: the pull distance in pixels, haptics, reduced motion. */
     internal var pullPx = 1f
     internal var dismissPx = 1f
+
+    /** Set by the overlay: how far down the cover goes from the header to the middle (px). */
+    internal var flightPx = 0f
     internal var haptics: HapticFeedback? = null
     internal var reducedMotion = false
 
@@ -231,6 +234,12 @@ internal class AlbumPreviewState(private val scope: CoroutineScope) {
         }
         // Docked: up takes the cover back towards the header; down, the card follows the finger
         // down (towards a dismissal), and coming back up it docks before going on up.
+        // Grabbed while still settling from an over-pull: what's past the middle becomes the card's
+        // pull down (where it is on screen), so it neither jumps nor counts as finger travel.
+        if (travel > 1f) {
+            down += (progress - 1f) * flightPx.coerceAtLeast(0f)
+            travel = 1f
+        }
         var rest = deltaPx
         if (rest < 0f && down > 0f) rest -= moveDown(rest)
         if (rest != 0f && down == 0f) {
@@ -286,6 +295,11 @@ internal class AlbumPreviewState(private val scope: CoroutineScope) {
     }
 
     private fun settleTo(target: Float) {
+        // Docked already, only pulled down: back up into place.
+        if (target == 1f && open && down > 0f && travel >= 1f) {
+            settleDown()
+            return
+        }
         settle?.cancel()
         if (reducedMotion) {
             travel = target
@@ -327,7 +341,11 @@ internal class AlbumPreviewState(private val scope: CoroutineScope) {
         settling = true
         settle = scope.launch {
             try {
-                animate(down, 0f, animationSpec = spring(0.8f, 500f)) { value, _ -> down = value.coerceAtLeast(0f) }
+                animate(down, 0f, animationSpec = spring(0.8f, 500f)) { value, velocity ->
+                    down = value.coerceAtLeast(0f)
+                    // Docked as soon as it's back and all but still, so the row can be swiped at once.
+                    if (settling && down < 1f && abs(velocity) < 60f) settling = false
+                }
                 down = 0f
             } finally {
                 if (settle === coroutineContext[Job]) settling = false
@@ -428,7 +446,11 @@ internal fun BoxScope.AlbumPreviewOverlay(
     DisposableEffect(state) { onDispose { if (state.open) client.dispatch(Command.PreviewStop) } }
     // The bar and the mini player step away once the cover is well on its way, and come back as it goes home.
     val chromeAway = app.hocket.ui.nav.LocalChromeAway.current
-    val holdChrome by remember(state) { derivedStateOf { state.open || state.progress > 0.5f } }
+    // Taken past halfway, given back under a third (so a pull hovering at halfway doesn't flap them).
+    var holdChrome by remember(state) { mutableStateOf(false) }
+    LaunchedEffect(state) {
+        snapshotFlow { state.open to state.progress }.collect { (open, p) -> holdChrome = open || if (holdChrome) p > 0.3f else p > 0.5f }
+    }
     DisposableEffect(holdChrome, chromeAway) {
         val release = if (holdChrome) chromeAway.hold() else null
         onDispose { release?.invoke() }
@@ -456,16 +478,18 @@ internal fun BoxScope.AlbumPreviewOverlay(
         val sidePx = with(density) { side.toPx() }
         val target = with(density) { Rect(Offset((maxWidth.toPx() - sidePx) / 2f, cardTop.toPx()), Size(sidePx, sidePx)) }
         val pager = rememberPagerState(initialPage = startIndex.coerceIn(0, tracks.lastIndex)) { tracks.size }
+        state.flightPx = state.heroBounds?.let { target.center.y - (it.center.y - hostOrigin.y) } ?: 0f
 
         // Behind: the player's blurred cover. Tapping it (or dragging the card up) puts the cover away.
-        val dismiss = rememberDraggableState { delta -> state.dragBy(delta) }
+        // Only while open: a delta still on its way after closing must not pull the cover back out.
+        val dismiss = rememberDraggableState { delta -> if (state.open) state.dragBy(delta) }
         Box(
             Modifier
                 .fillMaxSize()
                 .graphicsLayer { alpha = (state.progress * 1.25f).coerceIn(0f, 1f) * (1f - 0.4f * state.downFraction) }
                 .background(Color.Black)
                 .pointerInput(state) { detectTapGestures { if (state.open) state.close() } }
-                .draggable(dismiss, Orientation.Vertical, enabled = state.open, onDragStopped = { v -> state.release(v) }),
+                .draggable(dismiss, Orientation.Vertical, enabled = state.open, onDragStopped = { v -> if (state.open) state.release(v) }),
         ) {
             LyricsBackground(coverArt, animated = animatedBackground, visible = state.docked, modifier = Modifier.fillMaxSize(), tag = "albumPreview.background")
         }
@@ -593,7 +617,7 @@ private fun PreviewCards(
             .fillMaxWidth()
             .offset { IntOffset(0, target.top.roundToInt()) }
             .height(side)
-            .draggable(dismiss, Orientation.Vertical, enabled = state.open, onDragStopped = { v -> state.release(v) })
+            .draggable(dismiss, Orientation.Vertical, enabled = state.open, onDragStopped = { v -> if (state.open) state.release(v) })
             .testTag("albumPreview.pager"),
         contentPadding = PaddingValues(horizontal = pad),
         pageSize = PageSize.Fixed(side),

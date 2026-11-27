@@ -163,6 +163,28 @@ class AlbumPreviewTest {
         compose.waitUntil(5_000) { core.client.transport.value.position.isPlaying }
     }
 
+    @Test
+    fun grabbingTheCardAsALongPullDocksKeepsItOpen() {
+        val core = TestCore(startPlaying = false)
+        open(core)
+        compose.mainClock.autoAdvance = false
+        // Far past the threshold, then the card grabbed straight away and nudged up.
+        pull(420f, settle = false)
+        compose.mainClock.advanceTimeBy(48)
+        compose.onNodeWithTag("albumPreview.pager").performTouchInput {
+            down(center)
+            // Quick, so the first deltas land while it's still settling; then held so the release isn't a flick.
+            for (i in 1..3) moveTo(center - Offset(0f, 10f * density * i), 8)
+            repeat(8) { moveBy(Offset.Zero, 40) }
+            up()
+        }
+        compose.mainClock.autoAdvance = true
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.waitForIdle()
+        assertTrue("still open", exists("albumPreview.pager"))
+        compose.waitUntil(5_000) { previewing(core) != null }
+    }
+
     /** A slow drag down on the docked card. */
     private fun swipeCard(dp: Float) {
         compose.onNodeWithTag("albumPreview.pager").performTouchInput {
