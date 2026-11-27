@@ -172,10 +172,13 @@ private fun DetailScaffold(
     /** A card joined under Play and Shuffle (an album's notes). */
     heroFooter: (@Composable () -> Unit)? = null,
     overlay: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit = { SelectionDrawer(Modifier.matchParentSize(), kinds = paneSelectionKinds(embedded)) },
+    /** An album's song preview: pulling the page down from its top brings the cover out ([AlbumPreviewOverlay], in [overlay]). */
+    preview: AlbumPreviewState? = null,
     content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val look = rememberDetailLook(coverArt, roundArtwork || !immersive, maxWidth)
+        val previewLabel = stringResource(R.string.album_preview_open)
         // The bar fills in as the title passes under it (or once the header has gone).
         var titleBottom by remember { androidx.compose.runtime.mutableFloatStateOf(Float.MAX_VALUE) }
         val barBottom = with(LocalDensity.current) { (androidx.compose.foundation.layout.WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 64.dp).toPx() }
@@ -189,12 +192,14 @@ private fun DetailScaffold(
         // The whole page in the artwork's colours, and the bar floating over it too, with the status
         // bar's icons over the cover, then over the filled-in bar (on a phone: a wide layout's pane
         // shares the status bar with the list beside it).
-        if (!embedded) app.hocket.ui.nav.PageColors(look.scheme, statusLight = overArt ?: !look.dark)
+        // The preview is dark (the player's blurred cover), whatever the header had under the status bar.
+        val previewUp by remember(preview) { androidx.compose.runtime.derivedStateOf { preview != null && (preview.open || preview.progress > 0.5f) } }
+        if (!embedded) app.hocket.ui.nav.PageColors(look.scheme, statusLight = if (previewUp) false else overArt ?: !look.dark)
         MaterialTheme(colorScheme = look.scheme) {
             androidx.compose.runtime.CompositionLocalProvider(app.hocket.ui.theme.LocalDarkTheme provides look.dark, androidx.compose.material3.LocalContentColor provides look.scheme.onBackground) {
                 Box(Modifier.fillMaxSize().background(look.scheme.background)) {
                     ShimmerHost {
-                        LazyColumn(state = listState, contentPadding = PaddingValues(bottom = BottomContentInset), modifier = Modifier.fillMaxSize()) {
+                        LazyColumn(state = listState, contentPadding = PaddingValues(bottom = BottomContentInset), modifier = Modifier.fillMaxSize().then(if (preview != null) Modifier.albumPreviewPull(preview, listState) else Modifier)) {
                             item(key = "header", contentType = "header") {
                                 DetailHero(
                                     look = look,
@@ -202,6 +207,8 @@ private fun DetailScaffold(
                                     eyebrow = eyebrow.takeIf { !loading }, below = { if (loading) SkeletonLine(Modifier.padding(top = 10.dp).fillMaxWidth(0.4f), 14.dp) else below() },
                                     onTitleBottom = { titleBottom = it },
                                     footer = heroFooter.takeIf { !loading },
+                                    artModifier = { radius, size -> if (preview != null && !loading) Modifier.albumPreviewSource(preview, radius, size, previewLabel) else Modifier },
+                                    hideCover = { preview?.active == true },
                                     actions = { if (loading) { Box(Modifier.weight(1f).height(56.dp).skeleton(CircleShape)); Box(Modifier.weight(1f).height(56.dp).skeleton(CircleShape)) } else heroActions() },
                                 )
                             }
@@ -356,7 +363,10 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
         client.dispatch(Commands.clearAlbumResume(a.id))
         client.dispatch(Commands.playContext(context))
     }
+    val preview = rememberAlbumPreviewState()
+    val previewTracks = tracks.orEmpty()
     DetailScaffold(nav, embedded, a.name, a.coverArt, shareKey = shareKey,
+        preview = preview.takeIf { previewTracks.isNotEmpty() && !selecting },
         barActions = {
             DetailLoveButton(a.loved, onToggle = { client.dispatch(Commands.loveAlbum(a.id, it)) })
             DetailDownloadButton(downloaded, onToggle = { client.dispatch(Commands.runAction(if (it) ActionIds.DOWNLOAD else ActionIds.UNPIN, target)) })
@@ -381,6 +391,10 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
         overlay = {
             SelectionDrawer(Modifier.matchParentSize(), kinds = paneSelectionKinds(embedded),
                 onSelectAll = tracks?.takeIf { it.isNotEmpty() }?.let { list -> { client.selectTracks(list.map { it.ref }) } })
+            // Opens on the song that's playing, when it's this album's.
+            AlbumPreviewOverlay(preview, previewTracks, a.coverArt, a.artist,
+                startIndex = previewTracks.indexOfFirst { it.id == nowPlaying?.track?.id }.coerceAtLeast(0),
+                onPlayFrom = { i -> client.dispatch(Commands.playContext(context, startIndex = i)) })
         },
     ) {
         val list = tracks

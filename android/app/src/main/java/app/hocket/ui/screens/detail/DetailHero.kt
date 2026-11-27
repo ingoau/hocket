@@ -196,6 +196,10 @@ internal fun DetailHero(
     onTitleBottom: (Float) -> Unit = {},
     /** A card joined under the actions (an album's notes), or null. */
     footer: (@Composable () -> Unit)? = null,
+    /** On the cover, first (an album's preview: where it is, hidden while the preview has it). Given the cover's corner radius and artwork size. */
+    artModifier: (radius: Dp, artSize: Int) -> Modifier = { _, _ -> Modifier },
+    /** Read while drawing: the cover is elsewhere (an album's preview has it), so its continuation goes too. */
+    hideCover: () -> Boolean = { false },
 ) {
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     BoxWithConstraints(Modifier.fillMaxWidth().testTag("detail.header").semantics { }) {
@@ -204,11 +208,11 @@ internal fun DetailHero(
             val edge = look.edge
             // The cover from the very top of the screen, under the status bar and the bar's icons,
             // a shade over its top so they read whatever the cover is.
-            if (edge != null) BoxWithConstraints(Modifier.matchParentSize().clipToBounds()) { DetailContinuation(coverArt, edge, width, 0.dp, maxHeight) }
+            if (edge != null) BoxWithConstraints(Modifier.matchParentSize().clipToBounds().graphicsLayer { alpha = if (hideCover()) 0f else 1f }) { DetailContinuation(coverArt, edge, width, 0.dp, maxHeight) }
             // Its foot fades as the player's does (a mirror's onto its reflection, a flat edge's last
             // few rows onto its colour); any other extension carries straight on with no fade.
             val footFades = edge != null && (edge.style == ArtworkStyle.Mirror || edge.isFlat())
-            Artwork(coverArt, ArtworkSizes.HERO, title, Modifier.fillMaxWidth().aspectRatio(1f).sharedArtworkDestination(shareKey)
+            Artwork(coverArt, ArtworkSizes.HERO, title, Modifier.then(artModifier(0.dp, ArtworkSizes.HERO)).fillMaxWidth().aspectRatio(1f).sharedArtworkDestination(shareKey)
                 .immersiveFade(edge, fraction = { if (footFades) 1f else 0f }).testTag("detail.artwork"), RectangleShape)
             Box(Modifier.fillMaxWidth().height(statusTop + 120.dp).background(Brush.verticalGradient(
                 *Array(9) { i -> val t = i / 8f; t to Color.Black.copy(alpha = 0.55f * (1f - t) * (1f - t)) },
@@ -221,7 +225,7 @@ internal fun DetailHero(
                 if (coverArt != null) {
                     val side = minOf(width * 0.74f, 320.dp)
                     val shape = if (round) CircleShape else RoundedCornerShape(28.dp)
-                    Artwork(coverArt, if (round) ArtworkSizes.FULL else ArtworkSizes.FULL, title, Modifier.size(side).shadow(24.dp, shape, ambientColor = MaterialTheme.colorScheme.primary, spotColor = Color.Black)
+                    Artwork(coverArt, if (round) ArtworkSizes.FULL else ArtworkSizes.FULL, title, Modifier.then(artModifier(28.dp, ArtworkSizes.FULL)).size(side).shadow(24.dp, shape, ambientColor = MaterialTheme.colorScheme.primary, spotColor = Color.Black)
                         .sharedArtworkDestination(shareKey).testTag("detail.artwork"), shape)
                     Spacer(Modifier.height(24.dp))
                 } else Spacer(Modifier.height(24.dp))

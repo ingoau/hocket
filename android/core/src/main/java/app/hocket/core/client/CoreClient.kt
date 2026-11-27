@@ -60,7 +60,8 @@ const val REUSE_ROOM_COLLECTION_MS = 15_000.0
 class CoreClient(
     val core: CoreHandle,
     parentScope: CoroutineScope,
-    private val now: () -> Double = { System.currentTimeMillis().toDouble() },
+    /** Wall-clock milliseconds: what the core's samples (`takenAt`) are stamped against. */
+    val now: () -> Double = { System.currentTimeMillis().toDouble() },
 ) {
     /**
      * Everything this client runs (the event collector, derived flows, the position ticker, page

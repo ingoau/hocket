@@ -1520,6 +1520,13 @@
     <string name="album_released">Released %1$d</string>
     <string name="album_added">Added %1$s</string>
     <string name="album_more_by">More by %1$s</string>
+    <string name="album_preview_open">Preview songs</string>
+    <string name="album_preview_close">Close preview</string>
+    <string name="album_preview_play">Preview %1$s</string>
+    <string name="album_preview_pause">Pause %1$s</string>
+    <string name="album_preview_song_of">Song %1$d of %2$d</string>
+    <string name="album_preview_badge">%1$d / %2$d</string>
+    <string name="album_preview_play_from_here">Play from here</string>
     <plurals name="album_plays"><item quantity="one">%d play</item><item quantity="other">%d plays</item></plurals>
     <!-- Redesign: Song info -->
     <string name="about_tab_song">Song</string>

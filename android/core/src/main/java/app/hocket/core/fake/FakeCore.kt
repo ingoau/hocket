@@ -805,6 +805,9 @@ class FakeCore(
 
     // -- commands ----------------------------------------------------------------------------------
     private fun handle(c: Command) {
+        // Like the real core: a transport command takes the output back from a preview, without
+        // giving back what the preview paused (the command is what was asked for).
+        if (preview != null && endsPreview(c)) previewStop(false)
         when (c) {
             Command.Start, Command.RequestSnapshot -> {
                 // Like the real core: `Started` exactly once per instance, `Snapshot` for every later
@@ -1680,6 +1683,13 @@ class FakeCore(
         }
         preview = PreviewState(trackId, track?.title ?: trackId, duration, position, true, now())
         emit(Event.PreviewChanged(EventPreviewChangedInner(preview)))
+    }
+
+    private fun endsPreview(c: Command): Boolean = when (c) {
+        Command.Play, Command.Pause, Command.TogglePlay, Command.Stop, Command.Next, Command.Previous, Command.PreviousTrack,
+        is Command.SeekTo, is Command.SeekBy, is Command.PlayContext, is Command.PlayTracks, is Command.JumpToQueueItem,
+        is Command.RestoreSavedQueue, Command.ResumeHere -> true
+        else -> false
     }
 
     private fun previewToggle() {
