@@ -341,6 +341,25 @@ val LocalStashRoom = compositionLocalOf { 0.dp }
 val LocalMiniBesideBar = compositionLocalOf { false }
 
 /**
+ * Something on a page has the whole screen (an album's song preview): while anything holds it, the
+ * bar, the mini player and the stash chip step down out of the way, as for a selection's drawer.
+ */
+@androidx.compose.runtime.Stable
+class ChromeAway {
+    private var holders by androidx.compose.runtime.mutableIntStateOf(0)
+    val active: Boolean get() = holders > 0
+
+    /** Holds the chrome away until the returned release is called (once). */
+    fun hold(): () -> Unit {
+        holders++
+        var released = false
+        return { if (!released) { released = true; holders-- } }
+    }
+}
+
+val LocalChromeAway = androidx.compose.runtime.staticCompositionLocalOf { ChromeAway() }
+
+/**
  * The shell's shape for a window: the navigation (the floating pill or the standard bar at the
  * bottom, or a [rail] at the start edge) and where the mini player sits ([miniWidth] wide at the end
  * edge, or centred when null). [barRow]: the pill at the bottom start with the mini player beside it.
@@ -478,7 +497,8 @@ private fun MainShell(snackbar: SnackbarHostState) {
         val stashRoom by androidx.compose.animation.core.animateDpAsState(
             if (stashAlone && stash.isNotEmpty()) app.hocket.ui.stash.StashChipDefaults.StandaloneRoom else 0.dp, label = "stashRoom",
         )
-        CompositionLocalProvider(app.hocket.ui.player.LocalOpenQueues provides openQueues, LocalPlayerVisible provides playerVisible, LocalMiniBesideBar provides barRow, LocalStashRoom provides stashRoom, app.hocket.ui.components.LocalSongMenu provides songMenu, LocalSharedArtwork provides sharedArtwork, app.hocket.ui.LocalScreenCache provides screenCache, app.hocket.ui.player.LocalOpenConnectSettings provides openConnectSettings) {
+        val chromeAway = remember { ChromeAway() }
+        CompositionLocalProvider(LocalChromeAway provides chromeAway, app.hocket.ui.player.LocalOpenQueues provides openQueues, LocalPlayerVisible provides playerVisible, LocalMiniBesideBar provides barRow, LocalStashRoom provides stashRoom, app.hocket.ui.components.LocalSongMenu provides songMenu, LocalSharedArtwork provides sharedArtwork, app.hocket.ui.LocalScreenCache provides screenCache, app.hocket.ui.player.LocalOpenConnectSettings provides openConnectSettings) {
             val items = navItems()
             val backStack by nav.currentBackStack.collectAsStateWithLifecycle()
             // The root entry of the stack last switched to (see selectedPlace).
@@ -519,7 +539,8 @@ private fun MainShell(snackbar: SnackbarHostState) {
             // its way as it rises, and come back as it leaves. 0 to 1, read in layout and draw only.
             val selectionNow by client.selection.collectAsStateWithLifecycle()
             val selectionKindNow by client.selectionKind.collectAsStateWithLifecycle()
-            val selecting = selectionNow.active && selectionKindNow != app.hocket.core.client.SelectionKind.QueueItems
+            // (A page holding the whole screen, [ChromeAway], sends them down the same way.)
+            val selecting = (selectionNow.active && selectionKindNow != app.hocket.core.client.SelectionKind.QueueItems) || chromeAway.active
             val selectionAway = androidx.compose.animation.core.animateFloatAsState(if (selecting) 1f else 0f, app.hocket.ui.theme.Motion.sheet, label = "selectionAway")
             val miniAwayPx = sheetInsetPx + with(density) { (miniHeightDp + MiniPlayerGap).roundToPx() }
             // Transitions: what the last bar/rail switch was, so the NavHost can tell it from a push.

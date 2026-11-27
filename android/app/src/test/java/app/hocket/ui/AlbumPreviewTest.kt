@@ -145,6 +145,39 @@ class AlbumPreviewTest {
     }
 
     @Test
+    fun aSwipeDownPutsItAwayAndAShortOneSpringsBack() {
+        val core = TestCore(startPlaying = true)
+        open(core)
+        compose.waitUntil(5_000) { core.client.transport.value.position.isPlaying }
+        pull(200f)
+        compose.waitUntil(5_000) { previewing(core) != null }
+        val previewed = previewing(core)
+        // A little way down and let go: the card springs back and the preview carries on.
+        swipeCard(48f)
+        assertTrue(exists("albumPreview.pager"))
+        assertEquals(previewed, previewing(core))
+        // Far enough down: away, and playback comes back.
+        swipeCard(200f)
+        assertFalse(exists("albumPreview"))
+        assertNull(core.client.preview.value)
+        compose.waitUntil(5_000) { core.client.transport.value.position.isPlaying }
+    }
+
+    /** A slow drag down on the docked card. */
+    private fun swipeCard(dp: Float) {
+        compose.onNodeWithTag("albumPreview.pager").performTouchInput {
+            val from = center
+            down(from)
+            val steps = 20
+            for (i in 1..steps) moveTo(from + Offset(0f, dp * density * i / steps), 40)
+            repeat(8) { moveBy(Offset.Zero, 40) }
+            up()
+        }
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.waitForIdle()
+    }
+
+    @Test
     fun aShortPullSpringsBack() {
         val core = TestCore(startPlaying = false)
         open(core)

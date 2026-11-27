@@ -156,6 +156,8 @@ fun PlayPauseButton(
     iconSize: Dp = 40.dp,
     buffering: Boolean = false,
     playingCorner: Dp = 28.dp,
+    /** At most this round at the bottom: something joins on underneath. */
+    bottomCorner: Dp? = null,
 ) {
     val reduced = LocalReducedMotion.current
     // 0 = paused (a pill), 1 = playing (rounded rectangle).
@@ -171,6 +173,7 @@ fun PlayPauseButton(
     val density = LocalDensity.current
     val playingPx = with(density) { playingCorner.toPx() }
     val pressedPx = with(density) { PRESSED_CORNER.toPx() }
+    val bottomPx = bottomCorner?.let { with(density) { it.toPx() } } ?: Float.MAX_VALUE
     TransportButton(
         onClick = { haptics.performHapticFeedback(if (playing) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn); onToggle() },
         label = label,
@@ -179,7 +182,9 @@ fun PlayPauseButton(
         interactionSource = interactionSource,
         shapeFor = {
             val rest = lerp(size.height / 2f, playingPx.coerceAtMost(size.height / 2f), morphProgress.value.coerceIn(0f, 1f))
-            RoundedCornerShape(lerp(rest, pressedPx, press.coerceIn(0f, 1f)))
+            val r = lerp(rest, pressedPx, press.coerceIn(0f, 1f))
+            val b = r.coerceAtMost(bottomPx)
+            RoundedCornerShape(topStart = r, topEnd = r, bottomStart = b, bottomEnd = b)
         },
         modifier = modifier.testTag("player.playPause").semantics { if (buffering) stateDescription = bufferingLabel },
     ) {
@@ -209,7 +214,11 @@ private val PRESSED_CORNER = 12.dp
  * indicator.
  */
 @Composable
-fun TransportRow(playing: Boolean, onPrevious: () -> Unit, onToggle: () -> Unit, onNext: () -> Unit, height: Dp, modifier: Modifier = Modifier, buffering: Boolean = false) {
+fun TransportRow(
+    playing: Boolean, onPrevious: () -> Unit, onToggle: () -> Unit, onNext: () -> Unit, height: Dp, modifier: Modifier = Modifier, buffering: Boolean = false,
+    /** Every button at most this round at the bottom: a group's inner corner, something joined on underneath. */
+    bottomCorner: Dp? = null,
+) {
     val prevSource = remember { MutableInteractionSource() }
     val playSource = remember { MutableInteractionSource() }
     val nextSource = remember { MutableInteractionSource() }
@@ -225,20 +234,20 @@ fun TransportRow(playing: Boolean, onPrevious: () -> Unit, onToggle: () -> Unit,
         customItem(
             buttonGroupContent = {
                 SkipButton(onPrevious, previousLabel, HocketIcons.Filled.SkipPrevious, tonal, onTonal, prevSource, leading = true,
-                    Modifier.animateWidth(prevSource).size(height).testTag("player.previous"))
+                    Modifier.animateWidth(prevSource).size(height).testTag("player.previous"), bottomCorner)
             },
             menuContent = { },
         )
         customItem(
             buttonGroupContent = {
-                PlayPauseButton(playing, onToggle, Modifier.animateWidth(playSource).weight(1f).height(height), playSource, iconSize = height * 0.4f, buffering = buffering)
+                PlayPauseButton(playing, onToggle, Modifier.animateWidth(playSource).weight(1f).height(height), playSource, iconSize = height * 0.4f, buffering = buffering, bottomCorner = bottomCorner)
             },
             menuContent = { },
         )
         customItem(
             buttonGroupContent = {
                 SkipButton(onNext, nextLabel, HocketIcons.Filled.SkipNext, tonal, onTonal, nextSource, leading = false,
-                    Modifier.animateWidth(nextSource).size(height).testTag("player.next"))
+                    Modifier.animateWidth(nextSource).size(height).testTag("player.next"), bottomCorner)
             },
             menuContent = { },
         )
@@ -253,10 +262,11 @@ private val TRANSPORT_GAP = 10.dp
  * towards play/pause), squishing towards [PRESSED_CORNER] while pressed.
  */
 @Composable
-private fun SkipButton(onClick: () -> Unit, label: String, icon: ImageVector, container: Color, content: Color, source: MutableInteractionSource, leading: Boolean, modifier: Modifier) {
+private fun SkipButton(onClick: () -> Unit, label: String, icon: ImageVector, container: Color, content: Color, source: MutableInteractionSource, leading: Boolean, modifier: Modifier, bottomCorner: Dp? = null) {
     val press by rememberPressFraction(source)
     val density = LocalDensity.current
     val pressedPx = with(density) { PRESSED_CORNER.toPx() }
+    val bottomPx = bottomCorner?.let { with(density) { it.toPx() } } ?: Float.MAX_VALUE
     TransportButton(onClick, label, container, content, source, modifier, shapeFor = {
         val p = press.coerceIn(0f, 1f)
         val outer = lerp(size.height * 0.36f, pressedPx, p)
@@ -265,7 +275,7 @@ private fun SkipButton(onClick: () -> Unit, label: String, icon: ImageVector, co
         // shape follows the layout direction).
         val startSide = if (leading) outer else inner
         val endSide = if (leading) inner else outer
-        RoundedCornerShape(topStart = startSide, bottomStart = startSide, topEnd = endSide, bottomEnd = endSide)
+        RoundedCornerShape(topStart = startSide, bottomStart = startSide.coerceAtMost(bottomPx), topEnd = endSide, bottomEnd = endSide.coerceAtMost(bottomPx))
     }) {
         Icon(icon, null, Modifier.size(32.dp))
     }

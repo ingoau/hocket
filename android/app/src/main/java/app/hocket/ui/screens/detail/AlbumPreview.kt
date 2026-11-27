@@ -112,7 +112,7 @@ import app.hocket.ui.a11y.LocalReducedMotion
 import app.hocket.ui.components.Artwork
 import app.hocket.ui.components.previewPositionMs
 import app.hocket.ui.icons.HocketIcons
-import app.hocket.ui.nav.BottomContentInset
+import androidx.compose.foundation.layout.navigationBars
 import app.hocket.ui.player.WavySeekBar
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -134,6 +134,9 @@ import kotlin.math.roundToInt
 
 /** How far the finger travels to bring the cover from the header to the middle. */
 private val PULL_DISTANCE = 128.dp
+
+/** How far down a docked card is pulled for a release to put it away. */
+private val DISMISS_DISTANCE = 120.dp
 
 /** Under this much of the way back (dragging a docked card up) a release puts the cover away. */
 private const val CLOSE_AT = 0.72f
@@ -176,6 +179,13 @@ internal class AlbumPreviewState(private val scope: CoroutineScope) {
     var settling by mutableStateOf(false)
         private set
 
+    /** Docked, how far (px) the finger has pulled the card down: towards a dismissal. */
+    var down by mutableFloatStateOf(0f)
+        private set
+
+    /** How far down a docked card is pulled for a release to put it away, as a fraction: 0 to 1. */
+    val downFraction: Float get() = (down / dismissPx).coerceIn(0f, 1f)
+
     /** Docked and still: the card row takes over from the flying cover. */
     val docked: Boolean get() = open && !dragging && !settling
 
@@ -189,6 +199,7 @@ internal class AlbumPreviewState(private val scope: CoroutineScope) {
 
     /** Set by the overlay: the pull distance in pixels, haptics, reduced motion. */
     internal var pullPx = 1f
+    internal var dismissPx = 1f
     internal var haptics: HapticFeedback? = null
     internal var reducedMotion = false
 
@@ -208,15 +219,38 @@ internal class AlbumPreviewState(private val scope: CoroutineScope) {
         settle?.cancel()
         settling = false
         dragging = true
-        val before = travel
-        travel = (travel + deltaPx / pullPx).coerceAtLeast(0f)
-        // A detent at the threshold: crossing it out (or, docked, back past where a release closes).
-        val mark = if (open) CLOSE_AT else 1f
-        if (before < mark && travel >= mark) haptics?.performHapticFeedback(if (open) HapticFeedbackType.SegmentTick else HapticFeedbackType.GestureThresholdActivate)
-        else if (before >= mark && travel < mark) haptics?.performHapticFeedback(if (open) HapticFeedbackType.GestureThresholdActivate else HapticFeedbackType.SegmentFrequentTick)
-        // Pushed all the way back: no longer a pull, so the list's fling is its own again.
-        if (travel == 0f && !open) dragging = false
-        return (travel - before) * pullPx
+        if (!open) {
+            val before = travel
+            travel = (travel + deltaPx / pullPx).coerceAtLeast(0f)
+            // A detent at the threshold, crossing it out and back.
+            if (before < 1f && travel >= 1f) haptics?.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+            else if (before >= 1f && travel < 1f) haptics?.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
+            // Pushed all the way back: no longer a pull, so the list's fling is its own again.
+            if (travel == 0f) dragging = false
+            return (travel - before) * pullPx
+        }
+        // Docked: up takes the cover back towards the header; down, the card follows the finger
+        // down (towards a dismissal), and coming back up it docks before going on up.
+        var rest = deltaPx
+        if (rest < 0f && down > 0f) rest -= moveDown(rest)
+        if (rest != 0f && down == 0f) {
+            val before = travel
+            travel = (travel + rest / pullPx).coerceIn(0f, 1f)
+            rest -= (travel - before) * pullPx
+            if (before >= CLOSE_AT && travel < CLOSE_AT) haptics?.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+            else if (before < CLOSE_AT && travel >= CLOSE_AT) haptics?.performHapticFeedback(HapticFeedbackType.SegmentTick)
+        }
+        if (rest > 0f) rest -= moveDown(rest)
+        return deltaPx - rest
+    }
+
+    /** Moves the card down by [deltaPx] (not above docked); returns what it used. */
+    private fun moveDown(deltaPx: Float): Float {
+        val before = down
+        down = (down + deltaPx).coerceAtLeast(0f)
+        if (before < dismissPx && down >= dismissPx) haptics?.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+        else if (before >= dismissPx && down < dismissPx) haptics?.performHapticFeedback(HapticFeedbackType.SegmentTick)
+        return down - before
     }
 
     /** The finger let go, moving at [velocityPx] (px/s, down positive). */
@@ -224,10 +258,11 @@ internal class AlbumPreviewState(private val scope: CoroutineScope) {
         if (!dragging) return
         dragging = false
         val v = velocityPx / pullPx
-        if (!open) {
-            if (travel >= 1f || (travel > 0.4f && v > FLICK)) openNow() else settleTo(0f)
-        } else {
-            if (travel < CLOSE_AT || v < -FLICK) close() else settleTo(1f)
+        when {
+            !open -> if (travel >= 1f || (travel > 0.4f && v > FLICK)) openNow() else settleTo(0f)
+            // Pulled down far enough (or flicked down): away, flying home from where it was let go.
+            down > 0f -> if (down >= dismissPx || v > FLICK) close() else settleDown()
+            else -> if (travel < CLOSE_AT || v < -FLICK) close() else settleTo(1f)
         }
     }
 
@@ -254,22 +289,47 @@ internal class AlbumPreviewState(private val scope: CoroutineScope) {
         settle?.cancel()
         if (reducedMotion) {
             travel = target
+            down = 0f
             settling = false
             return
         }
         settling = true
+        // Going home from below the middle (a swipe down), the card comes up from where it was let
+        // go, the rest of the way in step with the flight.
+        val fromTravel = travel
+        val fromDown = down
         settle = scope.launch {
             try {
                 // A little bounce docking; none going home, where the header's cover takes over.
                 val spec = if (target > 0f) spring(0.72f, 420f) else spring(Spring.DampingRatioNoBouncy, 520f, visibilityThreshold = 0.001f)
                 animate(travel, target, animationSpec = spec) { value, velocity ->
                     travel = if (target == 0f) value.coerceAtLeast(0f) else value
+                    if (target == 0f) down = if (fromTravel > 0f) fromDown * (travel / fromTravel).coerceIn(0f, 1f) else 0f
                     // Docked once the bounce has all but died away: the card row takes over a cover that has stopped moving.
                     if (target == 1f && settling && abs(value - 1f) < 0.012f && abs(velocity) < 0.25f) settling = false
                 }
                 travel = target
+                down = 0f
             } finally {
                 // A settle cancelled by the next one leaves the flag to it.
+                if (settle === coroutineContext[Job]) settling = false
+            }
+        }
+    }
+
+    /** A swipe down let go short of dismissing: the card springs back up into place. */
+    private fun settleDown() {
+        settle?.cancel()
+        if (reducedMotion) {
+            down = 0f
+            return
+        }
+        settling = true
+        settle = scope.launch {
+            try {
+                animate(down, 0f, animationSpec = spring(0.8f, 500f)) { value, _ -> down = value.coerceAtLeast(0f) }
+                down = 0f
+            } finally {
                 if (settle === coroutineContext[Job]) settling = false
             }
         }
@@ -358,6 +418,7 @@ internal fun BoxScope.AlbumPreviewOverlay(
     val client = LocalCoreClient.current
     val density = LocalDensity.current
     state.pullPx = with(density) { PULL_DISTANCE.toPx() }
+    state.dismissPx = with(density) { DISMISS_DISTANCE.toPx() }
     state.haptics = LocalHapticFeedback.current
     state.reducedMotion = LocalReducedMotion.current
     val active by remember(state) { derivedStateOf { state.active } }
@@ -365,6 +426,13 @@ internal fun BoxScope.AlbumPreviewOverlay(
     // Put away (or the page left with it open): stop the preview, which gives back what it paused.
     state.stopPreview = { client.dispatch(Command.PreviewStop) }
     DisposableEffect(state) { onDispose { if (state.open) client.dispatch(Command.PreviewStop) } }
+    // The bar and the mini player step away once the cover is well on its way, and come back as it goes home.
+    val chromeAway = app.hocket.ui.nav.LocalChromeAway.current
+    val holdChrome by remember(state) { derivedStateOf { state.open || state.progress > 0.5f } }
+    DisposableEffect(holdChrome, chromeAway) {
+        val release = if (holdChrome) chromeAway.hold() else null
+        onDispose { release?.invoke() }
+    }
     val requests = remember(client) { PreviewRequests(client) }
     if (!active || tracks.isEmpty()) return
 
@@ -378,7 +446,8 @@ internal fun BoxScope.AlbumPreviewOverlay(
     BoxWithConstraints(Modifier.matchParentSize().onGloballyPositioned { hostOrigin = it.positionInRoot() }.testTag("albumPreview")) {
         val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
         val top = statusTop + 56.dp
-        val room = (maxHeight - top - BottomContentInset).coerceAtLeast(0.dp)
+        // The bar and the mini player step away while it's up ([ChromeAway]): down to the system bar.
+        val room = (maxHeight - top - WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() - 24.dp).coerceAtLeast(0.dp)
         // The card as wide as the screen allows with its neighbours peeking, the controls under it
         // to the same edges; the two centred together in the room between the bar and the mini player.
         val side = minOf(maxWidth - CARD_INSET * 2, (room - INFO_HEIGHT).coerceAtLeast(160.dp), 420.dp)
@@ -393,7 +462,7 @@ internal fun BoxScope.AlbumPreviewOverlay(
         Box(
             Modifier
                 .fillMaxSize()
-                .graphicsLayer { alpha = (state.progress * 1.25f).coerceIn(0f, 1f) }
+                .graphicsLayer { alpha = (state.progress * 1.25f).coerceIn(0f, 1f) * (1f - 0.4f * state.downFraction) }
                 .background(Color.Black)
                 .pointerInput(state) { detectTapGestures { if (state.open) state.close() } }
                 .draggable(dismiss, Orientation.Vertical, enabled = state.open, onDragStopped = { v -> state.release(v) }),
@@ -420,7 +489,7 @@ internal fun BoxScope.AlbumPreviewOverlay(
                 IconButton(
                     onClick = { state.close() },
                     modifier = Modifier.align(Alignment.TopEnd).padding(top = statusTop + 4.dp, end = 4.dp)
-                        .graphicsLayer { alpha = ((state.progress - 0.6f) / 0.4f).coerceIn(0f, 1f) }.testTag("albumPreview.close"),
+                        .graphicsLayer { alpha = ((state.progress - 0.6f) / 0.4f).coerceIn(0f, 1f) * (1f - state.downFraction) }.testTag("albumPreview.close"),
                     enabled = state.open,
                 ) { Icon(HocketIcons.Filled.Close, stringResource(R.string.album_preview_close)) }
               }
@@ -456,7 +525,11 @@ private class PreviewRequests(private val client: CoreClient) {
 private val CARD_INSET = 36.dp
 
 /** The height of what sits under a docked card: title, artist, seek bar, transport and Play from here. */
-private val INFO_HEIGHT = 284.dp
+private val INFO_HEIGHT = 276.dp
+
+/** A group's inner corners and the gap between its parts (as the album page's Play, Shuffle and notes). */
+private val GROUP_INNER = 8.dp
+private val GROUP_GAP = 4.dp
 
 /** The transport's height under the card (the full player's compact one). */
 private val TRANSPORT_HEIGHT = 72.dp
@@ -480,11 +553,12 @@ private fun FlyingCover(state: AlbumPreviewState, coverArt: String?, target: Rec
                 val fit = p.coerceIn(0f, 1f)
                 val w = lerp(from.width, target.width, fit)
                 val centre = lerp(from.center, target.center, p)
-                val scale = w / target.width
+                // Pulled down when docked: it follows the finger, shrinking a little as it goes.
+                val scale = w / target.width * (1f - 0.12f * state.downFraction)
                 scaleX = scale
                 scaleY = scale
                 translationX = centre.x - target.center.x
-                translationY = centre.y - target.center.y
+                translationY = centre.y - target.center.y + state.down
                 val r = lerp(if (hero != null) with(density) { state.heroRadius.toPx() } else cardRadius, cardRadius, fit)
                 shape = RoundedCornerShape((r / scale.coerceAtLeast(0.01f)).coerceAtLeast(0f))
                 clip = true
@@ -548,7 +622,7 @@ private fun PreviewCards(
                     alpha = when {
                         state.docked -> shown
                         off < 0.5f -> 0f
-                        else -> shown * ((state.progress - 0.35f) / 0.65f).coerceIn(0f, 1f)
+                        else -> shown * ((state.progress - 0.35f) / 0.65f).coerceIn(0f, 1f) * (1f - state.downFraction)
                     }
                     shadowElevation = 24.dp.toPx() * (1f - off)
                     shape = RoundedCornerShape(CARD_RADIUS)
@@ -654,7 +728,7 @@ private fun BoxScope.PreviewInfo(
             .align(Alignment.TopCenter)
             .offset { IntOffset(0, (target.bottom + 12.dp.toPx()).roundToInt()) }
             .width(width)
-            .graphicsLayer { alpha = ((state.progress - 0.55f) / 0.45f).coerceIn(0f, 1f) }
+            .graphicsLayer { alpha = ((state.progress - 0.55f) / 0.45f).coerceIn(0f, 1f) * (1f - state.downFraction) }
             .testTag("albumPreview.info"),
     ) {
         // Start-aligned to the card's edge, as the player's title is to its artwork's.
@@ -685,10 +759,13 @@ private fun BoxScope.PreviewInfo(
             onToggle = { if (sample == null) currentEnsure(track) else client.dispatch(Command.PreviewToggle) },
             onNext = { if (page < tracks.lastIndex) scope.launch { pager.animateScrollToPage(page + 1) } },
             height = TRANSPORT_HEIGHT,
+            // One group with Play from here under it: inner corners where they meet, as the page's Play and notes.
+            bottomCorner = GROUP_INNER,
             modifier = Modifier.testTag("albumPreview.transport"),
         )
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(GROUP_GAP))
         FilledTonalButton(
+            shape = RoundedCornerShape(topStart = GROUP_INNER, topEnd = GROUP_INNER, bottomStart = 26.dp, bottomEnd = 26.dp),
             onClick = {
                 haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                 onPlayFrom(page)

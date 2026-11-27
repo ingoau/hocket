@@ -45,7 +45,7 @@ import java.io.FileOutputStream
  * A frame-by-frame recording (one frame per 16 ms) of the album preview in the whole app, a song
  * playing in the mini player: a pull down from the top of an album page brings the cover to the
  * middle, two swipes move the preview on a song each, a drag on the seek bar, pause and play, then
- * a drag up puts the cover back and the song that was playing carries on. The finger is drawn as a
+ * a swipe down puts the cover back and the song that was playing carries on. The finger is drawn as a
  * dot. For review by eye (stitch with ffmpeg at 60 fps); only runs with an output directory, and
  * wears real covers with HOCKET_COVERS (a folder of images, one per album in turn). SDK 32, as
  * ImmersiveScreenshotTest: covers don't decode under Robolectric's SDK 35.
@@ -132,9 +132,9 @@ class AlbumPreviewRecordingTest {
         val toggle = compose.onNode(hasTestTag("player.playPause") and hasAnyAncestor(hasTestTag("albumPreview")), useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.center
         tap(toggle, after = 40)
         tap(toggle, after = 50)
-        // Drag the card back up: it follows the finger home, and the song that was playing carries on.
+        // Swipe the card down: it follows the finger, then flies home, and the song that was playing carries on.
         val c = bounds("albumPreview.pager").center
-        drag(c, c - Offset(0f, 230f * density()), 30)
+        drag(c, c + Offset(0f, 200f * density()), 30)
         frames(70)
     }
 
