@@ -227,6 +227,20 @@ class AlbumPreviewTest {
     }
 
     @Test
+    fun aTapBesideTheCardPutsItAway() {
+        val core = TestCore(startPlaying = false)
+        open(core)
+        pull(200f)
+        compose.waitUntil(5_000) { core.client.preview.value != null }
+        // Above the card's left edge, clear of the card and the close button.
+        compose.onRoot().performTouchInput { click(Offset(16f * density, 100f * density)) }
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.waitForIdle()
+        assertFalse(exists("albumPreview"))
+        assertNull(core.client.preview.value)
+    }
+
+    @Test
     fun draggingTheCardToTheBottomPlaysFromIt() {
         val core = TestCore(startPlaying = false)
         open(core)

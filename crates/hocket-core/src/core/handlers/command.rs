@@ -19,7 +19,15 @@ impl Actor {
         if super::preview::command_ends_preview(&cmd)
             && !(super::preview::command_plays_from_preview(&cmd) && self.begin_preview_handoff())
         {
-            self.stop_preview(false);
+            // Play and seeks expect the song a handover was loading to be heard.
+            let resume = matches!(
+                cmd,
+                Command::Play
+                    | Command::SeekTo { .. }
+                    | Command::SeekBy { .. }
+                    | Command::ResumeHere
+            );
+            self.end_preview(false, resume);
         }
         match cmd {
             // -- lifecycle --

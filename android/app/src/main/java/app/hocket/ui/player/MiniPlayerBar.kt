@@ -44,7 +44,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.LocalDensity
@@ -103,6 +102,7 @@ internal fun MiniPlayerBar(
 ) {
     val client = LocalCoreClient.current
     val miniThumb = app.hocket.ui.nav.LocalMiniThumb.current
+    androidx.compose.runtime.DisposableEffect(miniThumb) { onDispose { miniThumb.coordinates = null } }
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val playing by client.isPlaying.collectAsStateWithLifecycle()
     val buffering by client.buffering.collectAsStateWithLifecycle()
@@ -174,7 +174,7 @@ internal fun MiniPlayerBar(
                                 .size(HeroGeometry.THUMB_SIZE)
                                 .onGloballyPositioned {
                                     hero.thumb = hero.measure(it)
-                                    miniThumb.bounds = androidx.compose.ui.geometry.Rect(it.positionInRoot(), androidx.compose.ui.geometry.Size(it.size.width.toFloat(), it.size.height.toFloat()))
+                                    miniThumb.coordinates = it
                                 }
                                 // The ring hides with the thumbnail while the artwork flies.
                                 .graphicsLayer { alpha = if (thumbHidden()) 0f else 1f }

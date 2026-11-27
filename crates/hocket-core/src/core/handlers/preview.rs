@@ -155,8 +155,17 @@ impl Actor {
     }
 
     /// Stop the preview. `restore` gives this device's playback back when
-    /// the preview had paused it.
+    /// the preview had paused it (and starts a song a handover was loading).
     pub(crate) fn stop_preview(&mut self, restore: bool) {
+        self.end_preview(restore, restore);
+    }
+
+    /// [`Self::stop_preview`]; `resume_handoff`: a handover still loading the
+    /// song paused gives up and starts it where the preview had got to. Not
+    /// for a stop that leaves playback paused (a pause, the sleep timer, the
+    /// preview interrupted) or moves on (a skip, another play).
+    pub(crate) fn end_preview(&mut self, restore: bool, resume_handoff: bool) {
+        let now = self.now();
         let Some(session) = self.preview.take() else {
             return;
         };
@@ -165,15 +174,18 @@ impl Actor {
         }
         self.emit_preview();
         if restore {
-            self.restore_hold(session.hold);
+            self.restore_hold(session.hold.clone());
         }
         // Given up while the main player was loading the song paused for the
-        // handover: it is meant to be playing, so it starts by itself.
-        if matches!(session.handoff, Some(PreviewHandoff::Loading { .. }))
+        // handover: it is meant to be playing, so it starts by itself, from
+        // where the preview had got to.
+        if resume_handoff
+            && matches!(session.handoff, Some(PreviewHandoff::Loading { .. }))
             && self.playback.loaded
             && self.playback.playing
             && self.playback.pending_load.is_none()
         {
+            self.seek_to(Self::preview_position(&session, now));
             if let Err(e) = self.backend.play() {
                 self.log("debug", format!("handoff play: {e}"));
             }
@@ -213,6 +225,12 @@ impl Actor {
         let Some(p) = self.preview.as_mut() else {
             return false;
         };
+        // Already handing over: the song is the main player's now, and this
+        // command is played as any other.
+        if !matches!(p.handoff, None | Some(PreviewHandoff::Pending { .. })) {
+            self.end_preview(false, true);
+            return false;
+        }
         p.hold = None;
         p.handoff = Some(PreviewHandoff::Pending { since: now });
         true
@@ -280,7 +298,7 @@ impl Actor {
         };
         if self.now() - since > HANDOFF_TIMEOUT_MS {
             tracing::debug!(target: "hocket::player", "preview handover timed out");
-            self.stop_preview(false);
+            self.stop_preview(true);
         }
     }
 

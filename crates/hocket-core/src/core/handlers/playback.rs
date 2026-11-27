@@ -928,7 +928,15 @@ impl Actor {
         match cmd {
             TransportCommand::Pause => self.drop_preview_hold(),
             TransportCommand::SetVolume { .. } => {}
-            _ => self.stop_preview(false),
+            _ => {
+                let resume = matches!(
+                    cmd,
+                    TransportCommand::Play
+                        | TransportCommand::SeekTo { .. }
+                        | TransportCommand::SeekBy { .. }
+                );
+                self.end_preview(false, resume);
+            }
         }
         match cmd {
             TransportCommand::Play => {
@@ -1383,8 +1391,13 @@ impl Actor {
                 }
                 // Loaded paused for the handover on purpose: still playing as
                 // far as anyone is told.
+                // (A backend that reports it with Ready, after the handover
+                // has started it, too.)
                 BackendReport::Paused { .. }
-                    if matches!(handoff, Some(PreviewHandoff::Loading { .. })) && current_key =>
+                    if matches!(
+                        handoff,
+                        Some(PreviewHandoff::Loading { .. } | PreviewHandoff::Starting { .. })
+                    ) && current_key =>
                 {
                     return;
                 }
@@ -1411,7 +1424,17 @@ impl Actor {
                 return;
             }
             BackendReport::PreviewInterrupted => {
+                // Not resumed into whatever interrupted it: a song a handover
+                // was loading stays paused.
+                let loading = matches!(
+                    self.preview_handoff(),
+                    Some(crate::core::state::PreviewHandoff::Loading { .. })
+                );
                 self.stop_preview(false);
+                if loading {
+                    self.playback.want_playing = false;
+                    self.set_playing(false);
+                }
                 return;
             }
             BackendReport::PreviewFailed => {

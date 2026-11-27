@@ -321,7 +321,13 @@ internal class AlbumPreviewState(private val scope: CoroutineScope) {
             !open -> if (travel >= 1f || (travel > 0.4f && v > FLICK)) openNow() else settleTo(0f)
             // Down to the bottom: the album plays from the card. Pulled down far enough (or flicked
             // down): away, flying home from where it was let go.
-            down > 0f -> if (down >= playPx) playFromHere() else if (down >= dismissPx || v > FLICK) close() else settleDown()
+            down > 0f -> when {
+                // Flicked back up: changed its mind.
+                v < -FLICK -> settleDown()
+                down >= playPx -> playFromHere()
+                down >= dismissPx || v > FLICK -> close()
+                else -> settleDown()
+            }
             else -> if (travel < CLOSE_AT || v < -FLICK) close() else settleTo(1f)
         }
     }
@@ -553,7 +559,8 @@ internal fun BoxScope.AlbumPreviewOverlay(
     state.haptics = LocalHapticFeedback.current
     state.reducedMotion = LocalReducedMotion.current
     val active by remember(state) { derivedStateOf { state.active } }
-    BackHandler(enabled = state.open) { state.close() }
+    // Dropping into the mini player, back waits for it to land rather than leaving the page under it.
+    BackHandler(enabled = state.open || state.dropping) { state.close() }
     // Put away (or the page left with it open): stop the preview, which gives back what it paused.
     state.stopPreview = { client.dispatch(Command.PreviewStop) }
     DisposableEffect(state) { onDispose { if (state.open) client.dispatch(Command.PreviewStop) } }
@@ -581,7 +588,23 @@ internal fun BoxScope.AlbumPreviewOverlay(
     val animatedBackground = settings[app.hocket.core.SettingKeys.DISPLAY_ANIMATED_BACKGROUND]?.value?.trim() != "false" && !saver.has(app.hocket.core.api.SaverFeature.StillBackground)
     val seed by app.hocket.ui.player.artworkSeed(coverArt)
     val scheme = remember(seed) { seed?.let { app.hocket.ui.theme.ArtworkColors.scheme(it, dark = true) } ?: darkColorScheme() }
-    BoxWithConstraints(Modifier.matchParentSize().onGloballyPositioned { hostOrigin = it.positionInRoot() }.testTag("albumPreview")) {
+    BoxWithConstraints(
+        Modifier
+            .matchParentSize()
+            .onGloballyPositioned { hostOrigin = it.positionInRoot() }
+            // Until it's open (on the way out after a short pull, or home after closing) nothing here
+            // takes a touch: the controls are invisible, and a tap must not start a preview. On the
+            // parent, ahead of its children, so a tap beside the card still reaches the scrim.
+            .pointerInput(state) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        if (!state.open) event.changes.forEach { it.consume() }
+                    }
+                }
+            }
+            .testTag("albumPreview"),
+    ) {
         val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
         val top = statusTop + 56.dp
         // The bar and the mini player step away while it's up ([ChromeAway]): down to the system bar.
@@ -605,7 +628,7 @@ internal fun BoxScope.AlbumPreviewOverlay(
         val miniThumb = app.hocket.ui.nav.LocalMiniThumb.current
         val playerVisible = app.hocket.ui.nav.LocalPlayerVisible.current
         var intoThumb by remember { mutableStateOf(false) }
-        LaunchedEffect(state.dropping) { if (state.dropping) intoThumb = playerVisible && miniThumb.bounds != null }
+        LaunchedEffect(state.dropping) { if (state.dropping) intoThumb = playerVisible && miniThumb.bounds() != null }
         val fallback = with(density) {
             val side = app.hocket.ui.player.HeroGeometry.THUMB_SIZE.toPx()
             val y = (maxHeight - navBottom - DROP_TARGET_GAP - DROP_TARGET_HEIGHT / 2).toPx()
@@ -614,18 +637,22 @@ internal fun BoxScope.AlbumPreviewOverlay(
         // Dropping, the card is drawn over the bar and the mini player (in window coordinates), so it
         // lands on the thumbnail rather than going under the mini player.
         val overChrome = app.hocket.ui.nav.LocalOverChrome.current
-        val rootTarget = target.translate(hostOrigin)
-        val rootFallback = fallback.translate(hostOrigin)
+        // In the slot's coordinates (the window's, less whatever sits above the shell).
+        val inSlot by rememberUpdatedState(hostOrigin - overChrome.origin)
+        val slotTarget by rememberUpdatedState(target)
+        val slotFallback by rememberUpdatedState(fallback)
         // Registered for as long as the preview is up and drawn only while dropping: the switch from
         // the page's cover to this one happens in the same frame.
-        DisposableEffect(overChrome, rootTarget, rootFallback) {
+        DisposableEffect(overChrome) {
             val mine: @Composable () -> Unit = {
-                FlyingCover(state, coverArt, rootTarget, Offset.Zero, overChrome = true) { (if (intoThumb) miniThumb.bounds else null) ?: rootFallback }
+                FlyingCover(state, coverArt, slotTarget.translate(inSlot), Offset.Zero, overChrome = true) {
+                    (if (intoThumb) miniThumb.bounds()?.translate(-overChrome.origin) else null) ?: slotFallback.translate(inSlot)
+                }
             }
             overChrome.content = mine
             onDispose { if (overChrome.content === mine) overChrome.content = null }
         }
-        val landing = { (if (intoThumb) miniThumb.bounds?.translate(-hostOrigin) else null) ?: fallback }
+        val landing = { (if (intoThumb) miniThumb.bounds()?.translate(-hostOrigin) else null) ?: fallback }
 
         // Behind: the player's blurred cover. Tapping it (or dragging the card up) puts the cover away.
         // Only while open: a delta still on its way after closing must not pull the cover back out.
@@ -643,16 +670,7 @@ internal fun BoxScope.AlbumPreviewOverlay(
 
         MaterialTheme(colorScheme = scheme) {
             CompositionLocalProvider(LocalContentColor provides scheme.onSurface, app.hocket.ui.theme.LocalDarkTheme provides true) {
-              // Until it's open (on the way out after a short pull, or home after closing) nothing
-              // here takes a touch: the controls are invisible, and a tap must not start a preview.
-              Box(Modifier.matchParentSize().pointerInput(state) {
-                  awaitPointerEventScope {
-                      while (true) {
-                          val event = awaitPointerEvent(PointerEventPass.Initial)
-                          if (!state.open) event.changes.forEach { it.consume() }
-                      }
-                  }
-              }) {
+              Box(Modifier.matchParentSize()) {
                 PlayDropTarget(state, bottom = navBottom + DROP_TARGET_GAP)
                 PreviewCards(state, pager, tracks, coverArt, side, target, dismiss, requests)
                 FlyingCover(state, coverArt, target, hostOrigin, overChrome = false, landing)
@@ -1004,8 +1022,8 @@ private fun BoxScope.PlayDropTarget(state: AlbumPreviewState, bottom: Dp) {
             }
             .background(container, CircleShape)
             .padding(horizontal = 24.dp)
-            .clearAndSetSemantics { }
-            .testTag("albumPreview.dropTarget"),
+            .testTag("albumPreview.dropTarget")
+            .clearAndSetSemantics { },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(HocketIcons.Filled.PlaylistPlay, null, Modifier.size(22.dp), tint = content)

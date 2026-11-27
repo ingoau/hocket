@@ -60,7 +60,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.colorResource
@@ -360,12 +362,16 @@ class ChromeAway {
 val LocalChromeAway = androidx.compose.runtime.staticCompositionLocalOf { ChromeAway() }
 
 /**
- * Where the mini player's thumbnail is in the window, kept up as it moves (null before it has
- * been laid out): somewhere for a card to land, as an album preview's Play from here does.
+ * Where the mini player's thumbnail is: somewhere for a card to land, as an album preview's Play
+ * from here does. Its layout, so [bounds] (in the window) is where it is now, read while drawing,
+ * as it moves; null while there's no mini player.
  */
-@androidx.compose.runtime.Stable
 class MiniThumbAnchor {
-    var bounds by androidx.compose.runtime.mutableStateOf<androidx.compose.ui.geometry.Rect?>(null)
+    var coordinates: androidx.compose.ui.layout.LayoutCoordinates? = null
+
+    fun bounds(): androidx.compose.ui.geometry.Rect? = coordinates?.takeIf { it.isAttached }?.let {
+        androidx.compose.ui.geometry.Rect(it.positionInRoot(), androidx.compose.ui.geometry.Size(it.size.width.toFloat(), it.size.height.toFloat()))
+    }
 }
 
 val LocalMiniThumb = androidx.compose.runtime.staticCompositionLocalOf { MiniThumbAnchor() }
@@ -377,6 +383,16 @@ val LocalMiniThumb = androidx.compose.runtime.staticCompositionLocalOf { MiniThu
 @androidx.compose.runtime.Stable
 class OverChrome {
     var content by androidx.compose.runtime.mutableStateOf<(@Composable () -> Unit)?>(null)
+
+    /** Where the slot is in the window (below whatever banner sits above the shell). */
+    var origin by androidx.compose.runtime.mutableStateOf(androidx.compose.ui.geometry.Offset.Zero)
+}
+
+/** [OverChrome]'s slot, over the bar and the now playing sheet; its own scope, so filling it recomposes nothing else. */
+@Composable
+private fun OverChromeSlot(over: OverChrome, modifier: Modifier) {
+    val content = over.content ?: return
+    Box(modifier.fillMaxSize().onGloballyPositioned { over.origin = it.positionInRoot() }) { content() }
 }
 
 val LocalOverChrome = androidx.compose.runtime.staticCompositionLocalOf { OverChrome() }
@@ -863,8 +879,8 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 }
                 }
             }
-            // Over the now playing sheet (z 10) and the bar.
-            overChrome.content?.let { over -> Box(Modifier.fillMaxSize().zIndex(11f)) { over() } }
+            // Over the now playing sheet (z 10) and the bar (z 20).
+            OverChromeSlot(overChrome, Modifier.zIndex(21f))
             val sheetRising by remember(sheet) { derivedStateOf { sheet.progress > 1f / 3f } }
             if (stashAlone) {
                 // Above the mini player (or the bar when nothing plays) at the end edge, leaving with
