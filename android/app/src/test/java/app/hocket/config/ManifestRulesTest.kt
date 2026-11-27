@@ -113,6 +113,8 @@ class ManifestRulesTest {
     fun theOnlyProvidersAreArtworkAndThePrivateWatchappAndSharedImageFiles() {
         val providers = listOf("android/playback/src/main/AndroidManifest.xml", "android/app/src/main/AndroidManifest.xml")
             .flatMap { path -> parse(path).getElementsByTagName("provider").let { list -> (0 until list.length).map { list.item(it) as Element } } }
+            // A library's provider removed from the merged manifest (tools:node="remove") adds none.
+            .filter { it.getAttribute("tools:node") != "remove" }
         assertEquals(setOf("app.hocket.playback.ArtworkProvider", "app.hocket.playback.pebble.PebbleFileProvider", "app.hocket.share.ShareFileProvider"), providers.map { it.getAttribute("android:name") }.toSet())
         // Exported so controllers can open artwork; ArtworkProvider itself checks the caller.
         val artwork = providers.single { it.getAttribute("android:name") == "app.hocket.playback.ArtworkProvider" }
