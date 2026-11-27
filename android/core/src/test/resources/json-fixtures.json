@@ -430,6 +430,7 @@
     "type": "queue",
     "data": {
       "contextLabel": "Album",
+      "savedQueueId": null,
       "entries": [
         {
           "item": {

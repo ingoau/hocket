@@ -369,6 +369,7 @@ mod tests {
             "result.queue",
             json!(QueryResult::Queue(QueueView {
                 context_label: Some("Album".into()),
+                saved_queue_id: None,
                 entries: vec![
                     entry("h1", QueueSource::Context { index: 0 }),
                     entry("c", QueueSource::Context { index: 1 }),

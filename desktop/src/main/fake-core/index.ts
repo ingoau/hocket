@@ -1740,8 +1740,9 @@ export class FakeCore implements CoreHandle {
     const s = this.session;
     const cur = Q.currentItem(s);
     if (!s.context || !cur || s.list.length <= 1) return;
-    if (this.savedQueueCap === 0 && !pin) return;
     const existing = this.currentSavedQueue();
+    // As the core's upsert: at cap 0 only an existing entry (a pinned one) is refreshed.
+    if (this.savedQueueCap === 0 && !pin && !existing) return;
     const cover = this.currentTrack()?.coverArt;
     const historyStart = Math.max(0, s.ptr - SNAPSHOT_HISTORY);
     const tooLong = s.list.length - historyStart > SNAPSHOT_MAX_ENTRIES;

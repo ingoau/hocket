@@ -1,5 +1,6 @@
-// A press held for LONG_PRESS_MS runs `onLongPress` and swallows the click that
-// follows it; a shorter press is an ordinary click. Spread the handlers onto a button.
+// A press held for LONG_PRESS_MS runs `onLongPress`; when that returns true (it did
+// something) the click the release makes is swallowed. A shorter press is an ordinary
+// click, and so is a keyboard activation. Spread the handlers onto a button.
 import { useEffect, useRef } from "react";
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
 
@@ -7,7 +8,7 @@ export const LONG_PRESS_MS = 500;
 /** Moving further than this (px) while pressed cancels the long press. */
 const SLOP = 10;
 
-export function useLongPress(onLongPress: () => void) {
+export function useLongPress(onLongPress: () => boolean) {
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const fired = useRef(false);
   const start = useRef<{ x: number; y: number } | undefined>(undefined);
@@ -27,8 +28,7 @@ export function useLongPress(onLongPress: () => void) {
       start.current = { x: e.clientX, y: e.clientY };
       timer.current = setTimeout(() => {
         timer.current = undefined;
-        fired.current = true;
-        latest.current();
+        fired.current = latest.current();
       }, LONG_PRESS_MS);
     },
     onPointerMove: (e: ReactPointerEvent<HTMLElement>) => {
@@ -39,8 +39,11 @@ export function useLongPress(onLongPress: () => void) {
     onPointerLeave: cancel,
     onPointerCancel: cancel,
     onClickCapture: (e: ReactMouseEvent<HTMLElement>) => {
-      if (!fired.current) return;
+      // A keyboard click (detail 0) is never the release of the hold, even when a release off
+      // the button left the flag set.
+      const swallow = fired.current && e.detail !== 0;
       fired.current = false;
+      if (!swallow) return;
       e.preventDefault();
       e.stopPropagation();
     },
