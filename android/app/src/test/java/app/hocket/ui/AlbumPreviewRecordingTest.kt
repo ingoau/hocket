@@ -51,7 +51,11 @@ import java.io.FileOutputStream
  * wears real covers with HOCKET_COVERS (a folder of images, one per album in turn). SDK 32, as
  * ImmersiveScreenshotTest: covers don't decode under Robolectric's SDK 35.
  *
- *     HOCKET_SCREENSHOT_DIR=/tmp/rec HOCKET_COVERS=/tmp/covers ./gradlew :app:testDebugUnitTest --tests '*AlbumPreviewRecordingTest*' --rerun
+ * The classifier doesn't run here: HOCKET_LAYOUTS (a JSON object from a cover's file name to its
+ * `ArtworkLayout`, as the `artwork_layout` example prints them) hands in its answers for the covers.
+ *
+ *     HOCKET_SCREENSHOT_DIR=/tmp/rec HOCKET_COVERS=/tmp/covers HOCKET_LAYOUTS=/tmp/layouts.json \
+ *         ./gradlew :app:testDebugUnitTest --tests '*AlbumPreviewRecordingTest*' --rerun
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [32], application = android.app.Application::class, qualifiers = "w411dp-h891dp-xhdpi")
@@ -63,6 +67,10 @@ class AlbumPreviewRecordingTest {
     private fun env(name: String): String? = (System.getProperty(name) ?: System.getenv(name))?.takeIf { it.isNotBlank() }
     private val outDir: File? = env("HOCKET_SCREENSHOT_DIR")?.let(::File)
     private val covers = env("HOCKET_COVERS")?.let { File(it).listFiles()?.filter { f -> f.isFile }?.sortedBy { f -> f.name } }.orEmpty()
+    private val layouts: Map<String, app.hocket.core.api.ArtworkLayout> = env("HOCKET_LAYOUTS")?.let { path ->
+        val all = app.hocket.core.HocketJson.json.parseToJsonElement(File(path).readText()) as kotlinx.serialization.json.JsonObject
+        all.mapValues { (_, v) -> app.hocket.core.HocketJson.json.decodeFromJsonElement(app.hocket.core.api.ArtworkLayout.serializer(), v) }
+    }.orEmpty()
 
     /** The fake core, with album `i` wearing cover `i` (round the folder). */
     private class CoverHandle(private val fake: FakeCore, private val cover: (String) -> File?) : CoreHandle by fake {
@@ -73,6 +81,12 @@ class AlbumPreviewRecordingTest {
     private fun exists(tag: String) = compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()
 
     private var n = 0
+    private var layoutsForCovers: ((String) -> app.hocket.core.api.ArtworkLayout?)? = null
+
+    @org.junit.After
+    fun forgetLayouts() {
+        app.hocket.ui.player.ImmersiveArtwork.layoutsForTest = null
+    }
     private var finger: Offset? = null
     private lateinit var dir: File
 
@@ -110,12 +124,45 @@ class AlbumPreviewRecordingTest {
      * The classifier's answer is handed in (a flat edge, as the core finds for these covers' plain
      * foot), as FullPlayerLayoutTest does: the native classifier doesn't run here.
      */
+    /**
+     * Pulled out, a song on, then dragged down to the bottom of the screen and let go there: the
+     * album plays from that song, the card dropping into the mini player as it comes back.
+     */
+    @Test
+    fun dragToPlay() {
+        openAlbum("album-preview-drag-to-play")
+        val art = bounds("detail.artwork")
+        val from = Offset(art.center.x, art.top + art.height * 0.55f)
+        drag(from, from + Offset(0f, 190f * density()), 40, hold = 4)
+        frames(60)
+        val card = bounds("albumPreview.pager")
+        drag(Offset(card.width * 0.72f, card.center.y), Offset(card.width * 0.26f, card.center.y), 18)
+        frames(50)
+        // Down past the dismissal, on to the bottom, held there, and let go.
+        val c = bounds("albumPreview.pager").center
+        val bottom = compose.onRoot().fetchSemanticsNode().boundsInRoot.bottom
+        drag(c, Offset(c.x, bottom - 70f * density()), 56, hold = 14)
+        frames(80)
+    }
+
+    /** Pulled out, then Play from here: the card drops into the mini player. */
+    @Test
+    fun playFromHereButton() {
+        openAlbum("album-preview-play-from-here")
+        val art = bounds("detail.artwork")
+        val from = Offset(art.center.x, art.top + art.height * 0.55f)
+        drag(from, from + Offset(0f, 190f * density()), 40, hold = 4)
+        frames(60)
+        tap(bounds("albumPreview.playFrom").center, after = 80)
+    }
+
     @Test
     fun immersiveSwipeDown() {
         val metrics = app.hocket.core.api.ArtworkMetrics(flat = 0.95, drift = 0.02, rough = 0.02, marks = 0u, busy = 0.02, faces = 0u)
         val edge = app.hocket.core.api.ArtworkEdge(style = app.hocket.core.api.ArtworkStyle.Extend, edgeColors = List(8) { 0x3A1C71u }, baseColor = 0x3A1C71u,
             light = false, scrim = 0.2, reason = "extend:flat", metrics = metrics)
-        app.hocket.ui.player.ImmersiveArtwork.layoutsForTest = { app.hocket.core.api.ArtworkLayout(bottom = edge, right = edge, left = edge, top = edge, topLight = false, topMarks = false) }
+        val handed = app.hocket.core.api.ArtworkLayout(bottom = edge, right = edge, left = edge, top = edge, topLight = false, topMarks = false)
+        app.hocket.ui.player.ImmersiveArtwork.layoutsForTest = { id -> layoutsForCovers?.invoke(id) ?: handed }
         try {
             openAlbum("album-preview-immersive")
             // Pull from the cover at the top of the screen, past the threshold, and let go.
@@ -150,6 +197,11 @@ class AlbumPreviewRecordingTest {
         val now = { t0 + compose.mainClock.currentTime }
         val fake = FakeCore(seed = 7, startWithServer = true, startPlaying = true, timers = false, now = now, dispatcher = Dispatchers.Unconfined)
         val byAlbum = fake.library.albums.withIndex().associate { (i, a) -> a.id to covers.takeIf { it.isNotEmpty() }?.let { it[i % it.size] } }
+        // The classifier's answers for these covers, when handed in (a card for a cover it has none for).
+        if (layouts.isNotEmpty()) {
+            layoutsForCovers = { id -> byAlbum[id]?.name?.let(layouts::get) }
+            if (app.hocket.ui.player.ImmersiveArtwork.layoutsForTest == null) app.hocket.ui.player.ImmersiveArtwork.layoutsForTest = layoutsForCovers
+        }
         val client = CoreClient(CoverHandle(fake) { id -> byAlbum[id] }, CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate), now)
         // Covers in the image loader's memory first: a hit draws at once, where a load crossfades on a clock the test advances by hand.
         kotlinx.coroutines.runBlocking {
