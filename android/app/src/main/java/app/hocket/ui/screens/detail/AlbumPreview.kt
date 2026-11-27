@@ -783,8 +783,6 @@ private fun BoxScope.PreviewInfo(
             onToggle = { if (sample == null) currentEnsure(track) else client.dispatch(Command.PreviewToggle) },
             onNext = { if (page < tracks.lastIndex) scope.launch { pager.animateScrollToPage(page + 1) } },
             height = TRANSPORT_HEIGHT,
-            // One group with Play from here under it: inner corners where they meet, as the page's Play and notes.
-            bottomCorner = GROUP_INNER,
             modifier = Modifier.testTag("albumPreview.transport"),
         )
         Spacer(Modifier.height(GROUP_GAP))

@@ -45,7 +45,8 @@ import java.io.FileOutputStream
  * A frame-by-frame recording (one frame per 16 ms) of the album preview in the whole app, a song
  * playing in the mini player: a pull down from the top of an album page brings the cover to the
  * middle, two swipes move the preview on a song each, a drag on the seek bar, pause and play, then
- * a swipe down puts the cover back and the song that was playing carries on. The finger is drawn as a
+ * a swipe down puts the cover back and the song that was playing carries on (and, in
+ * [immersiveSwipeDown], the same over a cover the page shows edge to edge). The finger is drawn as a
  * dot. For review by eye (stitch with ffmpeg at 60 fps); only runs with an output directory, and
  * wears real covers with HOCKET_COVERS (a folder of images, one per album in turn). SDK 32, as
  * ImmersiveScreenshotTest: covers don't decode under Robolectric's SDK 35.
@@ -77,9 +78,72 @@ class AlbumPreviewRecordingTest {
 
     @Test
     fun pullSwipeSeekAndPutAway() {
+        openAlbum("album-preview")
+        // Pull: slowly at first, past the threshold, then let go.
+        val art = bounds("detail.artwork")
+        val from = Offset(art.center.x, art.top + art.height * 0.55f)
+        drag(from, from + Offset(0f, 190f * density()), 48, hold = 6)
+        frames(70)
+        // Two songs on, a swipe each.
+        val card = bounds("albumPreview.pager")
+        repeat(2) {
+            drag(Offset(card.width * 0.72f, card.center.y), Offset(card.width * 0.26f, card.center.y), 18)
+            frames(60)
+        }
+        // Scrub the preview further in.
+        val seek = compose.onNode(hasTestTag("player.seek") and hasAnyAncestor(hasTestTag("albumPreview")), useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        drag(Offset(seek.left + seek.width * 0.42f, seek.center.y), Offset(seek.left + seek.width * 0.78f, seek.center.y), 24, hold = 6)
+        frames(50)
+        // Pause, then play.
+        val toggle = compose.onNode(hasTestTag("player.playPause") and hasAnyAncestor(hasTestTag("albumPreview")), useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.center
+        tap(toggle, after = 40)
+        tap(toggle, after = 50)
+        // Swipe the card down: it follows the finger, then flies home, and the song that was playing carries on.
+        val c = bounds("albumPreview.pager").center
+        drag(c, c + Offset(0f, 200f * density()), 30)
+        frames(70)
+    }
+
+    /**
+     * An album whose cover the page shows immersive (edge to edge from the top, carried on in its
+     * colour): the cover pulled out of the header, a swipe on, then swiped down and home again.
+     * The classifier's answer is handed in (a flat edge, as the core finds for these covers' plain
+     * foot), as FullPlayerLayoutTest does: the native classifier doesn't run here.
+     */
+    @Test
+    fun immersiveSwipeDown() {
+        val metrics = app.hocket.core.api.ArtworkMetrics(flat = 0.95, drift = 0.02, rough = 0.02, marks = 0u, busy = 0.02, faces = 0u)
+        val edge = app.hocket.core.api.ArtworkEdge(style = app.hocket.core.api.ArtworkStyle.Extend, edgeColors = List(8) { 0x3A1C71u }, baseColor = 0x3A1C71u,
+            light = false, scrim = 0.2, reason = "extend:flat", metrics = metrics)
+        app.hocket.ui.player.ImmersiveArtwork.layoutsForTest = { app.hocket.core.api.ArtworkLayout(bottom = edge, right = edge, left = edge, top = edge, topLight = false, topMarks = false) }
+        try {
+            openAlbum("album-preview-immersive")
+            // Pull from the cover at the top of the screen, past the threshold, and let go.
+            val art = bounds("detail.artwork")
+            val from = Offset(art.center.x, art.top + art.height * 0.45f)
+            drag(from, from + Offset(0f, 200f * density()), 48, hold = 6)
+            frames(70)
+            // One song on.
+            val card = bounds("albumPreview.pager")
+            drag(Offset(card.width * 0.72f, card.center.y), Offset(card.width * 0.26f, card.center.y), 18)
+            frames(60)
+            // A little way down and let go: it springs back.
+            val c = bounds("albumPreview.pager").center
+            drag(c, c + Offset(0f, 60f * density()), 18, hold = 4)
+            frames(40)
+            // Down past the threshold, slowly, held, and let go: it flies home into the header.
+            drag(c, c + Offset(0f, 220f * density()), 40, hold = 8)
+            frames(70)
+        } finally {
+            app.hocket.ui.player.ImmersiveArtwork.layoutsForTest = null
+        }
+    }
+
+    /** The whole app with a song playing, on the library's first album, the clock then by hand. */
+    private fun openAlbum(name: String) {
         val out = outDir
         assumeTrue("set HOCKET_SCREENSHOT_DIR to write recording frames", out != null)
-        dir = File(out!!, "album-preview").apply { mkdirs() }
+        dir = File(out!!, name).apply { mkdirs() }
         // One clock for the fake's samples and the UI's extrapolation: the test's frames, so a
         // preview advances 16 ms a frame however long a frame takes to draw.
         val t0 = System.currentTimeMillis().toDouble()
@@ -113,29 +177,6 @@ class AlbumPreviewRecordingTest {
         // From here the clock goes by hand, a frame at a time.
         compose.mainClock.autoAdvance = false
         frames(30)
-        // Pull: slowly at first, past the threshold, then let go.
-        val art = bounds("detail.artwork")
-        val from = Offset(art.center.x, art.top + art.height * 0.55f)
-        drag(from, from + Offset(0f, 190f * density()), 48, hold = 6)
-        frames(70)
-        // Two songs on, a swipe each.
-        val card = bounds("albumPreview.pager")
-        repeat(2) {
-            drag(Offset(card.width * 0.72f, card.center.y), Offset(card.width * 0.26f, card.center.y), 18)
-            frames(60)
-        }
-        // Scrub the preview further in.
-        val seek = compose.onNode(hasTestTag("player.seek") and hasAnyAncestor(hasTestTag("albumPreview")), useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
-        drag(Offset(seek.left + seek.width * 0.42f, seek.center.y), Offset(seek.left + seek.width * 0.78f, seek.center.y), 24, hold = 6)
-        frames(50)
-        // Pause, then play.
-        val toggle = compose.onNode(hasTestTag("player.playPause") and hasAnyAncestor(hasTestTag("albumPreview")), useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.center
-        tap(toggle, after = 40)
-        tap(toggle, after = 50)
-        // Swipe the card down: it follows the finger, then flies home, and the song that was playing carries on.
-        val c = bounds("albumPreview.pager").center
-        drag(c, c + Offset(0f, 200f * density()), 30)
-        frames(70)
     }
 
     /** Real time for decoding and classifying off the main thread, and the test's clock for the UI to land them. */
