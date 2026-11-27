@@ -123,7 +123,7 @@ enum class DrawerValue { Hidden, Peek, Open }
  * peeks: its handle, "3 selected" between Clear and Select all, and the quick actions in one
  * connected row (the play group: Play, Shuffle, Play next, Add to queue, Play later; failing those
  * the first four actions). Swiping it up (or tapping the handle) opens the rest over a scrim: for
- * one item (picked, not select-all) the very menu its three dots open, [MenuSheet] embedded (its
+ * one item (named by id: not an inverted select-all, whose items aren't listed) the very menu its three dots open, [MenuSheet] embedded (its
  * header, go-to rows and info); for several songs (or queue entries) their menu ("3 songs · 11 min",
  * love, the rating starting "Mixed" while they differ, "Download 3 songs", Share, Snooze, "Remove 3
  * from Late night"); for several albums, artists or playlists the rest of their actions, the rateN
@@ -380,7 +380,9 @@ private fun Drawer(
                     val m = menu
                     if (m != null) {
                         val s = m.subject
-                        key(m) {
+                        // A fresh sheet per selection, not per change in what it shows: the item's own
+                        // Download toggle changes the pins, which mustn't reset the sheet (or stop a preview).
+                        key(kind, selection.inverted, selection.ids, s.kind) {
                             MenuSheet(
                                 s, client.selectionTarget(), actions,
                                 extras = listOfNotNull(onRemoveFromContext?.takeIf { context != null && songs }?.let { remove ->
@@ -520,7 +522,7 @@ internal suspend fun selectionSubject(client: CoreClient, selection: Selection, 
 internal data class DrawerMenu(val subject: MenuSubject, val track: TrackSummary? = null, val album: Album? = null)
 
 /**
- * The menu of a selection of one item (picked, not select-all): the same as its three dots open, a
+ * The menu of a selection of one item named by id (an inverted select-all lists none): the same as its three dots open, a
  * song's ([songSubject]) or an album's, artist's or playlist's ([menuSubject]). Null for several
  * items, or a song that can't be found (the songs' menu stands in).
  */
