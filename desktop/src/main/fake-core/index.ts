@@ -469,6 +469,15 @@ export class FakeCore implements CoreHandle {
       case "deleteSavedQueue":
         this.savedQueues = this.savedQueues.filter((s) => s.id !== cmd.data.id);
         this.emitSavedQueues();
+        this.emitQueue();
+        return;
+      case "pinCurrentQueue":
+        this.pinCurrentQueue(cmd.data.pinned);
+        return;
+      case "clearSavedQueues":
+        this.savedQueues = this.savedQueues.filter((s) => s.pinned);
+        this.emitSavedQueues();
+        this.emitQueue();
         return;
       case "renameQueue": {
         const label = cmd.data.label.trim();
@@ -1669,6 +1678,7 @@ export class FakeCore implements CoreHandle {
     };
     return {
       contextLabel: s.context?.label,
+      savedQueueId: this.currentSavedQueue()?.id,
       entries: d.entries.map((e) => entry(e.item, e.inGroup)),
       windowStart: d.windowStart,
       total: d.total,
@@ -1704,14 +1714,34 @@ export class FakeCore implements CoreHandle {
     }
   }
 
+  /** The saved queue holding the playing queue's context (the core's `QueueView::saved_queue_id`). */
+  private currentSavedQueue(): SavedQueue | undefined {
+    const ctx = this.session.context;
+    if (!ctx) return undefined;
+    const identity = this.contextIdentity(ctx);
+    return this.savedQueues.find((q) => this.contextIdentity(q.context) === identity);
+  }
+
+  /** Pin the playing queue (saving it first when it has no entry) or unpin its entry. */
+  private pinCurrentQueue(pinned: boolean): void {
+    if (pinned) this.autoSaveQueue(true);
+    const q = this.currentSavedQueue();
+    if (q && q.pinned !== pinned) {
+      q.pinned = pinned;
+      q.updatedAt = Date.now();
+    }
+    this.evictSavedQueues();
+    this.emitSavedQueues();
+    this.emitQueue();
+  }
+
   /** Snapshot the outgoing list (the core's `snapshot_parts`): skips trivial queues and ones with nothing current. */
-  private autoSaveQueue(): void {
+  private autoSaveQueue(pin = false): void {
     const s = this.session;
     const cur = Q.currentItem(s);
     if (!s.context || !cur || s.list.length <= 1) return;
-    if (this.savedQueueCap === 0) return;
-    const identity = this.contextIdentity(s.context);
-    const existing = this.savedQueues.find((q) => this.contextIdentity(q.context) === identity && !q.pinned);
+    if (this.savedQueueCap === 0 && !pin) return;
+    const existing = this.currentSavedQueue();
     const cover = this.currentTrack()?.coverArt;
     const historyStart = Math.max(0, s.ptr - SNAPSHOT_HISTORY);
     const tooLong = s.list.length - historyStart > SNAPSHOT_MAX_ENTRIES;
@@ -1725,7 +1755,7 @@ export class FakeCore implements CoreHandle {
       shuffle: s.shuffle,
       repeat: s.repeat,
       positionMs: Math.round(this.positionNow()),
-      pinned: existing?.pinned ?? false,
+      pinned: pin || (existing?.pinned ?? false),
       createdAt: existing?.createdAt ?? Date.now(),
       lastInteractedAt: Date.now(),
       updatedAt: Date.now(),

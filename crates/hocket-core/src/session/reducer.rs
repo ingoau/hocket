@@ -238,11 +238,13 @@ pub enum QueueOp {
     SetContextTracks {
         tracks: Vec<TrackRef>,
     },
-    /// Explicit "save this queue". With the auto-save cap at 0 an unpinned
-    /// explicit save is evicted immediately, so callers normally pin.
-    SaveCurrentQueue {
+    /// Pin the playing queue (saving it first, so it has an entry to pin)
+    /// or unpin its entry.
+    PinCurrentQueue {
         pinned: bool,
     },
+    /// Remove every unpinned saved queue.
+    ClearSavedQueues,
     PinSavedQueue {
         id: String,
         pinned: bool,
@@ -337,6 +339,8 @@ impl QueueOp {
                 pinned: *pinned,
             },
             Command::DeleteSavedQueue { id } => QueueOp::DeleteSavedQueue { id: id.clone() },
+            Command::PinCurrentQueue { pinned } => QueueOp::PinCurrentQueue { pinned: *pinned },
+            Command::ClearSavedQueues => QueueOp::ClearSavedQueues,
             Command::RenameQueue {
                 saved_queue_id,
                 label,
@@ -628,6 +632,8 @@ impl Flat {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct DerivedQueue {
     pub context_label: Option<String>,
+    /// See [`crate::api::QueueView::saved_queue_id`].
+    pub saved_queue_id: Option<String>,
     /// `(entry, in the group)`, in list order.
     pub entries: Vec<(QueueItem, bool)>,
     pub window_start: u32,
@@ -658,6 +664,7 @@ impl DerivedQueue {
         };
         QueueView {
             context_label: self.context_label,
+            saved_queue_id: self.saved_queue_id,
             entries: self.entries.into_iter().map(|(i, g)| entry(i, g)).collect(),
             window_start: self.window_start,
             total: self.total,
@@ -750,6 +757,13 @@ pub fn derive_range(doc: &SessionDocument, start: usize, count: usize) -> Derive
     let previous = flat_view.previous(wrap).map(|i| item_at(i).clone());
     DerivedQueue {
         context_label: doc.context.as_ref().map(|c| c.label.clone()),
+        saved_queue_id: doc.context.as_ref().and_then(|c| {
+            let identity = saved::context_identity(c);
+            doc.saved_queues
+                .iter()
+                .find(|q| saved::identity_of(q) == identity)
+                .map(|q| q.id.clone())
+        }),
         entries,
         window_start: start as u32,
         total: total as u32,
@@ -1079,21 +1093,32 @@ impl Reducer<'_, '_> {
                 }
                 Ok(())
             }
-            QueueOp::SaveCurrentQueue { pinned } => {
-                let id = self.ctx.entropy.next_key();
-                if let Some(mut s) = self.snapshot(id) {
-                    s.pinned = pinned;
-                    saved::upsert(&mut self.doc.saved_queues, s, &saved_policy(), self.ctx.now);
-                    // An explicit pin must win over a pre-existing unpinned entry.
-                    if pinned {
-                        if let Some(q) = self.doc.saved_queues.iter_mut().find(|q| {
-                            self.doc.context.as_ref().map(saved::context_identity)
-                                == Some(saved::identity_of(q))
-                        }) {
-                            q.pinned = true;
-                        }
+            QueueOp::PinCurrentQueue { pinned } => {
+                if pinned {
+                    let id = self.ctx.entropy.next_key();
+                    if let Some(mut s) = self.snapshot(id) {
+                        s.pinned = true;
+                        saved::upsert(&mut self.doc.saved_queues, s, &saved_policy(), self.ctx.now);
                     }
                 }
+                let identity = self.doc.context.as_ref().map(saved::context_identity);
+                // The pin must win over a pre-existing entry's (upsert keeps it).
+                if let Some(q) = self
+                    .doc
+                    .saved_queues
+                    .iter_mut()
+                    .find(|q| identity.as_deref() == Some(saved::identity_of(q).as_str()))
+                {
+                    if q.pinned != pinned {
+                        q.pinned = pinned;
+                        q.updated_at = self.ctx.now;
+                    }
+                }
+                saved::enforce(&mut self.doc.saved_queues, &saved_policy(), self.ctx.now);
+                Ok(())
+            }
+            QueueOp::ClearSavedQueues => {
+                self.doc.saved_queues.retain(|q| q.pinned);
                 Ok(())
             }
             QueueOp::PinSavedQueue { id, pinned } => {

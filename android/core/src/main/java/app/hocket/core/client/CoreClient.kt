@@ -807,7 +807,7 @@ class CoreClient(
         private const val TAG = "CoreClient"
         /** Rows the core's queue window carries on each side of the pointer. */
         const val QUEUE_WINDOW_SIDE = 100
-        fun emptyQueue() = QueueView(null, emptyList(), 0u, 0u, 0u, null, 0u, 0u, null, false, RepeatMode.Off, false)
+        fun emptyQueue() = QueueView(null, null, emptyList(), 0u, 0u, 0u, null, 0u, 0u, null, false, RepeatMode.Off, false)
         fun emptyTransport() = TransportState(TransportLease(null, 0u, 0.0), PositionStamp(0u, 0.0, 1.0, false), false, 0u, 1.0)
         fun emptyConnection() = ConnectionState(ConnectionTier.Local, false, null, 0.0, null, 0u, null)
         fun emptyUndo() = UndoState(false, null, false, null, emptyList())

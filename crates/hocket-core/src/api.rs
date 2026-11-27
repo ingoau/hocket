@@ -1152,6 +1152,10 @@ pub struct QueueEntry {
 #[serde(rename_all = "camelCase")]
 pub struct QueueView {
     pub context_label: Option<String>,
+    /// The saved queue that holds this queue's context, if there is one: pinned, restored from,
+    /// or saved under the same context. Its `pinned` is whether the playing queue is pinned.
+    #[serde(default)]
+    pub saved_queue_id: Option<String>,
     /// The rows of the window, in list order.
     pub entries: Vec<QueueEntry>,
     /// List index of `entries[0]`.
@@ -2935,6 +2939,13 @@ pub enum Command {
     DeleteSavedQueue {
         id: String,
     },
+    /// Pin the playing queue (saved first if it has no entry yet), or unpin
+    /// its entry. [`QueueView::saved_queue_id`] names that entry.
+    PinCurrentQueue {
+        pinned: bool,
+    },
+    /// Remove every unpinned saved queue (undoable like any queue change).
+    ClearSavedQueues,
     /// Rename a queue. `saved_queue_id: None` renames the queue that is
     /// playing (its context label); otherwise the saved queue with that ID.
     /// A blank label is ignored.

@@ -231,6 +231,51 @@ test.describe("now playing", () => {
     await expect(panel).toHaveAttribute("data-view", "queue");
   });
 
+  test("holding a queue button switches to the last queue; the playing queue pins, and Recent clears without asking", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    const first = await playAlbum(page, 0);
+    const second = await playAlbum(page, 1);
+    const third = await playAlbum(page, 2);
+    const hold = async (testId: string) => {
+      const box = (await page.getByTestId(testId).first().boundingBox())!;
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.waitForTimeout(800);
+      await page.mouse.up();
+    };
+    await page.getByTestId("toggle-queue").click();
+    const panel = page.getByTestId("right-panel");
+    await expect(panel.getByTestId("queue-selector-label")).toHaveText(third);
+    // Holding the bar's queue toggle restores the queue played before, and doesn't toggle the panel.
+    await hold("toggle-queue");
+    await expect(panel.getByTestId("queue-selector-label")).toHaveText(second);
+    await expect(panel).toHaveAttribute("data-view", "queue");
+    // Holding the queue's name goes back again, without opening the Queues page.
+    await hold("queue-selector");
+    await expect(panel.getByTestId("queue-selector-label")).toHaveText(third);
+    await expect(panel).toHaveAttribute("data-view", "queue");
+    // The Queues page: pin the playing queue from its card.
+    await panel.getByTestId("queue-selector").click();
+    const pageEl = panel.getByTestId("saved-queues");
+    const pin = pageEl.getByTestId("saved-queues-current-pin");
+    await expect(pin).toHaveAttribute("aria-pressed", "false");
+    await pin.click();
+    await expect(pin).toHaveAttribute("aria-pressed", "true");
+    const rows = pageEl.getByTestId("saved-queue-row");
+    await expect(rows.filter({ hasText: third }).getByTestId("saved-queue-pin")).toHaveAttribute("aria-pressed", "true");
+    await expect(rows.filter({ hasText: first })).toBeVisible();
+    // Clear empties Recent at once and keeps the pinned queue.
+    await pageEl.getByTestId("saved-queues-clear").click();
+    await expect(rows).toHaveCount(1);
+    await expect(rows.first()).toContainText(third);
+    await expect(pageEl.getByTestId("saved-queues-clear")).toHaveCount(0);
+    await expect(pageEl.getByTestId("saved-queues-empty")).toBeVisible();
+    // Unpinning it from the card.
+    await pin.click();
+    await expect(pin).toHaveAttribute("aria-pressed", "false");
+  });
+
   test("lyrics options live in a popover from the lyrics view's header, and from a right-click on the lyrics toggles", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);

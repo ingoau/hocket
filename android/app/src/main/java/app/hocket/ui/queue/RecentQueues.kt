@@ -55,6 +55,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -72,9 +73,10 @@ import app.hocket.ui.components.SectionHeader
 import app.hocket.ui.components.formatAgoPhrase
 
 /**
- * Queues: the playing queue on a filled primary card (its name, size and place, rename and create
- * playlist) above the pinned and recent saved queues as segmented groups, each row with pin, rename
- * and delete. No artwork. Delete is immediate: the core makes it undoable like any queue change.
+ * Queues: the playing queue on a filled primary card (its name, size and place, pin, rename and
+ * create playlist) above the pinned and recent saved queues as segmented groups, each row with pin,
+ * rename and delete, and Recent with Clear. No artwork. Delete and Clear are immediate, with no
+ * confirmation: the core makes them undoable like any queue change.
  * [onRestore] runs after a queue is restored (the player's queue switcher closes itself).
  */
 @Composable
@@ -91,17 +93,28 @@ fun RecentQueuesList(modifier: Modifier = Modifier, contentPadding: PaddingValue
     val playingLabel = queue.contextLabel?.takeIf { it.isNotBlank() }
     val playingCount = queue.total.toInt()
     val playingIndex = queue.currentIndex?.let { it.toInt() + 1 } ?: 0
+    val playingPinned = saved.firstOrNull { it.id == queue.savedQueueId }?.pinned == true
     BoxWithConstraints(modifier) {
         LazyColumn(Modifier.fillMaxWidth(), contentPadding = maxWidthListPadding(maxWidth, contentPadding.calculateTopPadding(), contentPadding.calculateBottomPadding(), horizontal = 16.dp)) {
             item(key = "playing.label") { GroupLabel(stringResource(R.string.queue_playing_now)) }
             item(key = "playing") {
-                PlayingQueueCard(playingLabel, playingCount, playingIndex, onRename = { renaming = "" }, onCreatePlaylist = { naming = true })
+                PlayingQueueCard(playingLabel, playingCount, playingIndex, playingPinned, onRename = { renaming = "" }, onCreatePlaylist = { naming = true },
+                    onPin = { client.dispatch(Commands.pinCurrentQueue(it)) })
             }
             if (pinned.isNotEmpty()) {
                 item(key = "pinned.label") { GroupLabel(stringResource(R.string.saved_pinned), Modifier.padding(top = 12.dp)) }
                 itemsIndexed(pinned, key = { _, q -> q.id }) { i, q -> SavedQueueRow(q, i, pinned.size, onRename = { renaming = q.id }, onRestore = onRestore) }
             }
-            item(key = "recent.label") { GroupLabel(stringResource(R.string.saved_recent), Modifier.padding(top = 12.dp)) }
+            item(key = "recent.label") {
+                GroupLabel(stringResource(R.string.saved_recent), Modifier.padding(top = 12.dp), action = if (recent.isEmpty()) null else {
+                    {
+                        val spoken = stringResource(R.string.saved_clear_recent)
+                        TextButton(onClick = { client.dispatch(Commands.clearSavedQueues) }, shapes = ButtonDefaults.shapes(), modifier = Modifier.testTag("queues.recent.clear").semantics { contentDescription = spoken }) {
+                            Text(stringResource(R.string.queue_section_clear))
+                        }
+                    }
+                })
+            }
             if (recent.isEmpty()) item(key = "recent.empty") {
                 Segment(0, 1) {
                     Text(
@@ -126,10 +139,11 @@ fun RecentQueuesList(modifier: Modifier = Modifier, contentPadding: PaddingValue
 
 /**
  * The playing queue at the top of Queues, on the primary colour: its name, how long it is, where
- * in it you are, and its two actions (Create playlist, Rename) as tonal buttons on the card.
+ * in it you are, and its actions (Pin, Create playlist, Rename) as tonal buttons on the card. Pin
+ * is a toggle: pinning saves the queue so it stays in Pinned after you play something else.
  */
 @Composable
-private fun PlayingQueueCard(label: String?, count: Int, index: Int, onRename: () -> Unit, onCreatePlaylist: () -> Unit) {
+private fun PlayingQueueCard(label: String?, count: Int, index: Int, pinned: Boolean, onRename: () -> Unit, onCreatePlaylist: () -> Unit, onPin: (Boolean) -> Unit) {
     val client = LocalCoreClient.current
     // Shown to the second: read at ~4 Hz, and recomposed only when the second changes.
     val progress = client.progress.collectAsStateWithLifecycle()
@@ -149,6 +163,13 @@ private fun PlayingQueueCard(label: String?, count: Int, index: Int, onRename: (
                 if (index > 0) Icon(HocketIcons.Filled.Equalizer, null, tint = onCard)
             }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                // A queue of one track can't be saved, so it can't be pinned either.
+                FilledTonalButton(onClick = { onPin(!pinned) }, enabled = pinned || count > 1, colors = tonal, shapes = ButtonDefaults.shapes(),
+                    modifier = Modifier.testTag("queues.playing.pin")) {
+                    Icon(if (pinned) HocketIcons.Filled.PushPin else HocketIcons.Outlined.PushPin, null, Modifier.size(ButtonDefaults.IconSize))
+                    Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                    Text(stringResource(if (pinned) R.string.saved_unpin else R.string.saved_pin))
+                }
                 FilledTonalButton(onClick = onCreatePlaylist, enabled = count > 0, colors = tonal, shapes = ButtonDefaults.shapes(), modifier = Modifier.testTag("queues.playing.createPlaylist")) {
                     Icon(HocketIcons.AutoMirrored.Filled.PlaylistAdd, null, Modifier.size(ButtonDefaults.IconSize))
                     Spacer(Modifier.width(ButtonDefaults.IconSpacing))
@@ -163,6 +184,13 @@ private fun PlayingQueueCard(label: String?, count: Int, index: Int, onRename: (
         }
     }
 }
+
+/**
+ * The queue a long press on the player's queue button switches to: the most recently played saved
+ * queue that isn't the playing one ([currentId], the queue view's `savedQueueId`), pinned or not.
+ */
+fun mostRecentOtherQueue(saved: List<SavedQueue>, currentId: String?): SavedQueue? =
+    saved.filter { it.id != currentId }.maxByOrNull { it.lastInteractedAt }
 
 /** A one-field dialog for naming something; a blank name can't be confirmed. */
 @Composable

@@ -537,9 +537,10 @@ pub enum SessionOp {
     SetContextTracks {
         tracks: Vec<TrackRef>,
     },
-    SaveCurrentQueue {
+    PinCurrentQueue {
         pinned: bool,
     },
+    ClearSavedQueues,
     PinSavedQueue {
         id: String,
         pinned: bool,
@@ -645,6 +646,8 @@ impl SessionOp {
                 pinned: *pinned,
             },
             Command::DeleteSavedQueue { id } => SessionOp::DeleteSavedQueue { id: id.clone() },
+            Command::PinCurrentQueue { pinned } => SessionOp::PinCurrentQueue { pinned: *pinned },
+            Command::ClearSavedQueues => SessionOp::ClearSavedQueues,
             Command::RenameQueue {
                 saved_queue_id,
                 label,

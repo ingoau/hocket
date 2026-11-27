@@ -12,6 +12,8 @@ import { openMenuFromButton } from "./ContextMenu";
 import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
 import { usePresence } from "../lib/presence";
+import { useLongPress } from "../lib/long-press";
+import { switchToRecentQueue } from "../lib/recent-queue";
 
 export function QueueHeader({ large = false }: { large?: boolean }) {
   const autoplay = useApp((s) => s.queue.autoplay);
@@ -32,8 +34,9 @@ function QueueSelector({ large }: { large: boolean }) {
 
 function QueuesLink() {
   const label = useApp((s) => s.queue.contextLabel) ?? t("queue.untitled");
+  const hold = useLongPress(switchToRecentQueue);
   return (
-    <button type="button" className="qs-button" aria-label={t("queue.openQueues", { name: label })} title={t("queue.recentTitle")} onClick={() => showSideView("recent")} data-drill="recent" data-testid="queue-selector">
+    <button type="button" className="qs-button" aria-label={t("queue.openQueues", { name: label })} title={`${t("queue.recentTitle")}\n${t("queue.holdForLast")}`} onClick={() => showSideView("recent")} {...hold} data-drill="recent" data-testid="queue-selector">
       <span className="qs-label" data-testid="queue-selector-label">{label}</span>
       <Icon name="chevronRight" size={20} className="qs-chevron" />
     </button>
@@ -50,6 +53,7 @@ function QueueSelectorPopover() {
   const pop = useRef<HTMLDivElement>(null);
   const d = bridge().dispatch;
   const sorted = [...saved].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.lastInteractedAt - a.lastInteractedAt);
+  const hold = useLongPress(switchToRecentQueue);
 
   const close = (refocus = true) => {
     setOpen(false);
@@ -117,7 +121,7 @@ function QueueSelectorPopover() {
   const host = button.current?.closest<HTMLElement>('[role="dialog"]') ?? document.body;
   return (
     <>
-      <button ref={button} type="button" className="qs-button large" aria-haspopup="dialog" aria-expanded={open} aria-label={`${t("queue.selector")}: ${label}`} onClick={() => (open ? close(false) : setOpen(true))}
+      <button ref={button} type="button" className="qs-button large" aria-haspopup="dialog" aria-expanded={open} aria-label={`${t("queue.selector")}: ${label}`} title={t("queue.holdForLast")} onClick={() => (open ? close(false) : setOpen(true))} {...hold}
         onKeyDown={(e) => { if (e.key === "Escape" && open) { e.preventDefault(); e.stopPropagation(); close(); } }} data-testid="queue-selector">
         <span className="qs-label" data-testid="queue-selector-label">{label}</span>
         <Icon name="chevronDown" size={28} className="qs-chevron" />

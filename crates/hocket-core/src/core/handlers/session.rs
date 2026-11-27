@@ -1909,6 +1909,8 @@ fn command_kind(cmd: &Command) -> &'static str {
         Command::RestoreSavedQueue { .. } => "restoreSavedQueue",
         Command::PinSavedQueue { .. } => "pinSavedQueue",
         Command::DeleteSavedQueue { .. } => "deleteSavedQueue",
+        Command::PinCurrentQueue { .. } => "pinCurrentQueue",
+        Command::ClearSavedQueues => "clearSavedQueues",
         Command::RenameQueue { .. } => "renameQueue",
         _ => "session",
     }
@@ -1957,6 +1959,14 @@ fn command_label(cmd: &Command) -> String {
             }
         }
         Command::DeleteSavedQueue { .. } => "Delete saved queue".into(),
+        Command::PinCurrentQueue { pinned } => {
+            if *pinned {
+                "Pin queue".into()
+            } else {
+                "Unpin queue".into()
+            }
+        }
+        Command::ClearSavedQueues => "Clear recent queues".into(),
         Command::RenameQueue { .. } => "Rename queue".into(),
         _ => "Queue change".into(),
     }

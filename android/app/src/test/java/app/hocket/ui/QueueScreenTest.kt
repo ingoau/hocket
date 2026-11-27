@@ -6,6 +6,7 @@ import app.hocket.core.groupEntries
 import app.hocket.core.historyEntries
 import app.hocket.core.restEntries
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -355,6 +356,37 @@ class QueueScreenTest {
         compose.onNodeWithText("Recent").assertIsDisplayed()
         // The undo history is out for now (issue #127).
         compose.onNodeWithContentDescription("Undo history").assertDoesNotExist()
+    }
+
+    @Test
+    fun thePlayingQueuesPinButtonPinsAndUnpinsIt() {
+        val core = TestCore(startPlaying = true)
+        compose.setThemedContent(core) { RecentQueuesList() }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value && core.client.queue.value.total > 1u }
+        fun playingPinned() = core.client.queue.value.savedQueueId?.let { id -> core.client.savedQueues.value.firstOrNull { it.id == id }?.pinned } == true
+        assertTrue(!playingPinned())
+        compose.onNodeWithTag("queues.playing.pin").performClick()
+        compose.waitUntil(5_000) { playingPinned() }
+        compose.onNodeWithTag("queues.playing.pin").assertTextContains("Unpin")
+        compose.onNodeWithTag("queues.playing.pin").performClick()
+        compose.waitUntil(5_000) { !playingPinned() }
+        compose.onNodeWithTag("queues.playing.pin").assertTextContains("Pin")
+    }
+
+    @Test
+    fun clearRemovesTheRecentQueuesAndKeepsThePinnedOnes() {
+        val core = TestCore()
+        compose.setThemedContent(core) { RecentQueuesList() }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value && core.client.savedQueues.value.any { !it.pinned } }
+        val pinned = core.client.savedQueues.value.filter { it.pinned }
+        assertTrue(pinned.isNotEmpty())
+        // No confirmation: one tap clears.
+        compose.onNodeWithTag("queues.recent.clear").performClick()
+        compose.waitUntil(5_000) { core.client.savedQueues.value.none { !it.pinned } }
+        assertEquals(pinned.map { it.id }, core.client.savedQueues.value.map { it.id })
+        compose.onNodeWithTag("queues.recent.clear").assertDoesNotExist()
     }
 
     /**

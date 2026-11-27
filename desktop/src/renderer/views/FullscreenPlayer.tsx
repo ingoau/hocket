@@ -47,6 +47,8 @@ import { AboutSong } from "../components/AboutSong";
 import { ConnectPill } from "../components/ConnectPill";
 import { ArtistChooser } from "../components/ArtistChooser";
 import { useLyricsOptionsTrigger } from "../components/LyricsOptions";
+import { useLongPress } from "../lib/long-press";
+import { switchToRecentQueue } from "../lib/recent-queue";
 import { Stars } from "../components/Stars";
 import { Slider } from "../components/controls";
 import { openMenuFromButton } from "../components/ContextMenu";
@@ -348,6 +350,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   // A right-click (or the context-menu key, Shift+F10) on the pill's lyrics toggle opens the lyrics
   // options above it: nothing is added to the pill, so its buttons never move between views.
   const lyricsOptions = useLyricsOptionsTrigger("above");
+  const queueHold = useLongPress(switchToRecentQueue);
   const repeatLabel = queue.repeat === "off" ? t("player.repeatOff") : queue.repeat === "all" ? t("player.repeatAll") : t("player.repeatOne");
 
   return (
@@ -434,7 +437,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
         <span className="np-pill-divider" aria-hidden="true" />
         <div className="np-modes" role="group" aria-label={t("nowPlaying.views")}>
           {PANES.map((p) => (
-            <button key={p.key} type="button" className={`np-mode ${mode === p.key ? "on" : ""}`} aria-pressed={mode === p.key} aria-label={t(`nowPlaying.view.${p.key}`)} title={t(`nowPlaying.view.${p.key}`)} onClick={() => setMode(mode === p.key ? "art" : p.key)} {...(p.key === "lyrics" ? lyricsOptions.trigger : {})} data-testid={`fs-mode-${p.key}`}>
+            <button key={p.key} type="button" className={`np-mode ${mode === p.key ? "on" : ""}`} aria-pressed={mode === p.key} aria-label={t(`nowPlaying.view.${p.key}`)} title={p.key === "queue" ? `${t("nowPlaying.view.queue")}\n${t("queue.holdForLast")}` : t(`nowPlaying.view.${p.key}`)} onClick={() => setMode(mode === p.key ? "art" : p.key)} {...(p.key === "lyrics" ? lyricsOptions.trigger : p.key === "queue" ? queueHold : {})} data-testid={`fs-mode-${p.key}`}>
               <Icon name={p.icon} size={22} filled={mode === p.key} />
             </button>
           ))}
