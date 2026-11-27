@@ -134,7 +134,7 @@ fun LyricsBackground(coverArt: String?, animated: Boolean, visible: Boolean, mod
             RuntimeShader(WARP_SHADER).also {
                 // A shader handed to a RuntimeShader doesn't inherit the paint's bitmap filtering:
                 // left at FILTER_MODE_DEFAULT it samples nearest, and the 48 px texture showed as
-                // blocks across the screen. The warp shader's bicubic taps rely on it being linear.
+                // blocks across the screen. The warp shader's B-spline taps rely on it being linear.
                 val image = BitmapShader(tex, Shader.TileMode.MIRROR, Shader.TileMode.MIRROR).apply { filterMode = BitmapShader.FILTER_MODE_LINEAR }
                 it.setInputShader("image", image)
                 it.setFloatUniform("texSize", tex.width.toFloat(), tex.height.toFloat())
