@@ -39,13 +39,6 @@ pub enum LyricsError {
 /// HTTP GET returning the body; `Err(Http{404})` for not found.
 pub trait LyricsHttp: Send + Sync {
     fn get(&self, url: &str) -> BoxFuture<'_, Result<String, LyricsError>>;
-
-    /// POST a JSON body, answering the response body. Only Squigly needs it, so by default it
-    /// fails and the caller falls back.
-    fn post_json(&self, url: &str, body: String) -> BoxFuture<'_, Result<String, LyricsError>> {
-        let _ = (url, body);
-        Box::pin(async { Err(LyricsError::Network("POST not supported".into())) })
-    }
 }
 
 /// An external lyrics source. `Ok(None)` means "not found", which callers
@@ -174,15 +167,6 @@ impl ReqwestLyricsHttp {
 impl LyricsHttp for ReqwestLyricsHttp {
     fn get(&self, url: &str) -> BoxFuture<'_, Result<String, LyricsError>> {
         let req = self.client.get(url);
-        Box::pin(send(req))
-    }
-
-    fn post_json(&self, url: &str, body: String) -> BoxFuture<'_, Result<String, LyricsError>> {
-        let req = self
-            .client
-            .post(url)
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(body);
         Box::pin(send(req))
     }
 }

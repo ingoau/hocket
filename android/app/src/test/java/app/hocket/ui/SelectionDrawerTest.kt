@@ -24,6 +24,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.ActionIds
 import app.hocket.core.client.SelectionKind
 import app.hocket.ui.components.SelectionDrawer
+import androidx.compose.runtime.CompositionLocalProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -165,6 +166,61 @@ class SelectionDrawerTest {
         compose.waitForIdle()
         compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
         compose.waitUntil(5_000) { !core.client.selection.value.active }
+    }
+
+    /** Opens the drawer over [kind]'s [ids], selected one by one, with a navigator that records where it went. */
+    private fun selectAndOpen(core: TestCore, kind: SelectionKind, ids: List<String>, went: MutableList<String> = mutableListOf()) {
+        val navigator = DetailNavigator(openAlbum = { went += "album:$it" }, openArtist = { went += "artist:$it" })
+        compose.setThemedContent(core) { CompositionLocalProvider(LocalDetailNavigator provides navigator) { SelectionDrawer() } }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value }
+        compose.runOnIdle { ids.forEach { core.client.toggleSelected(kind, it) } }
+        compose.waitUntil(5_000) { present("selection.handle") }
+        compose.waitForIdle()
+        compose.onNodeWithTag("selection.handle").performSemanticsAction(SemanticsActions.Expand)
+        compose.waitUntil(5_000) { present("selectionMenu.header") }
+        compose.waitForIdle()
+    }
+
+    private fun shows(text: String) = compose.onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty()
+
+    /** One song picked: the drawer opens the menu its three dots do (its title, Go to album, Song info), not "1 song". */
+    @Test
+    fun oneSelectedSongOpensItsOwnMenu() {
+        val core = TestCore(startPlaying = false)
+        val track = core.fake.library.tracks.first()
+        val went = mutableListOf<String>()
+        selectAndOpen(core, SelectionKind.Tracks, listOf(track.id), went)
+        compose.waitUntil(5_000) { shows(track.title) }
+        assertFalse(shows("1 song"))
+        assertTrue(present("selectionMenu.info"))
+        // Going to the album leaves the selection behind.
+        compose.onNodeWithTag("selectionMenu.action.${ActionIds.GO_TO_ALBUM}").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { !core.client.selection.value.active }
+        assertEquals(listOf("album:${track.albumId}"), went)
+    }
+
+    /** A second song turns it into the songs' menu. */
+    @Test
+    fun aSecondSongSwitchesToTheSongsMenu() {
+        val core = TestCore(startPlaying = false)
+        val (a, b) = core.fake.library.tracks.take(2)
+        selectAndOpen(core, SelectionKind.Tracks, listOf(a.id))
+        compose.waitUntil(5_000) { shows(a.title) && present("selectionMenu.info") }
+        compose.runOnIdle { core.client.toggleSelected(SelectionKind.Tracks, b.id) }
+        compose.waitUntil(5_000) { shows("2 songs") }
+        assertFalse(present("selectionMenu.info"))
+        assertFalse(present("selectionMenu.action.${ActionIds.GO_TO_ALBUM}"))
+    }
+
+    /** One album picked: the album's own menu (its name, Album info), not a bare list of actions. */
+    @Test
+    fun oneSelectedAlbumOpensItsOwnMenu() {
+        val core = TestCore(startPlaying = false)
+        val album = core.fake.library.albums.first()
+        selectAndOpen(core, SelectionKind.Albums, listOf(album.id))
+        compose.waitUntil(5_000) { shows(album.name) }
+        assertTrue(present("selectionMenu.info"))
     }
 
     /** A page's drawer leaves queue entries to the queue's own. */

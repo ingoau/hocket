@@ -3617,8 +3617,9 @@ pub enum Query {
     ExportAudio {
         track_id: TrackId,
     },
-    /// The Squigly page (`squigly.link/…`) for a track or an album, made from its Deezer link:
-    /// found by the track's ISRC, else by artist and title.
+    /// The Squigly link (`squigly.link/?link=<deezer link>`) for a track or an album, which
+    /// makes its page when opened. The Deezer item is found by the track's ISRC, else by
+    /// artist and title.
     /// Exactly one of `track_id` and `album_id`. The answer is `QueryResult::SongLink`.
     SongLink {
         track_id: Option<TrackId>,

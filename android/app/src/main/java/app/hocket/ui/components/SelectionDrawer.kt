@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -42,9 +43,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -91,14 +95,19 @@ import app.hocket.core.ActionIds
 import app.hocket.core.Commands
 import app.hocket.core.Queries
 import app.hocket.core.api.ActionDescriptor
+import app.hocket.core.api.ActionTarget
+import app.hocket.core.api.Album
 import app.hocket.core.api.OfflineState
+import app.hocket.core.api.Pin
 import app.hocket.core.api.QueryResult
 import app.hocket.core.api.TrackSummary
 import app.hocket.core.client.CoreClient
 import app.hocket.core.client.Selection
 import app.hocket.core.client.SelectionKind
 import app.hocket.core.toSummary
+import app.hocket.ui.DetailNavigator
 import app.hocket.ui.LocalCoreClient
+import app.hocket.ui.LocalDetailNavigator
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.theme.Motion
 import kotlinx.coroutines.flow.collectLatest
@@ -114,10 +123,11 @@ enum class DrawerValue { Hidden, Peek, Open }
  * peeks: its handle, "3 selected" between Clear and Select all, and the quick actions in one
  * connected row (the play group: Play, Shuffle, Play next, Add to queue, Play later; failing those
  * the first four actions). Swiping it up (or tapping the handle) opens the rest over a scrim: for
- * songs (or queue entries) their menu, [MenuSheet] embedded ("3 songs · 11 min", love, the rating
- * starting "Mixed" while they differ, "Download 3 songs", Share, Snooze, "Remove 3 from Late night");
- * for albums, artists and playlists the rest of their actions, the rateN entries folded into one
- * "Set rating…" whose dialog rates every selected item. Swiping down, the scrim or back brings it
+ * one item (named by id: not an inverted select-all, whose items aren't listed) the very menu its three dots open, [MenuSheet] embedded (its
+ * header, go-to rows and info); for several songs (or queue entries) their menu ("3 songs · 11 min",
+ * love, the rating starting "Mixed" while they differ, "Download 3 songs", Share, Snooze, "Remove 3
+ * from Late night"); for several albums, artists or playlists the rest of their actions, the rateN
+ * entries folded into one "Set rating…" whose dialog rates every selected item. Swiping down, the scrim or back brings it
  * back to the peek; swiping the peek away, Clear or back from the peek ends the selection. An action
  * that runs ends it too. [context] names the playlist the songs are listed in;
  * [onRemoveFromContext] (an editable playlist) removes the selected entries from it. [kinds]: two
@@ -171,10 +181,21 @@ private fun Drawer(
         if (active) actions = client.actions("contextMenu", client.selectionTarget())
     }
     LaunchedEffect(Unit) { client.actionsChanged.collectLatest { if (client.selection.value.active) actions = client.actions("contextMenu", client.selectionTarget()) } }
-    // The songs' menu: what it says of them, worked out again as the selection changes.
-    val subject by produceState<MenuSubject?>(null, selection, kind, songs) {
-        if (songs && active) value = selectionSubject(client, selection, kind, context, resources, dot)
+    val navigator = LocalDetailNavigator.current
+    val pins by client.pins.collectAsStateWithLifecycleCompat()
+    val unknownArtist = stringResource(R.string.unknown_artist)
+    val selectedCount = stringResource(R.string.selected_count, selection.count)
+    // The open drawer's menu: one item's own, or several songs'; worked out again as the selection changes.
+    val menu by produceState<DrawerMenu?>(null, selection, kind, pins) {
+        if (!active) return@produceState
+        value = singleMenu(client, selection, kind, context, pins, resources, dot, unknownArtist, selectedCount)
+            ?: if (songs) DrawerMenu(selectionSubject(client, selection, kind, context, resources, dot)) else null
     }
+    // What one item's Song info / Album info opened (over the drawer, which keeps the selection).
+    var songInfo by remember { mutableStateOf<TrackSummary?>(null) }
+    var albumInfo by remember { mutableStateOf<Album?>(null) }
+    /** Navigates away from the selection, which ends it. */
+    fun leaveTo(open: (DetailNavigator) -> Unit): (() -> Unit)? = navigator?.let { n -> { client.clearSelection(); open(n) } }
 
     // Bulk actions: navigation and per-item ui-handled entries make no sense for a selection.
     val toolbarActions = actions.filter { it.id !in ActionIds.UI_HANDLED || it.id == ActionIds.ADD_TO_PLAYLIST }.filter { !it.id.matches(Regex("rate[0-4]")) }
@@ -356,23 +377,29 @@ private fun Drawer(
                         .focusGroup()
                         .verticalScroll(rememberScrollState()),
                 ) {
-                    if (songs) {
-                        subject?.let { s ->
-                            key(s) {
-                                MenuSheet(
-                                    s, client.selectionTarget(), actions,
-                                    extras = listOfNotNull(onRemoveFromContext?.takeIf { context != null }?.let { remove ->
-                                        SongMenuExtra(resources.getString(R.string.menu_remove_n_from, s.count, context), HocketIcons.Filled.PlaylistRemove,
-                                            onClick = { remove(); client.clearSelection() }, destructive = true, testTag = "selectionMenu.removeFromPlaylist", replaces = ActionIds.REMOVE_FROM_PLAYLIST)
-                                    }),
-                                    onDismiss = { if (client.selection.value.active) settleTo(DrawerValue.Peek) },
-                                    onRan = { client.clearSelection() },
-                                    tag = "selectionMenu",
-                                    embedded = true,
-                                    showPlay = false,
-                                    resetKey = menuResets,
-                                )
-                            }
+                    val m = menu
+                    if (m != null) {
+                        val s = m.subject
+                        // A fresh sheet per selection, not per change in what it shows: the item's own
+                        // Download toggle changes the pins, which mustn't reset the sheet (or stop a preview).
+                        key(kind, selection.inverted, selection.ids, s.kind) {
+                            MenuSheet(
+                                s, client.selectionTarget(), actions,
+                                extras = listOfNotNull(onRemoveFromContext?.takeIf { context != null && songs }?.let { remove ->
+                                    val label = if (s.count > 1) resources.getString(R.string.menu_remove_n_from, s.count, context) else resources.getString(R.string.menu_remove_from, context)
+                                    SongMenuExtra(label, HocketIcons.Filled.PlaylistRemove,
+                                        onClick = { remove(); client.clearSelection() }, destructive = true, testTag = "selectionMenu.removeFromPlaylist", replaces = ActionIds.REMOVE_FROM_PLAYLIST)
+                                }),
+                                onGoToAlbum = s.albumId?.takeIf { s.kind == MenuKind.Song }?.let { id -> leaveTo { it.openAlbum(id) } },
+                                onGoToArtist = s.artistId?.takeIf { s.kind != MenuKind.Songs }?.let { id -> leaveTo { it.openArtist(id) } },
+                                onInfo = m.track?.let { t -> { songInfo = t } } ?: m.album?.let { a -> { albumInfo = a } },
+                                onDismiss = { if (client.selection.value.active) settleTo(DrawerValue.Peek) },
+                                onRan = { client.clearSelection() },
+                                tag = "selectionMenu",
+                                embedded = true,
+                                showPlay = false,
+                                resetKey = menuResets,
+                            )
                         }
                     } else if (rest.isNotEmpty()) {
                         Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -384,6 +411,21 @@ private fun Drawer(
                     Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars))
                 }
             }
+        }
+    }
+    songInfo?.let { t ->
+        ModalBottomSheet(onDismissRequest = { songInfo = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("selectionMenu.infoSheet")) {
+            app.hocket.ui.player.PlayerAbout(
+                Modifier.fillMaxWidth().navigationBarsPadding(), track = t, title = stringResource(R.string.menu_song_info), onClose = { songInfo = null },
+                onOpenAlbum = navigator?.let { n -> { id -> songInfo = null; client.clearSelection(); n.openAlbum(id) } },
+                onOpenArtist = navigator?.let { n -> { id -> songInfo = null; client.clearSelection(); n.openArtist(id) } },
+            )
+        }
+    }
+    albumInfo?.let { a ->
+        ModalBottomSheet(onDismissRequest = { albumInfo = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("selectionMenu.infoSheet")) {
+            app.hocket.ui.player.AlbumAbout(a, stringResource(R.string.menu_album_info), Modifier.fillMaxWidth().navigationBarsPadding(),
+                onOpenArtist = navigator?.let { n -> { id -> albumInfo = null; client.clearSelection(); n.openArtist(id) } })
         }
     }
     if (playlistPicker) PlaylistPicker(target = client.selectionTarget(), onDismiss = { playlistPicker = false; client.clearSelection() })
@@ -471,6 +513,36 @@ internal suspend fun selectionSubject(client: CoreClient, selection: Selection, 
         else -> (client.query(Queries.tracksByIds((client.selectionTarget() as? app.hocket.core.api.ActionTarget.Tracks)?.data?.tracks.orEmpty())) as? QueryResult.TrackList)?.data?.map { it.toSummary() }.orEmpty()
     }
     return songsSubject(count, tracks, context, resources, dot, removeFromQueue = kind == SelectionKind.QueueItems)
+}
+
+/**
+ * The open drawer's menu: its header, and what one item's info row opens (the song, or the album).
+ */
+@Immutable
+internal data class DrawerMenu(val subject: MenuSubject, val track: TrackSummary? = null, val album: Album? = null)
+
+/**
+ * The menu of a selection of one item named by id (an inverted select-all lists none): the same as its three dots open, a
+ * song's ([songSubject]) or an album's, artist's or playlist's ([menuSubject]). Null for several
+ * items, or a song that can't be found (the songs' menu stands in).
+ */
+internal suspend fun singleMenu(
+    client: CoreClient, selection: Selection, kind: SelectionKind, context: String?, pins: List<Pin>,
+    resources: android.content.res.Resources, dot: String, unknownArtist: String, fallbackTitle: String,
+): DrawerMenu? {
+    if (selection.inverted || selection.ids.size != 1) return null
+    val target = client.selectionTarget()
+    return when (kind) {
+        SelectionKind.Tracks, SelectionKind.QueueItems -> {
+            val track = if (kind == SelectionKind.QueueItems) {
+                val q = client.queue.value
+                (q.entries + listOfNotNull(q.current)).firstOrNull { it.item.key == selection.ids.first() }?.track
+            } else (client.query(Queries.tracksByIds((target as? ActionTarget.Tracks)?.data?.tracks.orEmpty())) as? QueryResult.TrackList)?.data?.firstOrNull()?.toSummary()
+            // The queue's own menu names no playlist, as its three dots don't.
+            track?.let { DrawerMenu(songSubject(it, context.takeIf { kind == SelectionKind.Tracks }, pins, dot, unknownArtist), track = it) }
+        }
+        else -> menuSubject(client, target, fallbackTitle, null, resources, dot, pins).let { (subject, album) -> DrawerMenu(subject, album = album) }
+    }
 }
 
 /** [selectionSubject] once the songs are known (pure but for the words). */

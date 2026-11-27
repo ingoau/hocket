@@ -1990,8 +1990,8 @@ class FakeCore(
         is Query.CreateShare -> QueryResult.Share(q.data.ids.filter { it.isNotEmpty() }.takeIf { it.isNotEmpty() }?.let { CreatedShare("https://navidrome.example/share/${it.joinToString("-")}") })
         is Query.ExportAudio -> QueryResult.AudioFile(null)
         is Query.SongLink -> QueryResult.SongLink(
-            q.data.track_id?.takeIf { it.isNotEmpty() }?.let { "https://squigly.link/song/fake/$it" }
-                ?: q.data.album_id?.takeIf { it.isNotEmpty() }?.let { "https://squigly.link/album/fake/$it" },
+            q.data.track_id?.takeIf { it.isNotEmpty() }?.let { "https://squigly.link/?link=https%3A%2F%2Fwww.deezer.com%2Ftrack%2F$it" }
+                ?: q.data.album_id?.takeIf { it.isNotEmpty() }?.let { "https://squigly.link/?link=https%3A%2F%2Fwww.deezer.com%2Falbum%2F$it" },
         )
     }
 
