@@ -26,7 +26,7 @@ pub struct SongFacts {
     pub isrc: Vec<String>,
 }
 
-/// The Squigly page for a song: by ISRC, else by search. None when nothing matches.
+/// The Squigly link for a song: by ISRC, else by search. None when nothing matches.
 pub async fn song_url(http: &dyn LyricsHttp, song: &SongFacts) -> Option<String> {
     let isrcs = song
         .isrc
@@ -67,7 +67,7 @@ pub async fn song_url(http: &dyn LyricsHttp, song: &SongFacts) -> Option<String>
     Some(squigly(&format!("https://www.deezer.com/track/{id}")))
 }
 
-/// The Squigly page for an album, by search. None when nothing matches.
+/// The Squigly link for an album, by search. None when nothing matches.
 pub async fn album_url(http: &dyn LyricsHttp, name: &str, artist: Option<&str>) -> Option<String> {
     let artist = artist.map(str::trim).filter(|a| !a.is_empty())?;
     let name = name.trim();
