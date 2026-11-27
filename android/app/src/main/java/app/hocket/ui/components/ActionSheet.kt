@@ -132,8 +132,11 @@ private fun durationWords(resources: android.content.res.Resources, ms: Long): S
     return if (minutes >= 60) resources.getString(R.string.duration_hours_minutes, minutes / 60, minutes % 60) else resources.getString(R.string.duration_minutes, minutes)
 }
 
-/** The header a target's menu shows (and, for an album, the album, for its info sheet). */
-private suspend fun menuSubject(
+/**
+ * The header a target's menu shows (and, for an album, the album, for its info sheet). [title] and
+ * [subtitle] stand in for what can't be loaded.
+ */
+internal suspend fun menuSubject(
     client: CoreClient,
     target: ActionTarget,
     title: String,

@@ -23,6 +23,7 @@ import app.hocket.core.ref
 import app.hocket.core.api.ActionDescriptor
 import app.hocket.core.api.ActionTarget
 import app.hocket.core.api.OfflineState
+import app.hocket.core.api.Pin
 import app.hocket.core.api.TrackSummary
 import app.hocket.ui.DetailNavigator
 import app.hocket.ui.LocalCoreClient
@@ -127,22 +128,7 @@ fun SongMenuHost(controller: SongMenuController, navigator: DetailNavigator?) {
         val track = request.track
         val dot = stringResource(R.string.dot_separator)
         val unknown = stringResource(R.string.unknown_artist)
-        val subject = remember(request, pins) {
-            MenuSubject(
-                kind = MenuKind.Song,
-                title = track.title,
-                subtitle = listOfNotNull(track.artist ?: unknown, track.album).joinToString(dot),
-                coverArt = track.coverArt,
-                loved = if (track.loved) Tick.On else Tick.Off,
-                rating = track.rating.toInt(),
-                downloaded = track.offline == OfflineState.Downloaded || pins.any { it.target == Commands.trackPin(track.id) },
-                trackId = track.id,
-                trackSource = track.serverId,
-                albumId = track.albumId, album = track.album,
-                artistId = track.artistId, artist = track.artist,
-                context = request.context,
-            )
-        }
+        val subject = remember(request, pins) { songSubject(track, request.context, pins, dot, unknown) }
         // Keyed on the request: a new opening starts from a fresh sheet state, never a stale one.
         androidx.compose.runtime.key(request) {
             MenuSheet(
@@ -166,3 +152,19 @@ fun SongMenuHost(controller: SongMenuController, navigator: DetailNavigator?) {
         }
     }
 }
+
+/** The header and toggles of one song's menu, the same from its three dots and from a selection of it. */
+internal fun songSubject(track: TrackSummary, context: String?, pins: List<Pin>, dot: String, unknownArtist: String): MenuSubject = MenuSubject(
+    kind = MenuKind.Song,
+    title = track.title,
+    subtitle = listOfNotNull(track.artist ?: unknownArtist, track.album).joinToString(dot),
+    coverArt = track.coverArt,
+    loved = if (track.loved) Tick.On else Tick.Off,
+    rating = track.rating.toInt(),
+    downloaded = track.offline == OfflineState.Downloaded || pins.any { it.target == Commands.trackPin(track.id) },
+    trackId = track.id,
+    trackSource = track.serverId,
+    albumId = track.albumId, album = track.album,
+    artistId = track.artistId, artist = track.artist,
+    context = context,
+)
