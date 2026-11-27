@@ -82,8 +82,12 @@ fun Artwork(
         // asked for again on a network or server change, and never remembered as this size's file.
         if (state.value?.let { it.path != null && isExactArtwork(it.path, requested) } == true) return@LaunchedEffect
         if (coverArt == null || cacheKey == null) { state.value = Resolved(null, 0); return@LaunchedEffect }
-        val asked = askForArtwork(client, coverArt, requested, reach) { path, round ->
-            if (path != null && isExactArtwork(path, requested)) ArtworkPathCache.put(cacheKey, path)
+        val asked = askForArtwork(client, coverArt, requested, reach, display = true) { path, round ->
+            // A larger file standing in never replaces the size's own (the immersive layout is
+            // worked out from that one).
+            if (path != null && isExactArtwork(path, requested) && (isOwnArtwork(path, requested) || ArtworkPathCache.get(cacheKey) == null)) {
+                ArtworkPathCache.put(cacheKey, path)
+            }
             state.value = Resolved(path, round)
         }
         // Nothing asked (offline with a miss known, or out of retries): unresolved is a miss now.
@@ -158,16 +162,28 @@ private class Resolved(val path: String?, val round: Int)
 
 /** The core's cache sizes ("<id>_<size>.img"); a request snaps up to the nearest. */
 private val CORE_ARTWORK_SIZES = intArrayOf(64, 160, 320, 640, 1280)
+private val CORE_ARTWORK_FILE = Regex("_(\\d+)\\.img$")
+/** How many times the asked size a file may be and still show for it (the core's `DISPLAY_LARGER_MAX`). */
+private const val ARTWORK_LARGER_MAX = 4
+
+/** The size of the core's file at [path], or null for a path of another shape. */
+private fun artworkFileSize(path: String): Int? = CORE_ARTWORK_FILE.find(path)?.groupValues?.get(1)?.toIntOrNull()
+
+private fun snappedArtworkSize(size: Int): Int = CORE_ARTWORK_SIZES.firstOrNull { it >= size } ?: CORE_ARTWORK_SIZES.last()
 
 /**
- * Whether [path] is the core's file for [size] itself rather than another size standing in for it
+ * Whether [path] shows [size] as well as its own file would: that file, or one a little larger
+ * (the core answers a display ask with one), rather than a smaller or much larger size standing in
  * (offline, the core answers with whichever size it kept). Paths of another shape count as exact.
  */
 internal fun isExactArtwork(path: String, size: Int): Boolean {
-    val m = Regex("_(\\d+)\\.img$").find(path) ?: return true
-    val snapped = CORE_ARTWORK_SIZES.firstOrNull { it >= size } ?: CORE_ARTWORK_SIZES.last()
-    return m.groupValues[1].toIntOrNull() == snapped
+    val file = artworkFileSize(path) ?: return true
+    val snapped = snappedArtworkSize(size)
+    return file in snapped..snapped * ARTWORK_LARGER_MAX
 }
+
+/** Whether [path] is the core's file for [size] itself. Paths of another shape count as its own. */
+internal fun isOwnArtwork(path: String, size: Int): Boolean = artworkFileSize(path)?.let { it == snappedArtworkSize(size) } ?: true
 
 private const val ARTWORK_CROSSFADE_MS = 120
 /** Asks after a failed one, 2 s, 4 s, 8 s then 16 s apart (and afresh once back online). */
@@ -196,9 +212,11 @@ fun rememberArtworkReach(client: CoreClient = LocalCoreClient.current): ArtworkR
  * Asks the core for [coverArt] at [size] on the shared schedule ([ArtworkMisses]), handing each
  * answer to [onAnswer] with the round it was asked in ([ArtworkMisses.round]): at once, or when the
  * cover's next retry is due, and again after each miss until the retries run out. Offline, a cover already missed is not asked for at all. Returns once
- * a file came or no more asks are due; false when it asked nothing.
+ * a file came or no more asks are due; false when it asked nothing. [display]: the file is only
+ * shown, so a cached one a little larger does ([CoreClient.artworkPath]); askers reading its pixels
+ * leave it off.
  */
-internal suspend fun askForArtwork(client: CoreClient, coverArt: String, size: Int, reach: ArtworkReach, onAnswer: suspend (path: String?, round: Int) -> Unit): Boolean {
+internal suspend fun askForArtwork(client: CoreClient, coverArt: String, size: Int, reach: ArtworkReach, display: Boolean = false, onAnswer: suspend (path: String?, round: Int) -> Unit): Boolean {
     val key = ArtworkPathCache.key(coverArt, size)
     ArtworkMisses.observe(reach)
     var asked = false
@@ -206,7 +224,7 @@ internal suspend fun askForArtwork(client: CoreClient, coverArt: String, size: I
         val round = ArtworkMisses.round(key)
         val wait = ArtworkMisses.waitFor(key, reach.online, System.currentTimeMillis()) ?: return asked
         if (wait > 0) delay(wait)
-        val path = client.artworkPath(coverArt, size)
+        val path = client.artworkPath(coverArt, size, display)
         asked = true
         onAnswer(path, round)
         if (path != null) return true

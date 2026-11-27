@@ -72,6 +72,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.collectLatest
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -179,7 +182,8 @@ import kotlin.math.roundToInt
  * At least a screen tall; on short screens or at large font sizes the whole page scrolls, without
  * an overscroll effect (a swipe past either end, or on a page that fits, must not stretch the
  * player). [position] is read in the draw phase (the seek bar) and once a second (its labels),
- * never here.
+ * never here. While not [shown] (the sheet collapsed, the page composed but transparent) the seek
+ * bar's wave and the title's marquee hold still.
  */
 @Composable
 internal fun FullPlayer(
@@ -207,6 +211,7 @@ internal fun FullPlayer(
     fullScreenToggle: Boolean? = null,
     onToggleFullScreen: () -> Unit = {},
     asPanel: Boolean = false,
+    shown: () -> Boolean = { true },
 ) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
@@ -346,8 +351,8 @@ internal fun FullPlayer(
                     ) { header() }
                 },
                 area = { ModeArea(mode, hero, lyricsVisible, queueModifier = if (folding) Modifier.nestedScroll(collapse.connection) else Modifier, queueDrawer = wide) },
-                title = { Box(pickHidden) { PlayerTitle(mode, hero, showRating, carousel, neighbours, thumbInRow = !artAbove, onInfo = { info = true }, onArtists = { artists = true }, onAddTo = { addTo = true }) } },
-                seek = { Box(pickHidden) { PlayerSeek(position, fold) } },
+                title = { Box(pickHidden) { PlayerTitle(mode, hero, showRating, carousel, neighbours, thumbInRow = !artAbove, onInfo = { info = true }, onArtists = { artists = true }, onAddTo = { addTo = true }, shown = shown) } },
+                seek = { Box(pickHidden) { PlayerSeek(position, fold, shown) } },
                 transport = {
                     val playing by client.isPlaying.collectAsStateWithLifecycle()
                     val buffering by client.buffering.collectAsStateWithLifecycle()
@@ -804,7 +809,7 @@ private fun Modifier.fadingEdges(top: Dp = 20.dp, bottom: Dp = 28.dp): Modifier 
 
 /** The title row ([TitleRow]), or what to do when nothing is queued. */
 @Composable
-private fun PlayerTitle(mode: PlayerMode, hero: HeroGeometry, showRating: Boolean, carousel: SkipCarousel, neighbours: Neighbours, thumbInRow: Boolean, onInfo: () -> Unit, onArtists: () -> Unit, onAddTo: () -> Unit) {
+private fun PlayerTitle(mode: PlayerMode, hero: HeroGeometry, showRating: Boolean, carousel: SkipCarousel, neighbours: Neighbours, thumbInRow: Boolean, onInfo: () -> Unit, onArtists: () -> Unit, onAddTo: () -> Unit, shown: () -> Boolean) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val track = entry?.track
@@ -815,7 +820,7 @@ private fun PlayerTitle(mode: PlayerMode, hero: HeroGeometry, showRating: Boolea
                 Text(stringResource(R.string.empty_queue_body), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
             }
         } else {
-            TitleRow(track, compact = mode != PlayerMode.Artwork, hero, showRating, carousel, neighbours, thumbInRow, onInfo, onArtists, onAddTo)
+            TitleRow(track, compact = mode != PlayerMode.Artwork, hero, showRating, carousel, neighbours, thumbInRow, onInfo, onArtists, onAddTo, shown)
         }
     }
 }
@@ -859,7 +864,7 @@ private fun playingOn(remote: DeviceInfo?): String? {
 
 /** The wavy seek bar with elapsed and remaining time, and the status line between them ([SeekStatus]). */
 @Composable
-private fun PlayerSeek(position: () -> Long, fold: () -> Float = { 0f }) {
+private fun PlayerSeek(position: () -> Long, fold: () -> Float = { 0f }, shown: () -> Boolean = { true }) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val playing by client.isPlaying.collectAsStateWithLifecycle()
@@ -881,7 +886,7 @@ private fun PlayerSeek(position: () -> Long, fold: () -> Float = { 0f }) {
             .graphicsLayer { alpha = if (syncing) CONNECT_SYNC_ALPHA else 1f },
     ) {
         WavySeekBar(position = position, durationMs = track.durationMs.toLong(), playing = playing && !reducedMotion, onSeek = { client.dispatch(Commands.seekTo(it)) },
-            stillWave = saver.has(app.hocket.core.api.SaverFeature.StillSeekWave), advancing = playing, centre = { SeekStatus() }, timesFold = fold)
+            stillWave = saver.has(app.hocket.core.api.SaverFeature.StillSeekWave), advancing = playing, centre = { SeekStatus() }, timesFold = fold, shown = shown())
     }
 }
 
@@ -927,7 +932,7 @@ private fun SeekStatus() {
  * with the swipe.
  */
 @Composable
-private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, showRating: Boolean, carousel: SkipCarousel, neighbours: Neighbours, thumbInRow: Boolean, onInfo: () -> Unit, onArtists: () -> Unit, onAddTo: () -> Unit) {
+private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, showRating: Boolean, carousel: SkipCarousel, neighbours: Neighbours, thumbInRow: Boolean, onInfo: () -> Unit, onArtists: () -> Unit, onAddTo: () -> Unit, shown: () -> Boolean) {
     val client = LocalCoreClient.current
     val infoLabel = stringResource(R.string.player_about_title)
     val artistsLabel = stringResource(R.string.player_artists_action)
@@ -962,7 +967,7 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
                                 .semantics(mergeDescendants = true) { heading(); liveRegion = LiveRegionMode.Polite; contentDescription = trackDesc }
                                 .testTag("player.title")
                                 .padding(top = 16.dp),
-                        ) { MarqueeText(track.title, titleStyle(), running = !swiping) }
+                        ) { MarqueeText(track.title, titleStyle(), running = !swiping, shown = shown) }
                         // The artist line: the song's artists and its album.
                         Box(
                             Modifier
@@ -971,7 +976,7 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
                                 .clip(RoundedCornerShape(12.dp))
                                 .clickable(onClickLabel = artistsLabel, role = Role.Button, onClick = onArtists)
                                 .testTag("player.artistLine"),
-                        ) { ArtistLine(track, tagged = true, running = !swiping) }
+                        ) { ArtistLine(track, tagged = true, running = !swiping, shown = shown) }
                     }
                     // The neighbours' lines, faded in as the artwork is swiped towards them.
                     for ((neighbour, sign) in listOf(previous to 1f, neighbours.next?.track to -1f)) {
@@ -1102,7 +1107,7 @@ private fun titleStyle() = MaterialTheme.typography.headlineSmallEmphasized.copy
 
 /** The artist line: the track's artist string as given (muted, one line; the playing track's scrolls when too long). */
 @Composable
-private fun ArtistLine(track: TrackSummary, tagged: Boolean, running: Boolean = false) {
+private fun ArtistLine(track: TrackSummary, tagged: Boolean, running: Boolean = false, shown: () -> Boolean = { true }) {
     val text = track.artist ?: stringResource(R.string.unknown_artist)
     val style = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
     val modifier = Modifier
@@ -1112,7 +1117,7 @@ private fun ArtistLine(track: TrackSummary, tagged: Boolean, running: Boolean = 
         }
     // The playing track's artists scroll like its title rather than being cut short (#17); a
     // neighbour's line (shown only mid-swipe) keeps the ellipsis.
-    if (tagged) Box(modifier) { MarqueeText(text, style, running, marqueeTag = "player.artist.marquee", textTag = "player.artist") }
+    if (tagged) Box(modifier) { MarqueeText(text, style, running, shown, marqueeTag = "player.artist.marquee", textTag = "player.artist") }
     else Text(text, style = style, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = modifier)
 }
 
@@ -1125,10 +1130,11 @@ private val ArtistBottom = HorizontalAlignmentLine(::minOf)
  * again, the edges fading softly (the start edge only while the text is away from it). It holds
  * still while not [running] (the artwork being swiped), and does not scroll at all with reduced
  * motion: an ellipsis then. The whole text is in
- * the semantics either way.
+ * the semantics either way. While not [shown] (the collapsed sheet's transparent page) it pauses
+ * where it is, and goes on from there once it shows again.
  */
 @Composable
-private fun MarqueeText(text: String, style: androidx.compose.ui.text.TextStyle, running: Boolean, marqueeTag: String = "player.title.marquee", textTag: String? = null) {
+private fun MarqueeText(text: String, style: androidx.compose.ui.text.TextStyle, running: Boolean, shown: () -> Boolean = { true }, marqueeTag: String = "player.title.marquee", textTag: String? = null) {
     val textModifier = if (textTag != null) Modifier.testTag(textTag) else Modifier
     if (LocalReducedMotion.current) {
         Text(text, style = style, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = textModifier)
@@ -1142,14 +1148,20 @@ private fun MarqueeText(text: String, style: androidx.compose.ui.text.TextStyle,
     var textWidth by remember(text) { mutableIntStateOf(0) }
     var boxWidth by remember { mutableIntStateOf(0) }
     val overflows = textWidth > boxWidth && boxWidth > 0
+    val currentShown by rememberUpdatedState(shown)
     LaunchedEffect(text, overflows, running) {
         offset.snapTo(0f)
         if (!overflows || !running) return@LaunchedEffect
         val distance = (textWidth + spacing).toFloat()
-        while (true) {
-            kotlinx.coroutines.delay(MARQUEE_DELAY_MS)
-            offset.animateTo(distance, tween((distance / speed * 1000).roundToInt(), easing = LinearEasing))
-            offset.snapTo(0f)
+        // Hidden, it holds (no frames): a pass part way through goes on at the same speed from
+        // where it stopped; one in its wait waits afresh.
+        snapshotFlow { currentShown() }.collectLatest { visible ->
+            if (!visible) return@collectLatest
+            while (true) {
+                if (offset.value == 0f) kotlinx.coroutines.delay(MARQUEE_DELAY_MS)
+                offset.animateTo(distance, tween(((distance - offset.value) / speed * 1000).roundToInt(), easing = LinearEasing))
+                offset.snapTo(0f)
+            }
         }
     }
     Layout(

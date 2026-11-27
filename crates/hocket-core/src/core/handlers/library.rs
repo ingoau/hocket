@@ -24,6 +24,21 @@ use crate::undo::{
 };
 
 impl Actor {
+    /// The HTTP client for lyrics and song-link lookups: the one given, else
+    /// one built on first use and kept, so each lookup reuses its pool
+    /// (connections, TLS sessions) instead of building a client.
+    pub(crate) fn shared_lyrics_http(&mut self) -> Option<Arc<dyn crate::lyrics::LyricsHttp>> {
+        if self.lyrics_http.is_none() {
+            match crate::lyrics::ReqwestLyricsHttp::new(&self.cfg.app_version) {
+                Ok(h) => self.lyrics_http = Some(Arc::new(h)),
+                Err(e) => {
+                    tracing::debug!(target: "hocket_core", error = %e, "lyrics: no http client")
+                }
+            }
+        }
+        self.lyrics_http.clone()
+    }
+
     // -- ratings and loves -----------------------------------------------------------
 
     /// The account a mutation's target belongs to.
@@ -1807,8 +1822,7 @@ impl Actor {
         let track = self.track_or_bare(&TrackRef::new(sid.clone(), track_id.clone()));
         let caches = self.caches.clone();
         let tx = self.tx.clone();
-        let http = self.lyrics_http.clone();
-        let app_version = self.cfg.app_version.clone();
+        let http = self.shared_lyrics_http();
         let server_negative = matches!(
             caches.lyrics_get(&sid, &track_id, LyricsSource::Server),
             Ok(Some(None))
@@ -1868,10 +1882,9 @@ impl Actor {
                                     let p = crate::lyrics::LrclibProvider::new(SharedHttp(h));
                                     p.fetch(&req).await
                                 }
-                                None => match crate::lyrics::ReqwestLyricsHttp::new(&app_version) {
-                                    Ok(h) => crate::lyrics::LrclibProvider::new(h).fetch(&req).await,
-                                    Err(e) => Err(e),
-                                },
+                                None => Err(crate::lyrics::LyricsError::Network(
+                                    "no http client".into(),
+                                )),
                             };
                             match result {
                                 Ok(Some(l)) => {

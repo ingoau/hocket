@@ -208,18 +208,27 @@ impl Client {
     }
 
     /// A file download holding a slot of [`limiter`](Self::limiter) (tracks)
-    /// or [`image_limiter`](Self::image_limiter) (covers) throughout.
+    /// or [`image_limiter`](Self::image_limiter) (covers, [image]) throughout.
     async fn download_limited(
         &self,
-        limiter: &Semaphore,
+        image: bool,
         url: Url,
         dest: &Path,
     ) -> SubsonicResult<DownloadOutcome> {
+        let limiter = if image {
+            &self.image_limiter
+        } else {
+            &self.limiter
+        };
         let _permit = limiter
             .acquire()
             .await
             .map_err(|_| SubsonicError::Network("closed".into()))?;
-        let out = self.transport.download(url, dest, None).await?;
+        let out = if image {
+            self.transport.download_image(url, dest).await?
+        } else {
+            self.transport.download(url, dest, None).await?
+        };
         match out.status {
             200..=299 => {
                 // Subsonic reports protocol errors (bad token, unknown
@@ -905,12 +914,12 @@ impl SubsonicApi for Client {
 
     fn download_to_file(&self, url: Url, dest: &Path) -> ApiFuture<'_, DownloadOutcome> {
         let dest = dest.to_path_buf();
-        Box::pin(async move { self.download_limited(&self.limiter, url, &dest).await })
+        Box::pin(async move { self.download_limited(false, url, &dest).await })
     }
 
     fn download_image_to_file(&self, url: Url, dest: &Path) -> ApiFuture<'_, DownloadOutcome> {
         let dest = dest.to_path_buf();
-        Box::pin(async move { self.download_limited(&self.image_limiter, url, &dest).await })
+        Box::pin(async move { self.download_limited(true, url, &dest).await })
     }
 
     fn native_playlist(&self, id: &str) -> ApiFuture<'_, NativePlaylist> {

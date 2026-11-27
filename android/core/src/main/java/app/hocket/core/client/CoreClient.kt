@@ -214,6 +214,22 @@ class CoreClient(
      * another device) are equal and would not restart a `LaunchedEffect`.
      */
     val libraryGeneration: StateFlow<Int> = _libraryGeneration.asStateFlow()
+    /** The latest `LibraryChanged` payloads, each with the [libraryGeneration] it bumped to. */
+    private val libraryLog = ArrayDeque<Pair<Int, EventLibraryChangedInner>>()
+
+    /**
+     * The `LibraryChanged` payloads that moved [libraryGeneration] past [after] up to [upTo], in
+     * order, or null when the log no longer reaches back that far (treat that as "anything changed").
+     * Lets a screen skip a refetch for changes that cannot touch it, without missing any.
+     */
+    fun libraryChanges(after: Int, upTo: Int): List<EventLibraryChangedInner>? = synchronized(libraryLog) {
+        val first = libraryLog.firstOrNull()?.first
+        when {
+            upTo <= after -> emptyList()
+            first == null || first > after + 1 -> null
+            else -> libraryLog.filter { it.first > after && it.first <= upTo }.map { it.second }
+        }
+    }
     private val _exports = MutableSharedFlow<Event>(extraBufferCapacity = 4)
     /** `NspExported` and `ConfigExported`, for the share sheet. */
     val exports: SharedFlow<Event> = _exports.asSharedFlow()
@@ -581,14 +597,14 @@ class CoreClient(
      * Resolves artwork at one of the fixed sizes to a local path, or null. Concurrent asks for the
      * same cover and size (the mini player, a queue row and the now-playing page all showing one
      * cover) share one query; it is cancelled, and the core drops its fetch, only once every asker
-     * has left.
+     * has left. [display]: only shown, so a cached copy a little larger does ([Queries.artwork]).
      */
-    suspend fun artworkPath(id: String?, size: Int): String? {
+    suspend fun artworkPath(id: String?, size: Int, display: Boolean = false): String? {
         if (id.isNullOrEmpty()) return null
-        val key = "$id@$size"
+        val key = if (display) "$id@$size/display" else "$id@$size"
         val lookup = synchronized(artworkLookups) {
             artworkLookups.getOrPut(key) {
-                ArtworkLookup(scope.async(start = kotlinx.coroutines.CoroutineStart.LAZY) { (query(Queries.artwork(id, size)) as? QueryResult.Path)?.data })
+                ArtworkLookup(scope.async(start = kotlinx.coroutines.CoroutineStart.LAZY) { (query(Queries.artwork(id, size, display)) as? QueryResult.Path)?.data })
             }.also { it.waiters++ }
         }
         lookup.result.start()
@@ -656,7 +672,13 @@ class CoreClient(
                 if (all || "albums" in tables) albumPages.invalidate { it.serverId == sid }
                 if (all || "artists" in tables) artistPages.invalidate { it.serverId == sid }
                 if (all || "playlists" in tables) playlistTrackPages.invalidate()
-                _libraryGeneration.update { it + 1 }
+                // Logged before the bump, so whoever sees the new generation finds its payload.
+                synchronized(libraryLog) {
+                    val gen = _libraryGeneration.value + 1
+                    libraryLog.addLast(gen to event.data)
+                    if (libraryLog.size > LIBRARY_LOG) libraryLog.removeFirst()
+                    _libraryGeneration.value = gen
+                }
                 _libraryChanged.tryEmit(event.data)
             }
             is Event.LibraryItemsChanged -> {
@@ -808,6 +830,8 @@ class CoreClient(
         private const val TAG = "CoreClient"
         /** Rows the core's queue window carries on each side of the pointer. */
         const val QUEUE_WINDOW_SIDE = 100
+        /** `LibraryChanged` payloads [libraryChanges] keeps: far more than a screen falls behind while shown. */
+        const val LIBRARY_LOG = 64
         fun emptyQueue() = QueueView(null, null, emptyList(), 0u, 0u, 0u, null, 0u, 0u, null, false, RepeatMode.Off, false)
         fun emptyTransport() = TransportState(TransportLease(null, 0u, 0.0), PositionStamp(0u, 0.0, 1.0, false), false, 0u, 1.0)
         fun emptyConnection() = ConnectionState(ConnectionTier.Local, false, null, 0.0, null, 0u, null)

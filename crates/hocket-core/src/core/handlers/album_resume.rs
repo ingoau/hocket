@@ -1,6 +1,7 @@
 //! Album resume (see `crate::album_resume`): the actor keeps the account's map, persists it
-//! under `album-resume:{scope}` and hands every local change to the engine, which syncs it.
-//! Remote copies come back as `Output::AlbumResumeMerged`.
+//! one row per album (`album_resumes`, only the rows that changed) and hands every local
+//! change to the engine, which syncs it. Remote copies come back as
+//! `Output::AlbumResumeMerged`.
 
 use crate::album_resume::{self, Snapshot};
 use crate::api::*;
@@ -14,11 +15,8 @@ impl Actor {
         let Some(scope) = self.scope.clone() else {
             return;
         };
-        self.album_resumes = match self
-            .db
-            .saved_state_get::<Vec<AlbumResumeEntry>>(&album_resume::state_key(&scope))
-        {
-            Ok(list) => list.unwrap_or_default(),
+        self.album_resumes = match self.db.album_resumes_get(&scope) {
+            Ok(list) => list,
             Err(e) => {
                 self.log(
                     "warn",
@@ -27,8 +25,8 @@ impl Actor {
                 vec![]
             }
         };
-        let now = self.now();
-        album_resume::prune(&mut self.album_resumes, now);
+        // Prunes, deleting the rows of what expired meanwhile.
+        self.save_album_resumes(&[]);
         if !self.album_resumes.is_empty() {
             self.engine_input(Input::AlbumResumeChanged(self.album_resumes.clone()));
         }
@@ -43,17 +41,29 @@ impl Actor {
         }
     }
 
-    fn save_album_resumes(&mut self) {
+    /// Persist the records of `albums` (just changed in memory) and drop what pruning
+    /// removes: a position sample rewrites its own album's row, not the whole set.
+    fn save_album_resumes(&mut self, albums: &[&str]) {
+        if self.scope.is_none() {
+            return;
+        }
+        let now = self.now();
+        let dropped = album_resume::prune(&mut self.album_resumes, now);
+        self.write_album_resumes(albums, &dropped);
+    }
+
+    /// Write the rows of `albums` as they are in memory and delete those of `removed`.
+    fn write_album_resumes(&mut self, albums: &[&str], removed: &[AlbumId]) {
         let Some(scope) = self.scope.clone() else {
             return;
         };
-        let now = self.now();
-        album_resume::prune(&mut self.album_resumes, now);
-        if let Err(e) = self.db.saved_state_set(
-            &album_resume::state_key(&scope),
-            &self.album_resumes,
-            self.clock.as_ref(),
-        ) {
+        let put: Vec<_> = self
+            .album_resumes
+            .iter()
+            .filter(|e| albums.contains(&e.album_id.as_str()))
+            .collect();
+        let result = self.db.album_resumes_write(&scope, &put, removed);
+        if let Err(e) = result {
             self.log("warn", format!("album resume: couldn't save: {e}"));
         }
     }
@@ -91,8 +101,8 @@ impl Actor {
 
     /// `sync` tells other devices. Position samples while an album plays stay on this
     /// device; pause, a track change, stop and a clear are what travel.
-    fn album_resume_changed(&mut self, sync: bool) {
-        self.save_album_resumes();
+    fn album_resume_changed(&mut self, album_id: &str, sync: bool) {
+        self.save_album_resumes(&[album_id]);
         if sync {
             self.emit_album_resumes();
             self.engine_input(Input::AlbumResumeChanged(self.album_resumes.clone()));
@@ -103,8 +113,11 @@ impl Actor {
         let (mut merged, _) = album_resume::merge(&self.album_resumes, &list);
         album_resume::prune(&mut merged, self.now());
         if merged != self.album_resumes {
+            let (changed, gone) = album_resume::diff(&self.album_resumes, &merged);
+            let changed: Vec<AlbumId> = changed.into_iter().map(|e| e.album_id.clone()).collect();
             self.album_resumes = merged;
-            self.save_album_resumes();
+            let changed: Vec<&str> = changed.iter().map(String::as_str).collect();
+            self.write_album_resumes(&changed, &gone);
             self.emit_album_resumes();
         }
     }
@@ -116,7 +129,7 @@ impl Actor {
     pub(crate) fn clear_album_resume(&mut self, album_id: &str, tombstone: bool) {
         let now = self.now();
         if album_resume::clear(&mut self.album_resumes, album_id, now, tombstone) {
-            self.album_resume_changed(true);
+            self.album_resume_changed(album_id, true);
         }
     }
 
@@ -314,10 +327,11 @@ impl Actor {
                         }
                     }
                 }
+                let album_id = entry.album_id.clone();
                 if album_resume::upsert(&mut self.album_resumes, entry) {
                     // `precise` is a pause, seek, track change or stop: that is what other
                     // devices need. A sample while the album plays stays on this device.
-                    self.album_resume_changed(precise);
+                    self.album_resume_changed(&album_id, precise);
                 }
             }
         }

@@ -83,7 +83,7 @@ class TransitionMixerTest {
         val work = mixer.ensureWork(samples.size)
         samples.forEachIndexed { i, s -> work.putFloat(i * 4, s) }
         val n = mixer.process(samples.size)
-        return FloatArray(n) { mixer.output.getFloat(it * 4) }
+        return FloatArray(n) { mixer.processed.getFloat(it * 4) }
     }
 
     private fun ones(n: Int) = FloatArray(n) { 1f }

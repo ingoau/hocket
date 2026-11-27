@@ -24,7 +24,10 @@ import com.google.android.gms.cast.framework.media.CastMediaOptions
 import com.google.android.gms.common.ConnectionResult
 import com.google.android.gms.common.GoogleApiAvailability
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asExecutor
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import com.google.android.gms.cast.framework.CastOptions as GmsCastOptions
 
@@ -37,14 +40,22 @@ object HocketCast : CastProvider {
         CastDevices.provider = this
     }
 
-    override fun create(context: Context, scope: CoroutineScope, dispatch: (Command) -> Unit, listener: CastListener): CastController? {
+    override fun create(context: Context, scope: CoroutineScope, dispatch: (Command) -> Unit, listener: CastListener, ready: (CastController) -> Unit) {
         if (GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context) != ConnectionResult.SUCCESS) {
             PlaybackLog.i("cast: no Google Play services")
-            return null
+            return
         }
-        val cast = runCatching { CastContext.getSharedInstance(context) }
-            .onFailure { PlaybackLog.w("cast: ${it.message}") }.getOrNull() ?: return null
-        return Controller(context, cast, scope, dispatch, listener)
+        // Loaded in the background: the blocking form holds the main thread on every cold start.
+        // The listeners run on main.
+        CastContext.getSharedInstance(context, Dispatchers.IO.asExecutor())
+            .addOnSuccessListener { cast ->
+                // The service went meanwhile: nothing to attach to.
+                if (!scope.isActive) return@addOnSuccessListener
+                runCatching { Controller(context, cast, scope, dispatch, listener) }
+                    .onSuccess(ready)
+                    .onFailure { PlaybackLog.w("cast unavailable: ${it.message}") }
+            }
+            .addOnFailureListener { PlaybackLog.w("cast: ${it.message}") }
     }
 
     override fun routeFeatures(context: Context): List<String> =

@@ -363,7 +363,7 @@ impl Actor {
         });
         if in_queue {
             let queue = self.queue_view();
-            self.emit(Event::QueueChanged { queue });
+            self.emit_queue_view(queue);
         }
     }
 

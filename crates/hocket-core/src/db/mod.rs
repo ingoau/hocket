@@ -27,6 +27,7 @@ use std::sync::Arc;
 use parking_lot::{Mutex, MutexGuard};
 use rusqlite::{Connection, OpenFlags, Transaction};
 
+use crate::api::{AlbumId, AlbumResumeEntry};
 use crate::util::{now_ms, Clock};
 
 /// The schema, applied as one migration. Hocket has no users yet: a schema
@@ -37,7 +38,8 @@ use crate::util::{now_ms, Clock};
 ///
 /// Changes since are forward migrations on top, so a version-13 database
 /// keeps its listening history: 14 shares play history between devices; 15
-/// indexes bare ids.
+/// indexes bare ids; 16 records download failures; 17 keeps album resume
+/// points one row per album.
 pub const MIGRATIONS: &[(u32, &str, &str)] = &[
     (13, "0013_catalogue", include_str!("schema.sql")),
     (
@@ -55,10 +57,15 @@ pub const MIGRATIONS: &[(u32, &str, &str)] = &[
         "0016_download_failures",
         include_str!("migrations/0016_download_failures.sql"),
     ),
+    (
+        17,
+        "0017_album_resumes",
+        include_str!("migrations/0017_album_resumes.sql"),
+    ),
 ];
 
 /// Current schema version (the last migration number).
-pub const SCHEMA_VERSION: u32 = 16;
+pub const SCHEMA_VERSION: u32 = 17;
 
 /// Tables that are a cache of the server and may be dropped and re-synced.
 pub const MIRROR_TABLES: &[&str] = &[
@@ -329,6 +336,55 @@ impl Db {
                 c.prepare("SELECT key FROM saved_state WHERE key LIKE ?1 || '%' ORDER BY key")?;
             let rows = st.query_map([prefix], |r| r.get::<_, String>(0))?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+    }
+
+    // -- album_resumes --------------------------------------------------------
+
+    /// A scope's album resume records (`crate::album_resume`), by album id. Rows that no
+    /// longer parse are skipped.
+    pub fn album_resumes_get(&self, scope: &str) -> DbResult<Vec<AlbumResumeEntry>> {
+        self.with_conn(|c| {
+            let mut st =
+                c.prepare("SELECT json FROM album_resumes WHERE scope = ?1 ORDER BY album_id")?;
+            let rows = st.query_map([scope], |r| r.get::<_, String>(0))?;
+            let mut out = vec![];
+            for json in rows {
+                match serde_json::from_str(&json?) {
+                    Ok(e) => out.push(e),
+                    Err(e) => tracing::warn!(error = %e, "album resume row unreadable; skipped"),
+                }
+            }
+            Ok(out)
+        })
+    }
+
+    /// Write `put` and delete `removed` (album ids) for a scope, in one transaction: only
+    /// the rows that changed, not the scope's whole set.
+    pub fn album_resumes_write(
+        &self,
+        scope: &str,
+        put: &[&AlbumResumeEntry],
+        removed: &[AlbumId],
+    ) -> DbResult<()> {
+        if put.is_empty() && removed.is_empty() {
+            return Ok(());
+        }
+        self.with_tx(|tx| {
+            for e in put {
+                tx.execute(
+                    "INSERT INTO album_resumes(scope, album_id, json) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(scope, album_id) DO UPDATE SET json = excluded.json",
+                    rusqlite::params![scope, e.album_id, serde_json::to_string(e)?],
+                )?;
+            }
+            for id in removed {
+                tx.execute(
+                    "DELETE FROM album_resumes WHERE scope = ?1 AND album_id = ?2",
+                    rusqlite::params![scope, id],
+                )?;
+            }
+            Ok(())
         })
     }
 
@@ -724,6 +780,58 @@ mod tests {
             .unwrap();
         assert_eq!((servers, tracks), (0, 0));
         assert!(db.accounts().unwrap().is_empty());
+    }
+
+    #[test]
+    fn album_resumes_live_one_row_per_album_and_write_only_what_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hocket.db");
+        {
+            // A version-16 database with the old list form: dropped on upgrade.
+            let db = Db::open(&path, &dir.path().join("backups")).unwrap();
+            db.with_conn(|c| {
+                c.execute_batch(
+                    r#"DROP TABLE album_resumes;
+                     DELETE FROM schema_version WHERE version = 17;
+                     INSERT INTO saved_state VALUES ('album-resume:sc', '[]', 0);"#,
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        }
+        let db = Db::open(&path, &dir.path().join("backups")).unwrap();
+        assert_eq!(db.schema_version().unwrap(), SCHEMA_VERSION);
+        assert!(db.saved_state_keys("album-resume:").unwrap().is_empty());
+        assert!(db.album_resumes_get("sc").unwrap().is_empty());
+
+        let entry = |album: &str, position_ms: u64, removed: bool| {
+            serde_json::from_value::<crate::api::AlbumResumeEntry>(serde_json::json!({
+                "albumId": album, "trackId": if removed { "" } else { "t1" }, "trackIndex": 1,
+                "positionMs": position_ms, "durationMs": 9000, "updatedAt": 7.0,
+                "removed": removed, "removedAt": if removed { 8.0 } else { 0.0 },
+            }))
+            .unwrap()
+        };
+        let (e1, e2) = (entry("a1", 5_000, false), entry("a2", 0, true));
+        db.album_resumes_write("sc", &[&e1, &e2], &[]).unwrap();
+        let list = db.album_resumes_get("sc").unwrap();
+        assert_eq!(
+            list.iter().map(|e| e.album_id.as_str()).collect::<Vec<_>>(),
+            ["a1", "a2"]
+        );
+        assert_eq!(list[0].position_ms, 5_000);
+        assert!(list[1].removed);
+
+        let mut a1 = list[0].clone();
+        a1.position_ms = 10_000;
+        db.album_resumes_write("sc", &[&a1], &["a2".to_string()])
+            .unwrap();
+        db.album_resumes_write("other", &[&list[1]], &[]).unwrap();
+        assert_eq!(db.album_resumes_get("sc").unwrap(), vec![a1]);
+        assert_eq!(
+            db.album_resumes_get("other").unwrap(),
+            vec![list[1].clone()]
+        );
     }
 
     #[test]

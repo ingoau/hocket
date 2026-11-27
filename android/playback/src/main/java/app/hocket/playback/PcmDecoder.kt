@@ -8,6 +8,7 @@ import android.media.MediaFormat
 import android.net.Uri
 import app.hocket.core.CoreStreams
 import java.io.IOException
+import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
@@ -17,16 +18,13 @@ import java.nio.ByteOrder
  * ([CoreStreamMediaDataSource]), `file:` from disk, anything else over HTTP with its headers.
  */
 class PcmDecoder(private val streams: () -> CoreStreams?) {
-    class Pcm(val samples: FloatArray, val rate: Int, val channels: Int) {
-        val frames: Int get() = samples.size / channels.coerceAtLeast(1)
+    /** Interleaved float samples as little-endian bytes: decoded straight into them, so no copy on the way to the core. */
+    class Pcm(private val bytes: ByteArray, val rate: Int, val channels: Int) {
+        val frames: Int get() = bytes.size / 4 / channels.coerceAtLeast(1)
         val durationMs: Long get() = if (rate > 0) frames * 1000L / rate else 0
 
-        /** Little-endian float bytes, what the UniFFI calls take. */
-        fun leBytes(): ByteArray {
-            val b = java.nio.ByteBuffer.allocate(samples.size * 4).order(ByteOrder.LITTLE_ENDIAN)
-            b.asFloatBuffer().put(samples)
-            return b.array()
-        }
+        /** Little-endian float bytes, what the UniFFI calls take. Not a copy: read only. */
+        fun leBytes(): ByteArray = bytes
     }
 
     /** The decoded format of [url]'s audio track as the container states it: (rate, channels). */
@@ -58,12 +56,14 @@ class PcmDecoder(private val streams: () -> CoreStreams?) {
             val fromUs = fromMs.coerceAtLeast(0) * 1000
             // A little preroll: audio frames are all sync samples, but a seek can land just after.
             extractor.seekTo((fromUs - PREROLL_US).coerceAtLeast(0), MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+            val durationUs = if (format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION) else -1L
             val c = MediaCodec.createDecoderByType(format.getString(MediaFormat.KEY_MIME)!!)
             codec = c
             c.configure(format, null, null, 0)
             c.start()
             val info = MediaCodec.BufferInfo()
-            var out = FloatArray(0)
+            // Little-endian floats, the first `size` samples filled.
+            var out = ByteArray(0)
             var size = 0
             var wantFrames = Long.MAX_VALUE
             var inputDone = false
@@ -92,7 +92,13 @@ class PcmDecoder(private val streams: () -> CoreStreams?) {
                         float = f.containsKey(MediaFormat.KEY_PCM_ENCODING) && f.getInteger(MediaFormat.KEY_PCM_ENCODING) == AudioFormat.ENCODING_PCM_FLOAT
                     }
                     o >= 0 -> {
-                        if (wantFrames == Long.MAX_VALUE) wantFrames = lengthMs * rate / 1000
+                        if (wantFrames == Long.MAX_VALUE) {
+                            wantFrames = lengthMs * rate / 1000
+                            // Sized once for what will come: what was asked for, or what the container
+                            // says is left when that's less. It grows only should the container be short.
+                            val left = if (durationUs > fromUs) (durationUs - fromUs) * rate / 1_000_000 + 1 else wantFrames
+                            out = ByteArray(minOf(wantFrames, left).coerceIn(0L, (Int.MAX_VALUE / 4 / channels.coerceAtLeast(1)).toLong()).toInt() * channels * 4)
+                        }
                         val buf = c.getOutputBuffer(o)!!.order(ByteOrder.nativeOrder())
                         buf.position(info.offset)
                         buf.limit(info.offset + info.size)
@@ -103,10 +109,19 @@ class PcmDecoder(private val streams: () -> CoreStreams?) {
                         val have = size / channels
                         val take = minOf((frames - skip).toLong(), wantFrames - have).toInt().coerceAtLeast(0)
                         if (take > 0) {
-                            if (out.size < size + take * channels) out = out.copyOf(maxOf(out.size * 2, size + take * channels))
+                            val need = (size + take * channels) * 4
+                            // By a second at least (an eighth when more): a container a little short costs one copy.
+                            if (out.size < need) out = out.copyOf(maxOf(need, out.size + maxOf(out.size / 8, rate * channels * 4)))
                             val base = info.offset + skip * channels * bytesPerSample
-                            for (k in 0 until take * channels) {
-                                out[size + k] = if (float) buf.getFloat(base + k * 4) else buf.getShort(base + k * 2) / 32768f
+                            if (float && ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN) {
+                                // Already the bytes the core takes.
+                                buf.position(base)
+                                buf.get(out, size * 4, take * channels * 4)
+                            } else {
+                                val dst = ByteBuffer.wrap(out).order(ByteOrder.LITTLE_ENDIAN)
+                                for (k in 0 until take * channels) {
+                                    dst.putFloat((size + k) * 4, if (float) buf.getFloat(base + k * 4) else buf.getShort(base + k * 2) / 32768f)
+                                }
                             }
                             size += take * channels
                         }
@@ -116,7 +131,7 @@ class PcmDecoder(private val streams: () -> CoreStreams?) {
                     }
                 }
             }
-            return Pcm(out.copyOf(size), rate, channels)
+            return Pcm(if (out.size == size * 4) out else out.copyOf(size * 4), rate, channels)
         } finally {
             runCatching { codec?.stop() }
             runCatching { codec?.release() }

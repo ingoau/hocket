@@ -18,7 +18,8 @@
 //! table-by-table while the mirror builds. It runs as `JobKind::LibrarySync`
 //! via [`LibrarySyncRunner`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
@@ -134,6 +135,21 @@ pub struct SyncStats {
     pub deleted: usize,
     pub full: bool,
     pub skipped: bool,
+    /// Loved flags `getStarred2` turned on or off.
+    pub loved: usize,
+    /// The playlist list (names, counts, a playlist gone) or the genres changed, or the run
+    /// resumed an interrupted one (what that wrote before is not counted here).
+    pub other: bool,
+}
+
+impl SyncStats {
+    /// Whether the run changed the mirror. A full pass rewrites everything, so it counts.
+    pub fn changed(&self) -> bool {
+        self.full
+            || self.other
+            || self.tracks + self.albums + self.artists + self.playlists + self.deleted + self.loved
+                > 0
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -214,6 +230,10 @@ pub struct LibrarySync {
     clock: Arc<dyn Clock>,
     on_progress: ProgressFn,
     page_size: u32,
+    /// A run changed the mirror since [`LibrarySync::take_changed`] last asked. Starts set:
+    /// the first run after an account is installed (every start replays the logins) counts
+    /// as a change, so what the actor redoes over the mirror then is redone as before.
+    changed: AtomicBool,
 }
 
 impl LibrarySync {
@@ -230,6 +250,7 @@ impl LibrarySync {
             clock,
             on_progress,
             page_size: PAGE_SIZE,
+            changed: AtomicBool::new(true),
         }
     }
 
@@ -248,6 +269,26 @@ impl LibrarySync {
             clock,
             on_progress,
             page_size: PAGE_SIZE,
+            changed: AtomicBool::new(true),
+        }
+    }
+
+    /// Whether a run changed the mirror since the last call (the actor asks when a sync
+    /// finishes: one that changed nothing needs no screen refreshed). Set as soon as a phase
+    /// has written something, so a run that fails part way is reported by the next one.
+    pub fn take_changed(&self) -> bool {
+        self.changed.swap(false, Ordering::SeqCst)
+    }
+
+    /// Have the next finished run count as a change, whatever it finds: something else
+    /// moved what the actor redoes over the mirror then (an account removed or reordered).
+    pub fn mark_changed(&self) {
+        self.changed.store(true, Ordering::SeqCst);
+    }
+
+    fn note(&self, stats: &SyncStats) {
+        if stats.changed() {
+            self.changed.store(true, Ordering::SeqCst);
         }
     }
 
@@ -320,6 +361,7 @@ impl LibrarySync {
         let mut stats = SyncStats::default();
         if c.in_progress() {
             tracing::info!(server = self.server_id(), phase = ?c.phase, offset = c.offset, "resuming interrupted sync");
+            stats.other = true;
         } else {
             // When a full reconcile is due is the caller's call
             // (`library.fullReconcileDays`); the first sync is always full.
@@ -338,6 +380,7 @@ impl LibrarySync {
             self.save_cursor(&c)?;
         }
         stats.full = c.full;
+        self.note(&stats);
 
         // Scan status first: total for progress, and a cheap "nothing changed" signal.
         let scan = match self.api().scan_status().await {
@@ -393,7 +436,7 @@ impl LibrarySync {
                             .await?;
                         stats.albums += n;
                         stats.tracks += tracks;
-                        self.sync_starred(obs, c.gen).await?;
+                        stats.loved += self.sync_starred(obs, c.gen).await?;
                         c.phase = Phase::Playlists;
                         c.offset = 0;
                     }
@@ -416,8 +459,9 @@ impl LibrarySync {
                     if !c.full {
                         stats.tracks += self.sync_recent_plays(obs).await?;
                     }
-                    let n = self.sync_playlists(obs, c.gen, c.full).await?;
+                    let (n, listed) = self.sync_playlists(obs, c.gen, c.full).await?;
                     stats.playlists += n;
+                    stats.other |= listed;
                     if !c.ready_tables.iter().any(|t| t == "playlists") {
                         c.ready_tables.push("playlists".into());
                     }
@@ -427,7 +471,7 @@ impl LibrarySync {
                     self.report(obs, &c, 0, None, false);
                 }
                 Phase::Genres => {
-                    self.sync_genres(obs, c.gen).await?;
+                    stats.other |= self.sync_genres(obs, c.gen).await?;
                     if !c.ready_tables.iter().any(|t| t == "genres") {
                         c.ready_tables.push("genres".into());
                     }
@@ -446,6 +490,7 @@ impl LibrarySync {
                 }
                 Phase::Done => break,
             }
+            self.note(&stats);
         }
 
         let finished_at = self.clock.now_ms();
@@ -511,6 +556,7 @@ impl LibrarySync {
             full: true,
             ..Default::default()
         };
+        self.note(&stats);
         c.full = true;
         c.gen += 1;
         c.phase = Phase::Tracks;
@@ -807,11 +853,12 @@ impl LibrarySync {
 
     /// Reconcile loved flags from `getStarred2` (cheap and catches changes
     /// made on other clients; ratings have no such endpoint and wait for the
-    /// full pass).
-    async fn sync_starred(&self, obs: &dyn SyncObserver, _gen: i64) -> Result<(), SyncError> {
+    /// full pass). Only the flags that differ are written. Returns how many.
+    async fn sync_starred(&self, obs: &dyn SyncObserver, _gen: i64) -> Result<usize, SyncError> {
         let starred = self.api().starred2().await?;
         let sid = self.server_id();
         self.write(obs, |tx| {
+            let mut flipped = 0;
             for (table, ids) in [
                 (
                     "tracks",
@@ -838,28 +885,39 @@ impl LibrarySync {
                         .collect::<Vec<_>>(),
                 ),
             ] {
-                tx.execute(
-                    &format!("UPDATE {table} SET loved = 0 WHERE server_id = ?1 AND loved = 1"),
-                    [sid],
-                )?;
-                let mut st = tx.prepare_cached(&format!(
-                    "UPDATE {table} SET loved = 1 WHERE server_id = ?1 AND id = ?2"
+                let loved: HashSet<String> = {
+                    let mut st = tx.prepare_cached(&format!(
+                        "SELECT id FROM {table} WHERE server_id = ?1 AND loved = 1"
+                    ))?;
+                    let rows = st.query_map([sid], |r| r.get::<_, String>(0))?;
+                    rows.collect::<Result<_, _>>()?
+                };
+                let ids: HashSet<String> = ids.into_iter().collect();
+                let mut off = tx.prepare_cached(&format!(
+                    "UPDATE {table} SET loved = 0 WHERE server_id = ?1 AND id = ?2"
                 ))?;
-                for id in ids {
-                    st.execute([sid, &id])?;
+                for id in loved.difference(&ids) {
+                    flipped += off.execute([sid, id])?;
+                }
+                let mut on = tx.prepare_cached(&format!(
+                    "UPDATE {table} SET loved = 1 WHERE server_id = ?1 AND id = ?2 AND loved = 0"
+                ))?;
+                for id in ids.difference(&loved) {
+                    flipped += on.execute([sid, id])?;
                 }
             }
-            Ok(())
-        })?;
-        Ok(())
+            Ok(flipped)
+        })
     }
 
+    /// Returns how many playlists' songs were refetched, and whether the list itself changed
+    /// (a playlist's row, or one gone).
     async fn sync_playlists(
         &self,
         obs: &dyn SyncObserver,
         gen: i64,
         full: bool,
-    ) -> Result<usize, SyncError> {
+    ) -> Result<(usize, bool), SyncError> {
         let sid = self.server_id();
         let username = self.api().username();
         let list = self.api().playlists().await?;
@@ -868,11 +926,20 @@ impl LibrarySync {
             .iter()
             .map(|p| playlist_from_body(sid, username.as_deref(), p))
             .collect();
-        self.write(obs, |tx| {
+        let swept = self.write(obs, |tx| {
             upsert_playlists_in(tx, &playlists, gen)?;
-            sweep(tx, "playlists", sid, gen)?;
-            Ok(())
+            sweep(tx, "playlists", sid, gen)
         })?;
+        // `offline` is the pins', not the server's: it is not what the sync writes.
+        let listed = swept > 0
+            || playlists.iter().any(|p| {
+                existing.iter().find(|e| e.id == p.id).is_none_or(|e| {
+                    *p != api::Playlist {
+                        offline: p.offline,
+                        ..e.clone()
+                    }
+                })
+            });
         let mut refreshed = 0;
         for p in &playlists {
             let prev = existing.iter().find(|e| e.id == p.id);
@@ -903,10 +970,11 @@ impl LibrarySync {
             })?;
             refreshed += 1;
         }
-        Ok(refreshed)
+        Ok((refreshed, listed))
     }
 
-    async fn sync_genres(&self, obs: &dyn SyncObserver, gen: i64) -> Result<(), SyncError> {
+    /// Returns whether the genres changed.
+    async fn sync_genres(&self, obs: &dyn SyncObserver, gen: i64) -> Result<bool, SyncError> {
         let genres: Vec<api::Genre> = self
             .api()
             .genres()
@@ -915,9 +983,15 @@ impl LibrarySync {
             .map(genre_from_body)
             .collect();
         let sid = self.server_id().to_string();
+        let key = |g: &api::Genre| (g.name.clone(), g.song_count, g.album_count);
+        let mut before: Vec<_> = self.db.genres(&sid)?.iter().map(key).collect();
+        let mut after: Vec<_> = genres.iter().map(key).collect();
+        before.sort();
+        after.sort();
         self.write(obs, |tx| {
             super::queries::replace_genres(tx, &sid, &genres, gen)
-        })
+        })?;
+        Ok(before != after)
     }
 
     /// Mark-and-sweep plus derived counts.
@@ -1254,11 +1328,15 @@ mod tests {
         s.state.lock().scan_status.last_scan = Some("2024-06-01T00:00:00Z".into());
         let sync = sync_for(&db, &s, Arc::new(Mutex::new(vec![])));
         sync.run(true, &NoopObserver).await.unwrap();
+        assert!(sync.take_changed(), "a full pass counts as a change");
+        assert!(!sync.take_changed(), "asked once");
         let calls = s.calls_to("search3");
         // unchanged scan → no album/track work, playlists still refreshed
         let stats = sync.run(false, &NoopObserver).await.unwrap();
         assert!(!stats.full);
         assert_eq!(stats.tracks, 0);
+        assert!(!stats.changed(), "{stats:?}");
+        assert!(!sync.take_changed());
         assert_eq!(s.calls_to("search3"), calls);
         assert_eq!(
             s.calls_to("getAlbumList2"),
@@ -1277,6 +1355,7 @@ mod tests {
         let stats = sync.run(false, &NoopObserver).await.unwrap();
         assert_eq!(stats.albums, 1);
         assert_eq!(stats.tracks, 1);
+        assert!(sync.take_changed());
         assert!(db.track("s99").unwrap().is_some());
         assert!(db.album("al9").unwrap().is_some());
         assert_eq!(
@@ -1358,7 +1437,8 @@ mod tests {
         .await
         .unwrap();
         let getpl = s.calls_to("getPlaylist");
-        sync.run(false, &NoopObserver).await.unwrap();
+        let stats = sync.run(false, &NoopObserver).await.unwrap();
+        assert!(stats.loved >= 1 && stats.changed(), "{stats:?}");
         assert!(db.track("s02").unwrap().unwrap().loved);
         assert_eq!(
             db.playlist_track_ids("pl1").unwrap(),

@@ -5389,19 +5389,19 @@ impl Engine {
                         } else {
                             cadence
                         };
-                        // At a stretched cadence a ping rides along with a
-                        // due heartbeat (and the other way round below), so
-                        // the radio wakes once per period, not twice.
+                        // A ping at least half due rides along with a due
+                        // heartbeat (and the other way round below), so the
+                        // two fall into step within a period and the radio
+                        // wakes once per period, not twice. Riding along
+                        // only ever sends early: no renewal comes later.
                         let heartbeat_due = self
                             .held
                             .as_ref()
                             .is_some_and(|h| h.heartbeat_due(now, cadence));
-                        let ride_along = cadence > PING_INTERVAL_MS
-                            && heartbeat_due
-                            && now - self.last_ping_at >= cadence / 2.0;
+                        let ride_along = heartbeat_due && now - self.last_ping_at >= cadence / 2.0;
                         if now - self.last_ping_at >= interval || ride_along {
                             self.send_ping();
-                            pinged = cadence > PING_INTERVAL_MS;
+                            pinged = true;
                         }
                     }
                 }
@@ -10491,5 +10491,55 @@ mod tests {
         assert!(!e.is_detached());
         tick_at(&mut e, &clock, 60_600 + 98_000);
         assert!(e.is_detached());
+    }
+
+    #[test]
+    fn an_owner_with_company_heartbeats_and_pings_in_one_wake() {
+        let (mut e, clock) = engine("a");
+        e.cfg.upstream_idle_ms = 1e12;
+        attach(&mut e, None, vec![dev("a"), dev("b")]);
+        for t in [10_300, 10_600, 10_900] {
+            tick_at(&mut e, &clock, t);
+        }
+        // Claimed out of step with the pings (last one at 10.9 s).
+        clock.0.store(12_000, Ordering::SeqCst);
+        let outs = e.handle(Input::ClaimTransport { takeover: false });
+        let sent_at = wire_outs(&outs)
+            .iter()
+            .find_map(|(_, m)| match m {
+                Msg::LeaseClaim { sent_at, .. } => Some(*sent_at),
+                _ => None,
+            })
+            .expect("claim");
+        let lease = TransportLease {
+            owner: Some("a".into()),
+            epoch: 4,
+            expires_at: 0.0,
+        };
+        from_up(
+            &mut e,
+            Msg::LeaseGranted {
+                lease,
+                ack_of: Some(sent_at),
+            },
+        );
+        let mut last_heartbeat = 12_000.0;
+        let mut wakes = Vec::new();
+        for t in (12_100..60_000).step_by(100) {
+            let outs = tick_at(&mut e, &clock, t);
+            let hb = heartbeats(&outs);
+            let ping = pings(&outs) > 0;
+            if let Some(&at) = hb.first() {
+                assert!(at - last_heartbeat <= PING_INTERVAL_MS, "{t}: renewed late");
+                last_heartbeat = at;
+            }
+            if !hb.is_empty() || ping {
+                wakes.push((t, !hb.is_empty(), ping));
+            }
+        }
+        // In step after the first period: every wake carries both.
+        let late: Vec<_> = wakes.iter().filter(|(t, ..)| *t >= 20_000).collect();
+        assert!(late.len() >= 8, "{wakes:?}");
+        assert!(late.iter().all(|(_, hb, ping)| *hb && *ping), "{wakes:?}");
     }
 }

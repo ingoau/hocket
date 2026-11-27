@@ -90,7 +90,8 @@ class NetworkMonitorTest {
         val cm = context.getSystemService(ConnectivityManager::class.java)
         val sent = mutableListOf<NetworkState>()
         val online = mutableListOf<Boolean>()
-        val m = NetworkMonitor(context, { c -> if (c is Command.SetNetworkState) sent += c.data.state }, onConnectivity = { online += it })
+        val kinds = mutableListOf<NetworkKind>()
+        val m = NetworkMonitor(context, { c -> if (c is Command.SetNetworkState) sent += c.data.state }, onConnectivity = { online += it }, onKind = { kinds += it })
         m.start()
         val callback = shadowOf(cm).networkCallbacks.single()
         val wifi = ShadowNetwork.newInstance(1)
@@ -110,11 +111,13 @@ class NetworkMonitorTest {
         ShadowLooper.idleMainLooper(NetworkMonitor.DEBOUNCE_MS, TimeUnit.MILLISECONDS)
         assertEquals(listOf(NetworkState(NetworkKind.Cellular, true, null)), sent.drop(before))
         assertEquals(onlineBefore, online.size)
+        assertEquals(NetworkKind.Cellular, kinds.last())
         // A loss that holds is reported.
         callback.onLost(cell)
         ShadowLooper.idleMainLooper(NetworkMonitor.DEBOUNCE_MS, TimeUnit.MILLISECONDS)
         assertEquals(NetworkState(NetworkKind.Offline, false, null), sent.last())
         assertEquals(false, online.last())
+        assertEquals(NetworkKind.Offline, kinds.last())
         m.stop()
     }
 

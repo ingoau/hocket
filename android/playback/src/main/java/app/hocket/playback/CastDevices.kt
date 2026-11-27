@@ -125,8 +125,12 @@ object CastDevices {
 
 /** Makes the [CastController] for the service's lifetime. */
 interface CastProvider {
-    /** Null when casting can't work here (no Google Play services). */
-    fun create(context: Context, scope: CoroutineScope, dispatch: (Command) -> Unit, listener: CastListener): CastController?
+    /**
+     * Makes the controller off the main thread and hands it to [ready] on it, unless [scope] (the
+     * service's) has ended by then; not at all when casting can't work here (no Google Play
+     * services, or the SDK failed to start).
+     */
+    fun create(context: Context, scope: CoroutineScope, dispatch: (Command) -> Unit, listener: CastListener, ready: (CastController) -> Unit)
 
     /** MediaRouter2 features the system output switcher should list for this app (Cast receivers). */
     fun routeFeatures(context: Context): List<String>

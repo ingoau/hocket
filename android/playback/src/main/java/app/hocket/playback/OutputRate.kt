@@ -131,7 +131,8 @@ class OutputRate(private val dsp: DspEngine, private val fallbackRate: Int) {
 
     private fun fill(samples: FloatArray, n: Int): ByteBuffer {
         if (scratch.capacity() < n * 4) scratch = floatBuffer(n)
-        for (i in 0 until n) scratch.putFloat(i * 4, samples[i])
+        // Every access to these buffers is absolute, so their position is 0: the view starts at index 0.
+        scratch.asFloatBuffer().put(samples, 0, n)
         return scratch
     }
 
@@ -139,7 +140,13 @@ class OutputRate(private val dsp: DspEngine, private val fallbackRate: Int) {
     private fun ensureOutput(samples: Int, keep: Int) {
         if (output.capacity() >= samples * 4) return
         val grown = floatBuffer(samples)
-        for (i in 0 until keep) grown.putFloat(i * 4, output.getFloat(i * 4))
+        if (keep > 0) {
+            // As bytes (bit-exact), through duplicates so neither buffer's position moves.
+            val kept = output.duplicate()
+            kept.limit(keep * 4)
+            kept.position(0)
+            grown.duplicate().put(kept)
+        }
         output = grown
     }
 

@@ -912,7 +912,7 @@ impl Actor {
             entry: queue.current.clone(),
         });
         self.lyrics_for_now_playing(&queue);
-        self.emit(Event::QueueChanged { queue });
+        self.emit_queue_view(queue);
         if media_session {
             self.emit_media_session();
         }
@@ -1673,6 +1673,16 @@ impl Actor {
         self.emitted_transport = Some(transport.clone());
         self.emit(Event::TransportChanged { transport });
         true
+    }
+
+    /// `QueueChanged`, unless it is the view just sent (a sync, or a stream-cache change for
+    /// a queued track, that left every row as it was).
+    pub(crate) fn emit_queue_view(&mut self, queue: QueueView) {
+        if self.emitted_queue.as_ref() == Some(&queue) {
+            return;
+        }
+        self.emitted_queue = Some(queue.clone());
+        self.emit(Event::QueueChanged { queue });
     }
 
     /// `DevicesChanged`, unless it is the list just sent (a lease renewal

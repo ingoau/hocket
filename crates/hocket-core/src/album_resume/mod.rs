@@ -20,11 +20,6 @@ pub const FINISH_BUFFER_MS: Ms = 5_000;
 /// Bound on the synced set (live records and tombstones together).
 const MAX_ENTRIES: usize = 400;
 
-/// The saved-state key for one account's album resume map.
-pub fn state_key(scope: &str) -> String {
-    format!("album-resume:{scope}")
-}
-
 /// What the queue is doing, for [`decide`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
@@ -177,14 +172,20 @@ fn sort(entries: &mut [AlbumResumeEntry]) {
 }
 
 /// Drop records and tombstones older than [`TTL_MS`], then the oldest past [`MAX_ENTRIES`].
-pub fn prune(entries: &mut Vec<AlbumResumeEntry>, now: EpochMs) {
+/// Returns the albums dropped.
+pub fn prune(entries: &mut Vec<AlbumResumeEntry>, now: EpochMs) -> Vec<AlbumId> {
+    let mut dropped = vec![];
     entries.retain(|e| {
         let stamp = if e.removed {
             e.removed_at.max(e.updated_at)
         } else {
             e.updated_at
         };
-        now - stamp < TTL_MS
+        let keep = now - stamp < TTL_MS;
+        if !keep {
+            dropped.push(e.album_id.clone());
+        }
+        keep
     });
     if entries.len() > MAX_ENTRIES {
         entries.sort_by(|a, b| {
@@ -193,9 +194,36 @@ pub fn prune(entries: &mut Vec<AlbumResumeEntry>, now: EpochMs) {
                 .partial_cmp(&a.updated_at.max(a.removed_at))
                 .unwrap_or(Ordering::Equal)
         });
-        entries.truncate(MAX_ENTRIES);
+        dropped.extend(entries.drain(MAX_ENTRIES..).map(|e| e.album_id));
     }
     sort(entries);
+    dropped
+}
+
+/// The records of `after` that are not in `before` as they are (new or changed), and the
+/// albums `before` has that `after` does not. Both sorted by album id, as every list here is.
+pub fn diff<'a>(
+    before: &[AlbumResumeEntry],
+    after: &'a [AlbumResumeEntry],
+) -> (Vec<&'a AlbumResumeEntry>, Vec<AlbumId>) {
+    let changed = after
+        .iter()
+        .filter(|a| {
+            before
+                .binary_search_by(|b| b.album_id.cmp(&a.album_id))
+                .map_or(true, |i| before[i] != **a)
+        })
+        .collect();
+    let gone = before
+        .iter()
+        .filter(|b| {
+            after
+                .binary_search_by(|a| a.album_id.cmp(&b.album_id))
+                .is_err()
+        })
+        .map(|b| b.album_id.clone())
+        .collect();
+    (changed, gone)
 }
 
 /// Write `entry` (a live position). `removed_at` matches `updated_at` so this save beats any
@@ -434,7 +462,7 @@ mod tests {
         let mut fresh = entry("a", 2, now - 1_000.0);
         let stale = entry("b", 3, now - TTL_MS - 1.0);
         let mut entries = vec![fresh.clone(), stale.clone()];
-        prune(&mut entries, now);
+        assert_eq!(prune(&mut entries, now), vec!["b".to_string()]);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].album_id, "a");
         assert!(point(&entries, "b", now).is_none());
@@ -523,6 +551,34 @@ mod tests {
         clear(&mut stale, "x", 50.0, true);
         let (lost, _) = merge(&stale, &phone);
         assert!(point(&lost, "x", 300.0).is_some());
+    }
+
+    #[test]
+    fn diff_names_the_records_to_write_and_the_albums_to_delete() {
+        let before = vec![
+            entry("a", 1, 10.0),
+            entry("b", 2, 10.0),
+            entry("c", 3, 10.0),
+        ];
+        let mut after = before.clone();
+        assert_eq!(diff(&before, &after), (vec![], vec![]));
+        assert!(upsert(&mut after, entry("b", 4, 20.0)));
+        assert!(upsert(&mut after, entry("d", 1, 20.0)));
+        after.retain(|e| e.album_id != "a");
+        let (changed, gone) = diff(&before, &after);
+        let changed: Vec<&str> = changed.iter().map(|e| e.album_id.as_str()).collect();
+        assert_eq!(changed, ["b", "d"]);
+        assert_eq!(gone, ["a"]);
+    }
+
+    #[test]
+    fn prune_reports_what_the_cap_drops() {
+        let mut entries: Vec<_> = (0..MAX_ENTRIES + 2)
+            .map(|i| entry(&format!("al{i:04}"), 1, 1_000.0 + i as f64))
+            .collect();
+        let dropped = prune(&mut entries, 2_000.0);
+        assert_eq!(dropped, ["al0001", "al0000"]);
+        assert_eq!(entries.len(), MAX_ENTRIES);
     }
 
     fn entry(album: &str, index: u32, at: f64) -> AlbumResumeEntry {

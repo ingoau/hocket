@@ -405,3 +405,41 @@ async fn an_expired_point_is_withdrawn_while_running() {
         .expect("expiry is announced");
     assert!(last.is_empty(), "{last:?}");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn points_survive_a_restart_one_row_per_album() {
+    let t = synced("restart").await;
+    let sid = t.server_id.clone();
+    for al in ["al0", "al1"] {
+        t.run(Command::PlayContext {
+            args: album(&sid, al, false),
+        })
+        .await;
+        t.run_for(500.0).await;
+        t.run(Command::Next).await;
+        t.run_for(500.0).await;
+        t.run(Command::SeekTo {
+            position_ms: 45_000,
+        })
+        .await;
+        t.run(Command::Pause).await;
+        // Samples while it plays rewrite the album's row, not the set.
+        t.run(Command::Play).await;
+        t.run_for(12_000.0).await;
+        t.run(Command::Pause).await;
+    }
+    let before = (point(&t, "al0").await, point(&t, "al1").await);
+    assert!(before.0.is_some() && before.1.is_some(), "{before:?}");
+    t.core.shutdown().await;
+    let db = t.open_db();
+    let rows: i64 = db
+        .with_conn(|c| Ok(c.query_row("SELECT count(*) FROM album_resumes", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(rows, 2);
+    drop(db);
+    let TestCore {
+        clock, server, dir, ..
+    } = t;
+    let t = TestCore::start_in("restart", server, None, 1, clock, dir).await;
+    assert_eq!((point(&t, "al0").await, point(&t, "al1").await), before);
+}

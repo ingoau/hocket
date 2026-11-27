@@ -46,6 +46,16 @@ class JobsService : Service() {
     private var bound = false
     private var foreground = false
     private var following: kotlinx.coroutines.Job? = null
+    /** What the notification last said: it is posted again only when that changes. */
+    private var posted: Content? = null
+    /** Opens the app; made once, the same for every update. */
+    private val open by lazy {
+        PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+    }
 
     /** Holds the playback service, and with it the core: its idle stop only counts unbound apps. */
     private val coreConnection = object : ServiceConnection {
@@ -58,12 +68,18 @@ class JobsService : Service() {
     override fun onCreate() {
         super.onCreate()
         bound = runCatching { bindService(PlaybackServiceConnection.bindIntent(this), coreConnection, Context.BIND_AUTO_CREATE) }.getOrDefault(false)
+        // The channel, once for the service's life (the notification is updated about once a second).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL, getString(R.string.jobs_notification_channel), NotificationManager.IMPORTANCE_LOW))
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (!foreground) {
             foreground = try {
-                ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(emptyList()), if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0)
+                val starting = content(emptyList())
+                ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(starting), if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0)
+                posted = starting
                 true
             } catch (e: Exception) {
                 // ForegroundServiceStartNotAllowedException (API 31+) and the like: the jobs carry on while the app lives.
@@ -85,10 +101,16 @@ class JobsService : Service() {
                     finish()
                     return@collect
                 }
+                val shown = content(active)
+                // Unchanged: nothing to post (nor to wait out).
+                if (shown == posted) return@collect
                 val manager = NotificationManagerCompat.from(this@JobsService)
                 // Without the permission (API 33+) the system shows the service's own entry instead.
                 if (foreground && manager.areNotificationsEnabled()) {
-                    try { manager.notify(NOTIFICATION_ID, notification(active)) } catch (e: SecurityException) { Log.w(TAG, "couldn't update the notification") }
+                    try {
+                        manager.notify(NOTIFICATION_ID, notification(shown))
+                        posted = shown
+                    } catch (e: SecurityException) { Log.w(TAG, "couldn't update the notification") }
                 }
                 // At most about once a second: the core reports far more often than that.
                 delay(UPDATE_MS)
@@ -115,22 +137,20 @@ class JobsService : Service() {
         super.onDestroy()
     }
 
-    private fun notification(active: List<Job>): android.app.Notification {
-        val manager = getSystemService(NotificationManager::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            manager.createNotificationChannel(NotificationChannel(CHANNEL, getString(R.string.jobs_notification_channel), NotificationManager.IMPORTANCE_LOW))
-        }
-        val open = PendingIntent.getActivity(
-            this, 0,
-            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
-        val progress = BackgroundJobs.progress(active)
+    /** The notification's title and its progress (done of total; null while not known). */
+    private data class Content(val title: String, val progress: Pair<Int, Int>?)
+
+    private fun content(active: List<Job>): Content {
         val title = when (active.size) {
             0 -> getString(R.string.jobs_notification_starting)
             1 -> active.single().label
             else -> resources.getQuantityString(R.plurals.jobs_notification_many, active.size, active.size)
         }
+        return Content(title, BackgroundJobs.progress(active))
+    }
+
+    private fun notification(content: Content): android.app.Notification {
+        val (title, progress) = content
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.media3_notification_small_icon)
             .setContentTitle(title)

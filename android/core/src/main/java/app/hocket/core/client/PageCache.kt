@@ -1,14 +1,11 @@
 package app.hocket.core.client
 
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
 /**
  * A small keyed page cache for virtualised lists.
@@ -39,8 +36,8 @@ class PageCache<K, T>(
         const val MAX_IDLE_KEYS = 48
     }
 
-    private val mutex = Mutex()
-    private val inFlight = HashMap<Pair<K, Int>, Deferred<Unit>>()
+    /** Pages being fetched. Guarded by its own monitor: [ensure] checks it before launching anything. */
+    private val inFlight = HashSet<Pair<K, Int>>()
     private val states = HashMap<K, MutableStateFlow<PagedList<T>>>()
 
     /** How many query keys currently have a flow (including empty ones). */
@@ -75,20 +72,19 @@ class PageCache<K, T>(
         val flow = flowFor(key)
         if (flow.value.pages.containsKey(page)) return
         val id = key to page
+        // Composition calls this for every row, so each row of a page still loading would otherwise
+        // launch a coroutine only to find the fetch already running.
+        synchronized(inFlight) { if (!inFlight.add(id)) return }
         scope.async {
-            val job = mutex.withLock {
-                inFlight[id] ?: async {
-                    try {
-                        val result = fetch(key, page * pageSize, pageSize)
-                        flow.update { it.copy(pages = it.pages + (page to result.items), total = result.total) }
-                    } catch (e: Exception) {
-                        // Leave the page absent; the next ensure() retries. Nothing to surface: the core owns errors.
-                    } finally {
-                        mutex.withLock { inFlight.remove(id) }
-                    }
-                }.also { inFlight[id] = it }
+            try {
+                val result = fetch(key, page * pageSize, pageSize)
+                flow.update { it.copy(pages = it.pages + (page to result.items), total = result.total) }
+            } catch (e: Exception) {
+                // Leave the page absent; the next ensure() retries. Nothing to surface: the core owns errors.
             }
-            job.await()
+        }.invokeOnCompletion {
+            // Also when cancelled before it started, so the page can never stay marked as loading.
+            synchronized(inFlight) { inFlight.remove(id) }
         }
     }
 

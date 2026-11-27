@@ -27,7 +27,9 @@ import kotlinx.coroutines.withContext
  * entry: nothing is fetched for this), decodes its first and last minute with `MediaCodec` on one
  * low-priority thread, builds the record in Rust and hands it to the core
  * (`Command.StoreAnalysisRecord`, which stores, replans and uploads it). One track at a time; each
- * tried once per session. A window that changes while a pass runs is kept (the newest) and runs next.
+ * tried once per session, and one found with a usable record not asked about again (the core keeps
+ * only a better record in its place). A window of nothing left to look at asks the core nothing,
+ * not even the mode. A window that changes while a pass runs is kept (the newest) and runs next.
  */
 internal class LoudnessRecorder(
     private val scope: CoroutineScope,
@@ -43,6 +45,8 @@ internal class LoudnessRecorder(
     class Candidate(val trackId: String, val durationMs: Long, val source: CoreMediaSource?)
 
     private val tried = HashSet<String>()
+    /** Tracks the core has a usable record for. */
+    private val usable = HashSet<String>()
     private var job: Job? = null
     /** The newest window that came while [job] ran; it runs next. */
     private var pending: List<Candidate>? = null
@@ -70,13 +74,17 @@ internal class LoudnessRecorder(
     }
 
     private suspend fun record(candidates: List<Candidate>) {
+        if (candidates.none(::wanted)) return
         val mode = (query(Query.Transitions) as? QueryResult.Transitions)?.data?.mode
         if (mode != TransitionMode.AutoMix) return
         for (c in candidates) {
             if (!currentCoroutineContext().isActive) return
-            if (c.trackId in tried || c.durationMs <= 0) continue
+            if (!wanted(c)) continue
             val stored = (query(Query.TrackAnalysis(QueryTrackAnalysisInner(c.trackId))) as? QueryResult.Analysis)?.data
-            if (stored != null && ffi.usable(stored, c.durationMs)) continue
+            if (stored != null && ffi.usable(stored, c.durationMs)) {
+                usable += c.trackId
+                continue
+            }
             val source = c.source ?: (query(Queries.mediaSource(c.trackId)) as? QueryResult.Source)?.data ?: continue
             if (!withContext(io) { isLocal(source) }) continue
             tried += c.trackId
@@ -85,6 +93,9 @@ internal class LoudnessRecorder(
             dispatch(Command.StoreAnalysisRecord(CommandStoreAnalysisRecordInner(c.trackId, record)))
         }
     }
+
+    /** Whether [c] may still want a record: not tried yet, not known to have a usable one. */
+    private fun wanted(c: Candidate): Boolean = c.durationMs > 0 && c.trackId !in tried && c.trackId !in usable
 
     private fun isLocal(source: CoreMediaSource): Boolean = when {
         source.url.startsWith("file:") -> true

@@ -223,7 +223,10 @@ impl ReqwestUpstream {
             .user_agent(concat!("hocket/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(std::time::Duration::from_secs(15))
             .redirect(reqwest::redirect::Policy::none())
-            .use_rustls_tls()
+            // HTTP/1.1 only: each read of a track has a connection to
+            // itself, never an HTTP/2 stream sharing one (and its stalls).
+            .http1_only()
+            .use_preconfigured_tls(crate::subsonic::transport::shared_tls(true))
             // Audio bytes as the server has them: lengths and ranges count those.
             .no_gzip()
             .no_brotli()

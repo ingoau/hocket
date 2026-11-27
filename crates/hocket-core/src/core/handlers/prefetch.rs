@@ -115,6 +115,15 @@ impl Actor {
                     self.prefetch.changed_at = None;
                     self.apply_prefetch();
                 } else {
+                    // A fetch for a track that is no longer wanted stops now rather than after
+                    // the debounce: skipping through the queue would otherwise keep downloading
+                    // tracks already skipped past. Starting the next one still waits.
+                    if let Some(r) = &self.prefetch.running {
+                        if !self.prefetch.wanted.contains(&r.key) {
+                            r.cancel.cancel();
+                            self.prefetch.running = None;
+                        }
+                    }
                     self.prefetch.changed_at = Some(now);
                 }
             }

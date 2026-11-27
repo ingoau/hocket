@@ -312,7 +312,8 @@ mod tests {
             "query.artwork",
             json!(Query::Artwork {
                 id: "al1".into(),
-                size: 160
+                size: 160,
+                display: false,
             }),
         );
         push(
@@ -740,7 +741,8 @@ mod tests {
         assert_eq!(
             json!(Query::Artwork {
                 id: "x".into(),
-                size: 64
+                size: 64,
+                display: false,
             }),
             json!({"type": "artwork", "data": {"id": "x", "size": 64}})
         );
