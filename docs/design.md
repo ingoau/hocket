@@ -371,6 +371,7 @@ Subsonic has no batch endpoint for ratings, so rating 3,000 tracks is 3,000 call
 - Selection keyed by ID, not row index.
 - Select-all is a predicate over the current filter, not 50,000 materialised IDs.
 - Shift-range, ctrl-click, full keyboard navigation on desktop.
+- On Android, a list of four screens or more (a playlist's or album's page, the library's songs, playlists, genres, albums and artists) has a fast-scroll thumb at its end edge. It shows while the list scrolls and fades 1.5 s after it stops; while it shows, pressing it and dragging takes the list with the finger, end to end in one sweep (a grid a row at a time). Hidden, it takes no touches, so rows under it work as ever.
 - Screen reader labels from the start — retrofitting them onto a virtualised multi-select list is miserable.
 
 

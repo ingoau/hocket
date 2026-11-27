@@ -1,5 +1,6 @@
 package app.hocket.ui.screens.library
 
+import app.hocket.ui.components.FastScrollbar
 import app.hocket.ui.components.SourceChips
 import app.hocket.ui.components.rememberLibrarySource
 import app.hocket.ui.icons.HocketIcons
@@ -244,19 +245,22 @@ internal fun AlbumsTab(serverId: String, control: SortControl, open: (DetailTarg
         selected = selecting && selection.contains(album.id), selectionActive = selecting, onToggleSelect = { client.toggleSelected(SelectionKind.Albums, album.id) }, titleLines = titleLines,
         destinationShareKey = if (fromTile) ArtworkShare.albumsTile(album.id) else null,
     )
-    LazyVerticalGrid(columns = AlbumGridCells, state = grid, contentPadding = albumGridPadding(topPadding, BottomContentInset), modifier = Modifier.fillMaxSize()) {
-        gridGroups(
-            groups, R.string.library_all_albums, control, { it.id }, ALBUM_ROW_CELL,
-            recentCard = { album, modifier -> Card(album, modifier, titleLines = 1, fromTile = true) },
-        ) { album, modifier -> Card(album, modifier, titleLines = 1) }
-        // Until the total is known, a screenful of skeletons; items are keyed by position so a
-        // skeleton turns into its card in place (no remove and insert as pages arrive).
-        val count = if (state.known) state.total else SKELETON_COUNT
-        items(count, contentType = { i -> if (state.item(i, client.albumPages.pageSize) == null) "skeleton" else "album" }) { i ->
-            val album = state.item(i, client.albumPages.pageSize)
-            if (state.known) SideEffect { client.albumPages.ensure(key, i) }
-            if (album == null) AlbumCardSkeleton() else Card(album, Modifier)
+    Box(Modifier.fillMaxSize()) {
+        LazyVerticalGrid(columns = AlbumGridCells, state = grid, contentPadding = albumGridPadding(topPadding, BottomContentInset), modifier = Modifier.fillMaxSize()) {
+            gridGroups(
+                groups, R.string.library_all_albums, control, { it.id }, ALBUM_ROW_CELL,
+                recentCard = { album, modifier -> Card(album, modifier, titleLines = 1, fromTile = true) },
+            ) { album, modifier -> Card(album, modifier, titleLines = 1) }
+            // Until the total is known, a screenful of skeletons; items are keyed by position so a
+            // skeleton turns into its card in place (no remove and insert as pages arrive).
+            val count = if (state.known) state.total else SKELETON_COUNT
+            items(count, contentType = { i -> if (state.item(i, client.albumPages.pageSize) == null) "skeleton" else "album" }) { i ->
+                val album = state.item(i, client.albumPages.pageSize)
+                if (state.known) SideEffect { client.albumPages.ensure(key, i) }
+                if (album == null) AlbumCardSkeleton() else Card(album, Modifier)
+            }
         }
+        FastScrollbar(grid, Modifier.align(Alignment.TopEnd), top = topPadding, bottom = BottomContentInset)
     }
 }
 
@@ -278,14 +282,17 @@ internal fun ArtistsTab(serverId: String, control: SortControl, open: (DetailTar
     KeepTopForGroups(groups, { grid.firstVisibleItemIndex == 0 && grid.firstVisibleItemScrollOffset == 0 }) { grid.requestScrollToItem(0) }
     @Composable fun Card(artist: Artist, modifier: Modifier) = ArtistCard(artist, onClick = { open(DetailTarget.Artist(artist.id)) }, modifier = modifier.testTag("library.artist"),
         selected = selecting && selection.contains(artist.id), selectionActive = selecting, onToggleSelect = { client.toggleSelected(SelectionKind.Artists, artist.id) })
-    LazyVerticalGrid(columns = AlbumGridCells, state = grid, contentPadding = albumGridPadding(topPadding, BottomContentInset), modifier = Modifier.fillMaxSize().testTag("library.artists")) {
-        gridGroups(groups, R.string.library_all_artists, control, { it.id }, ARTIST_ROW_CELL) { artist, modifier -> Card(artist, modifier) }
-        val count = if (state.known) state.total else SKELETON_COUNT
-        items(count, contentType = { i -> if (state.item(i, client.artistPages.pageSize) == null) "skeleton" else "artist" }) { i ->
-            val artist = state.item(i, client.artistPages.pageSize)
-            if (state.known) SideEffect { client.artistPages.ensure(key, i) }
-            if (artist == null) ArtistCardSkeleton() else Card(artist, Modifier)
+    Box(Modifier.fillMaxSize()) {
+        LazyVerticalGrid(columns = AlbumGridCells, state = grid, contentPadding = albumGridPadding(topPadding, BottomContentInset), modifier = Modifier.fillMaxSize().testTag("library.artists")) {
+            gridGroups(groups, R.string.library_all_artists, control, { it.id }, ARTIST_ROW_CELL) { artist, modifier -> Card(artist, modifier) }
+            val count = if (state.known) state.total else SKELETON_COUNT
+            items(count, contentType = { i -> if (state.item(i, client.artistPages.pageSize) == null) "skeleton" else "artist" }) { i ->
+                val artist = state.item(i, client.artistPages.pageSize)
+                if (state.known) SideEffect { client.artistPages.ensure(key, i) }
+                if (artist == null) ArtistCardSkeleton() else Card(artist, Modifier)
+            }
         }
+        FastScrollbar(grid, Modifier.align(Alignment.TopEnd), top = topPadding, bottom = BottomContentInset)
     }
 }
 
@@ -321,6 +328,7 @@ internal fun PlaylistsTab(serverId: String, control: SortControl, open: (DetailT
             if (sorted == null) items(SKELETON_COUNT, contentType = { "skeleton" }) { TrackRowSkeleton() }
             else items(sorted, key = { it.id }, contentType = { "playlist" }) { p -> Item(p, Modifier.animateItem().testTag("library.playlist")) }
         }
+        FastScrollbar(listState, Modifier.align(Alignment.TopEnd), top = topPadding, bottom = BottomContentInset)
     }
 }
 
@@ -420,6 +428,7 @@ internal fun SongsTab(serverId: String, sort: SortOrder, descending: Boolean, na
                 } else TrackRowSkeleton()
             }
         }
+        FastScrollbar(listState, Modifier.align(Alignment.TopEnd), top = topPadding, bottom = BottomContentInset)
     }
 }
 
@@ -459,6 +468,7 @@ internal fun GenresTab(serverId: String, control: SortControl, open: (DetailTarg
             if (sorted == null) items(SKELETON_COUNT, contentType = { "skeleton" }) { TrackRowSkeleton(showArtwork = false) }
             else items(sorted, key = { it.name }, contentType = { "genre" }) { g -> GenreRow(g, onClick = { open(DetailTarget.Genre(g.name)) }, modifier = Modifier.animateItem().testTag("library.genre")) }
         }
+        FastScrollbar(listState, Modifier.align(Alignment.TopEnd), top = topPadding, bottom = BottomContentInset)
     }
 }
 
