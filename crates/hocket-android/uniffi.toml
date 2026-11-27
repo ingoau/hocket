@@ -2,6 +2,3 @@
 package_name = "app.hocket.core.ffi"
 cdylib_name = "hocket_android"
 android = true
-# The glue and the native library always come from one `scripts/gen-bindings.sh` run, so the
-# per-function checksum calls at load time can never catch a mismatch.
-omit_checksums = true

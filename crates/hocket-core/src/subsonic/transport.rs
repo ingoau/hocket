@@ -217,14 +217,28 @@ impl ReqwestTransport {
                 .user_agent(user_agent)
                 .connect_timeout(std::time::Duration::from_secs(15))
                 .redirect(reqwest::redirect::Policy::none())
-                .use_preconfigured_tls(shared_tls(false))
         };
         let build_err = |e: reqwest::Error| TransportError::Network(e.without_url().to_string());
         // API answers (JSON) come compressed when the server can: a sync's
         // pages shrink several times over. Downloads stay byte-exact: their
         // lengths, ranges and resumes count the file's own bytes.
-        let client = base().timeout(timeout).build().map_err(build_err)?;
+        //
+        // API calls may share one HTTP/2 connection. Every call then rides it, so a connection
+        // that goes dead without a reset (a black-holed Wi-Fi uplink, lost NAT state) is found
+        // by a ping within ~25 s instead of stalling each call until TCP gives up. No pings
+        // while idle: an idle app sends nothing.
+        let client = base()
+            .use_preconfigured_tls(shared_tls(false))
+            .http2_keep_alive_interval(Some(std::time::Duration::from_secs(15)))
+            .http2_keep_alive_timeout(std::time::Duration::from_secs(10))
+            .timeout(timeout)
+            .build()
+            .map_err(build_err)?;
+        // Downloads (tracks, covers) stay on HTTP/1.1, a connection each, as before: parallel
+        // track downloads keep their own congestion windows on a lossy link.
         let download_client = base()
+            .use_preconfigured_tls(shared_tls(true))
+            .http1_only()
             .read_timeout(timeout)
             .no_gzip()
             .no_brotli()

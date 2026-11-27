@@ -57,12 +57,17 @@ impl Actor {
         let Some(scope) = self.scope.clone() else {
             return;
         };
-        let put: Vec<_> = self
-            .album_resumes
-            .iter()
-            .filter(|e| albums.contains(&e.album_id.as_str()))
-            .collect();
-        let result = self.db.album_resumes_write(&scope, &put, removed);
+        let result = if self.album_resume_resave {
+            self.db.album_resumes_replace(&scope, &self.album_resumes)
+        } else {
+            let put: Vec<_> = self
+                .album_resumes
+                .iter()
+                .filter(|e| albums.contains(&e.album_id.as_str()))
+                .collect();
+            self.db.album_resumes_write(&scope, &put, removed)
+        };
+        self.album_resume_resave = result.is_err();
         if let Err(e) = result {
             self.log("warn", format!("album resume: couldn't save: {e}"));
         }

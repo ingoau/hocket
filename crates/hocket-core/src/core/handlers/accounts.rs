@@ -1169,9 +1169,6 @@ impl Actor {
             self.apply_job_holds();
             return;
         }
-        if let Some(d) = &mut self.discovery {
-            d.network_changed();
-        }
         let Some(state) = next else {
             // Offline mode off before the platform reported any network:
             // back to "unknown", which the core treats as online.

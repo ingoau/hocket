@@ -157,9 +157,6 @@ pub trait Discovery: Send {
     ) -> Result<(), DiscoveryError>;
     fn advertise(&mut self, advert: Option<PeerAdvert>) -> Result<(), DiscoveryError>;
     fn stop(&mut self);
-    /// The platform reported a different network: pick up its interfaces now rather than
-    /// at the next periodic check.
-    fn network_changed(&mut self) {}
 }
 
 /// A discovery that never finds anyone: the headless coordinator, or LAN
@@ -186,13 +183,7 @@ pub use mdns_impl::MdnsDiscovery;
 #[cfg(feature = "mdns")]
 mod mdns_impl {
     use super::*;
-    use mdns_sd::{IfKind, ServiceDaemon, ServiceEvent, ServiceInfo};
-
-    /// How often the daemon re-lists the interfaces on its own (its default is every 5 s).
-    /// A network change the platform reports picks them up at once
-    /// ([`Discovery::network_changed`]); this catches the rest, such as an address that
-    /// changed on the same network, or an interface that went away.
-    const IP_CHECK_INTERVAL_SECS: u32 = 60;
+    use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 
     /// mDNS over `mdns-sd`. Browses on a background thread that forwards
     /// resolved/removed services onto the tokio channel.
@@ -216,9 +207,6 @@ mod mdns_impl {
         fn daemon(&mut self) -> Result<&ServiceDaemon, DiscoveryError> {
             if self.daemon.is_none() {
                 let d = ServiceDaemon::new().map_err(|e| DiscoveryError::Mdns(e.to_string()))?;
-                if let Err(e) = d.set_ip_check_interval(IP_CHECK_INTERVAL_SECS) {
-                    tracing::debug!(error = %e, "mdns: ip check interval");
-                }
                 self.daemon = Some(d);
             }
             Ok(self.daemon.as_ref().expect("just set"))
@@ -305,16 +293,6 @@ mod mdns_impl {
                 .map_err(|e| DiscoveryError::Mdns(e.to_string()))?;
             self.registered = Some(fullname);
             Ok(())
-        }
-
-        fn network_changed(&mut self) {
-            if let Some(d) = &self.daemon {
-                // Re-applies the interface selection to the interfaces there are now,
-                // which binds (and announces on) any new one, as the periodic check does.
-                if let Err(e) = d.enable_interface(IfKind::All) {
-                    tracing::debug!(error = %e, "mdns: refresh interfaces");
-                }
-            }
         }
 
         fn stop(&mut self) {

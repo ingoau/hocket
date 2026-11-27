@@ -129,7 +129,11 @@ fn slim_session(doc: &mut hocket_core::api::SessionDocument) {
     if let Some(context) = &mut doc.context {
         context.tracks = Vec::new();
     }
-    for saved in &mut doc.saved_queues {
+    slim_saved(&mut doc.saved_queues);
+}
+
+fn slim_saved(queues: &mut [hocket_core::api::SavedQueue]) {
+    for saved in queues {
         saved.history = Vec::new();
         saved.upcoming = Vec::new();
         saved.context.tracks = Vec::new();
@@ -139,6 +143,7 @@ fn slim_session(doc: &mut hocket_core::api::SessionDocument) {
 fn slim(event: &mut Event) {
     match event {
         Event::SessionChanged { document } => slim_session(document),
+        Event::SavedQueuesChanged { queues } => slim_saved(queues),
         Event::Started { snapshot } | Event::Snapshot { snapshot } => {
             if let Some(doc) = &mut snapshot.session {
                 slim_session(doc);

@@ -158,6 +158,7 @@ import app.hocket.ui.theme.ArtworkColors
 import app.hocket.ui.theme.Motion
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 
 /**
  * The full player (#40's prototypes, made Material 3 Expressive). Top to bottom:
@@ -1153,14 +1154,26 @@ private fun MarqueeText(text: String, style: androidx.compose.ui.text.TextStyle,
         offset.snapTo(0f)
         if (!overflows || !running) return@LaunchedEffect
         val distance = (textWidth + spacing).toFloat()
-        // Hidden, it holds (no frames): a pass part way through goes on at the same speed from
-        // where it stopped; one in its wait waits afresh.
+        val passMs = distance / speed * 1000
+        val cycleMs = MARQUEE_DELAY_MS + passMs
+        val origin = android.os.SystemClock.uptimeMillis()
+        // Hidden, it draws no frames; shown again, it picks up where its wait-and-pass cycle,
+        // counted from the start, has got to, as if it had been running all along.
         snapshotFlow { currentShown() }.collectLatest { visible ->
             if (!visible) return@collectLatest
+            val t = (android.os.SystemClock.uptimeMillis() - origin) % cycleMs
+            var wait = 0L
+            if (t < MARQUEE_DELAY_MS) {
+                offset.snapTo(0f)
+                wait = (MARQUEE_DELAY_MS - t).roundToLong()
+            } else {
+                offset.snapTo((t - MARQUEE_DELAY_MS) / passMs * distance)
+            }
             while (true) {
-                if (offset.value == 0f) kotlinx.coroutines.delay(MARQUEE_DELAY_MS)
+                if (wait > 0) kotlinx.coroutines.delay(wait)
                 offset.animateTo(distance, tween(((distance - offset.value) / speed * 1000).roundToInt(), easing = LinearEasing))
                 offset.snapTo(0f)
+                wait = MARQUEE_DELAY_MS
             }
         }
     }

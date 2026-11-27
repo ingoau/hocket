@@ -237,15 +237,17 @@ pub(crate) struct Actor {
     pub library_records: Vec<crate::library::LibraryRecord>,
     /// Track and position the next local load should land on (album resume).
     pub pending_resume_at: Option<(TrackRef, Ms)>,
+    /// An album resume write failed: the next one rewrites the whole set, so a lost row
+    /// heals as the old whole-list save did.
+    pub album_resume_resave: bool,
     /// When the oldest offered album resume point expires (re-announced from the tick).
     pub album_resume_expires_at: Option<crate::api::EpochMs>,
-    /// The last `TransportChanged`, `MediaSession`, `DevicesChanged` and
-    /// `QueueChanged` sent: one that would only repeat it is not sent (see
+    /// The last `TransportChanged`, `MediaSession` and `DevicesChanged`
+    /// sent: one that would only repeat it is not sent (see
     /// [`Actor::emit_transport_state`]).
     pub emitted_transport: Option<TransportState>,
     pub emitted_media_session: Option<MediaSessionState>,
     pub emitted_devices: Option<Vec<DeviceInfo>>,
-    pub emitted_queue: Option<QueueView>,
     /// Plays waiting for the session's scrobble verdict (mirrors the durable
     /// [`super::state::PendingScrobble`] records of the open scope).
     pub pending_submits: HashMap<(TrackRef, u64), super::state::PendingScrobble>,
@@ -596,11 +598,11 @@ impl Actor {
             album_resumes: vec![],
             library_records: vec![],
             pending_resume_at: None,
+            album_resume_resave: false,
             album_resume_expires_at: None,
             emitted_transport: None,
             emitted_media_session: None,
             emitted_devices: None,
-            emitted_queue: None,
             pending_submits: HashMap::new(),
             plays_sync: Default::default(),
             pending_cas: HashMap::new(),
@@ -1029,7 +1031,6 @@ impl Actor {
                 document: doc.clone(),
             });
         }
-        self.emitted_queue = Some(snapshot.queue.clone());
         self.emit(Event::QueueChanged {
             queue: snapshot.queue.clone(),
         });

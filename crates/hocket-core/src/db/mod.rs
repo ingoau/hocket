@@ -388,6 +388,20 @@ impl Db {
         })
     }
 
+    /// Replace all of `scope`'s rows with `entries`: the whole set, after a write that failed.
+    pub fn album_resumes_replace(&self, scope: &str, entries: &[AlbumResumeEntry]) -> DbResult<()> {
+        self.with_tx(|tx| {
+            tx.execute("DELETE FROM album_resumes WHERE scope = ?1", [scope])?;
+            for e in entries {
+                tx.execute(
+                    "INSERT INTO album_resumes(scope, album_id, json) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![scope, e.album_id, serde_json::to_string(e)?],
+                )?;
+            }
+            Ok(())
+        })
+    }
+
     /// Drop every mirror table's rows for a server (server removed / forced re-sync).
     pub fn clear_mirror(&self, server_id: &str) -> DbResult<()> {
         self.with_tx(|tx| {
@@ -832,6 +846,11 @@ mod tests {
             db.album_resumes_get("other").unwrap(),
             vec![list[1].clone()]
         );
+
+        // After a failed write the whole set is written again, dropping what's gone.
+        db.album_resumes_replace("sc", std::slice::from_ref(&list[1]))
+            .unwrap();
+        assert_eq!(db.album_resumes_get("sc").unwrap(), vec![list[1].clone()]);
     }
 
     #[test]

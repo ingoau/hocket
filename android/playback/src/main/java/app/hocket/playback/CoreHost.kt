@@ -142,8 +142,8 @@ object CoreHost {
         _credentialsReplayed.value = false
         replayJob?.cancel()
         // UNDISPATCHED: the collector is subscribed before Start is dispatched, so the first
-        // `Started` cannot slip past it. Both collectors run inline on the core's event thread
-        // (Unconfined) and hop to Default only for the few events they act on, so position ticks
+        // `Started` cannot slip past it. Both collectors run inline on whichever thread delivers
+        // events (Unconfined: the event pump's worker for the native core) and hop to Default only for the few events they act on, so position ticks
         // and progress never wake a pool thread here.
         replayJob = scope.launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) { replayCredentials(core, store, Dispatchers.Default) }
         ytmJsJob?.cancel()
