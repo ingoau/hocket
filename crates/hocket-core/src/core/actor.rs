@@ -1132,6 +1132,7 @@ impl Actor {
         if !self.started {
             return;
         }
+        self.check_preview_handoff();
         self.hot.store(
             self.playback.playing
                 || self.playback.buffering

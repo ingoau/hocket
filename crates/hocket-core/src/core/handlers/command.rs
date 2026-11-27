@@ -15,7 +15,10 @@ impl Actor {
         // main playback first: the command itself is what the user asked
         // for. Restoring and then toggling would pause a track the user
         // had just heard as paused.
-        if super::preview::command_ends_preview(&cmd) {
+        // Playing the song being previewed carries it on from the preview.
+        if super::preview::command_ends_preview(&cmd)
+            && !(super::preview::command_plays_from_preview(&cmd) && self.begin_preview_handoff())
+        {
             self.stop_preview(false);
         }
         match cmd {

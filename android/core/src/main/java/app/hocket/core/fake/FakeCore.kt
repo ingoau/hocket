@@ -807,6 +807,9 @@ class FakeCore(
     private fun handle(c: Command) {
         // Like the real core: a transport command takes the output back from a preview, without
         // giving back what the preview paused (the command is what was asked for).
+        // Playing the song being previewed carries it on from the preview (the real core hands it
+        // over to the main player): where the preview had got to, for the play below.
+        handedOver = preview?.takeIf { c is Command.PlayContext || c is Command.PlayTracks }?.let { it.trackId to previewPositionMs(it).toLong() }
         if (preview != null && endsPreview(c)) previewStop(false)
         when (c) {
             Command.Start, Command.RequestSnapshot -> {
@@ -898,7 +901,7 @@ class FakeCore(
                 val resolved = resolveContext(a.context)
                 val (tracks, start) = filterSnoozed(a.context.kind, resolved, a.startIndex?.toInt())
                 setContext(a.context, tracks, start ?: 0, a.shuffle)
-                startPlayback(0, true)
+                startPlayback(handedOverAt(a.startPositionMs?.toLong() ?: 0), true)
                 pushUndo("Play ${a.context.label}") { restoreSession(before) }
                 emitQueue(); emitTransport()
             }
@@ -906,7 +909,7 @@ class FakeCore(
                 val before = captureSession()
                 saveOutgoingQueue()
                 setContext(QueueContext(serverId, ContextKind.AdHoc(ContextKindAdHocInner(c.data.label)), c.data.label, SortOrder.Default, c.data.tracks), c.data.tracks.map { it.id }, c.data.start_index.toInt(), c.data.shuffle)
-                startPlayback(c.data.start_position_ms?.toLong() ?: 0, true)
+                startPlayback(handedOverAt(c.data.start_position_ms?.toLong() ?: 0), true)
                 pushUndo("Play ${c.data.label}") { restoreSession(before) }
                 emitQueue(); emitTransport()
             }
@@ -1715,6 +1718,12 @@ class FakeCore(
         previewHeld = false
         previewWasPlaying = false
     }
+
+    private var handedOver: Pair<String, Long>? = null
+
+    /** Where a play starts: the preview's position when it starts on the song that was previewed. */
+    private fun handedOverAt(otherwise: Long): Long =
+        handedOver?.takeIf { it.first == currentTrack()?.id }?.second ?: otherwise
 
     private fun previewPositionMs(current: PreviewState): UInt {
         val extra = if (current.playing) (now() - current.takenAt).coerceAtLeast(0.0) else 0.0
