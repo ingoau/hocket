@@ -111,6 +111,7 @@ import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -148,6 +149,8 @@ import app.hocket.ui.components.formatClock
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.lyrics.LyricsPage
 import app.hocket.ui.queue.QueueList
+import app.hocket.ui.queue.mostRecentOtherQueue
+import app.hocket.ui.components.rememberHoldModifier
 import app.hocket.ui.theme.ArtworkColors
 import app.hocket.ui.theme.Motion
 import kotlin.math.abs
@@ -1186,8 +1189,9 @@ private val MARQUEE_FADE = 16.dp
 
 /**
  * The row under the transport (#40): the queue's name as a split button (the name opens the queue,
- * filled with the accent while it is shown; the chevron opens the queue switcher), the device
- * switcher ([DeviceButton]), lyrics (a toggle, filled while shown) and the song menu.
+ * filled with the accent while it is shown; the chevron opens the queue switcher; holding either
+ * switches to the last queue, the most recently played saved one), the device switcher
+ * ([DeviceButton]), lyrics (a toggle, filled while shown) and the song menu.
  */
 @Composable
 private fun PlayerActions(mode: PlayerMode, onMode: (PlayerMode) -> Unit, switcherOpen: Boolean, onSwitchQueue: () -> Unit, onConnect: () -> Unit, onMore: () -> Unit, modifier: Modifier = Modifier) {
@@ -1202,6 +1206,14 @@ private fun PlayerActions(mode: PlayerMode, onMode: (PlayerMode) -> Unit, switch
     val queueDesc = stringResource(R.string.player_queue_a11y, name)
     val switchLabel = stringResource(R.string.player_switch_queue)
     val lyricsLabel = stringResource(R.string.player_mode_lyrics)
+    val saved by client.savedQueues.collectAsStateWithLifecycle()
+    val lastQueue = mostRecentOtherQueue(saved, queue.savedQueueId)
+    val lastQueueLabel = stringResource(R.string.player_switch_last_queue)
+    val switchToLast = { lastQueue?.let { client.dispatch(Commands.restoreSavedQueue(it.id)) } }
+    // Armed only when there is a queue to switch to: otherwise a hold is an ordinary press.
+    val hold = rememberHoldModifier(lastQueue != null) { switchToLast() }
+    // TalkBack: the same switch as a long-press action on both halves.
+    val lastQueueSemantics = Modifier.semantics { if (lastQueue != null) onLongClick(lastQueueLabel) { switchToLast(); true } }
     Row(modifier.fillMaxWidth().height(48.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         val colors = if (queueShown) ButtonDefaults.buttonColors() else ButtonDefaults.filledTonalButtonColors()
         SplitButtonLayout(
@@ -1209,8 +1221,8 @@ private fun PlayerActions(mode: PlayerMode, onMode: (PlayerMode) -> Unit, switch
                 SplitButtonDefaults.LeadingButton(
                     onClick = { onMode(if (queueShown) PlayerMode.Artwork else PlayerMode.Queue) },
                     colors = colors,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("player.mode.queue")
-                        .semantics { contentDescription = queueDesc; selected = queueShown },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).then(hold).testTag("player.mode.queue")
+                        .semantics { contentDescription = queueDesc; selected = queueShown }.then(lastQueueSemantics),
                 ) {
                     // The queue's glyph at the segment's start (filled while the queue shows), then
                     // its name, start-aligned: a long name ends in an ellipsis, never moving the glyph.
@@ -1233,7 +1245,7 @@ private fun PlayerActions(mode: PlayerMode, onMode: (PlayerMode) -> Unit, switch
                     checked = switcherOpen,
                     onCheckedChange = { onSwitchQueue() },
                     colors = colors,
-                    modifier = Modifier.heightIn(min = 48.dp).testTag("player.switchQueue").semantics { contentDescription = switchLabel },
+                    modifier = Modifier.heightIn(min = 48.dp).then(hold).testTag("player.switchQueue").semantics { contentDescription = switchLabel }.then(lastQueueSemantics),
                 ) {
                     // Up: the switcher opens upwards, as a sheet.
                     Icon(HocketIcons.Filled.KeyboardArrowDown, null, Modifier.size(SplitButtonDefaults.TrailingIconSize).graphicsLayer { rotationZ = 180f + turn })

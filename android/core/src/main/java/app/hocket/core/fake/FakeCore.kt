@@ -421,7 +421,7 @@ class FakeCore(
         val entries = (from until to).mapNotNull { i -> entry(list[i], hasCurrent && i > ptr && i <= ptr + group) }
         val wrapNext = list.firstOrNull()?.takeIf { repeat == RepeatMode.All && upcoming.isEmpty() && hasCurrent }?.let { entry(it) }
         val back = list.getOrNull(ptr - 1)?.let { entry(it) } ?: list.lastOrNull()?.takeIf { repeat == RepeatMode.All && ptr == 0 && list.size > 1 }?.let { entry(it) }
-        return QueueView(context?.label, entries, from.toUInt(), list.size.toUInt(), ptr.coerceAtMost(list.size).toUInt(), ptr.takeIf { hasCurrent }?.toUInt(),
+        return QueueView(context?.label, currentSaved()?.id, entries, from.toUInt(), list.size.toUInt(), ptr.coerceAtMost(list.size).toUInt(), ptr.takeIf { hasCurrent }?.toUInt(),
             group.toUInt(), upcoming.size.toUInt(), current?.let { entry(it) }, shuffle, repeat, autoplay, wrapNext, back)
     }
 
@@ -692,9 +692,16 @@ class FakeCore(
         return SavedQueue(newId("sq"), ctx, p.name, emptyList(), null, emptyList(), false, RepeatMode.Off, 12_000u, pinned, now() - 86_400_000.0, now() - 3_600_000.0, now(), p.songCount, p.coverArt)
     }
 
-    private fun saveOutgoingQueue() {
+    /** The saved queue holding the playing context (the core's `QueueView.savedQueueId`); a pinned one first. */
+    private fun currentSaved(): SavedQueue? {
+        val kind = context?.kind ?: return null
+        return savedQueues.firstOrNull { it.context.kind == kind && it.pinned } ?: savedQueues.firstOrNull { it.context.kind == kind }
+    }
+
+    /** Snapshots the playing queue; [pinning] saves it even when nothing has been played from it yet. */
+    private fun saveOutgoingQueue(pinning: Boolean = false) {
         val ctx = context ?: return
-        if (contextTracks.size < 2 || (history.isEmpty() && playedMs == 0L && positionNow() < 5_000)) return
+        if (contextTracks.size < 2 || (!pinning && history.isEmpty() && playedMs == 0L && positionNow() < 5_000)) return
         val key = ctx.kind
         savedQueues.removeAll { it.context.kind == key && !it.pinned }
         val summaryCtx = if (ctx.kind is ContextKind.AdHoc) ctx else ctx.copy(tracks = emptyList())
@@ -944,7 +951,14 @@ class FakeCore(
 
             is Command.RestoreSavedQueue -> restoreSaved(c.data.id)
             is Command.PinSavedQueue -> { val i = savedQueues.indexOfFirst { it.id == c.data.id }; if (i >= 0) { savedQueues[i] = savedQueues[i].copy(pinned = c.data.pinned, updatedAt = now()); emitSaved() } }
-            is Command.DeleteSavedQueue -> { savedQueues.removeAll { it.id == c.data.id }; emitSaved() }
+            is Command.DeleteSavedQueue -> { savedQueues.removeAll { it.id == c.data.id }; emitSaved(); emitQueue() }
+            is Command.PinCurrentQueue -> {
+                if (c.data.pinned && currentSaved() == null) saveOutgoingQueue(pinning = true)
+                val i = currentSaved()?.let { savedQueues.indexOf(it) } ?: -1
+                if (i >= 0 && savedQueues[i].pinned != c.data.pinned) savedQueues[i] = savedQueues[i].copy(pinned = c.data.pinned, updatedAt = now())
+                emitSaved(); emitQueue()
+            }
+            Command.ClearSavedQueues -> { savedQueues.removeAll { !it.pinned }; emitSaved(); emitQueue() }
             is Command.RenameQueue -> {
                 val label = c.data.label.trim()
                 if (label.isNotEmpty()) {

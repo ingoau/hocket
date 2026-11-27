@@ -468,6 +468,7 @@
     <string name="saved_restore">Restore</string>
     <string name="saved_pin">Pin</string>
     <string name="saved_unpin">Unpin</string>
+    <string name="saved_clear_recent">Clear recent queues</string>
     <plurals name="saved_tracks">
         <item quantity="one">%1$d track</item>
         <item quantity="other">%1$d tracks</item>

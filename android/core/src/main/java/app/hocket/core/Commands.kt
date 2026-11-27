@@ -70,6 +70,10 @@ object Commands {
     fun restoreSavedQueue(id: String) = Command.RestoreSavedQueue(CommandRestoreSavedQueueInner(id))
     fun pinSavedQueue(id: String, pinned: Boolean) = Command.PinSavedQueue(CommandPinSavedQueueInner(id, pinned))
     fun deleteSavedQueue(id: String) = Command.DeleteSavedQueue(CommandDeleteSavedQueueInner(id))
+    /** Pins the playing queue (saving it first when it has no saved entry), or unpins its entry. */
+    fun pinCurrentQueue(pinned: Boolean) = Command.PinCurrentQueue(CommandPinCurrentQueueInner(pinned))
+    /** Removes every unpinned saved queue (undoable). */
+    val clearSavedQueues: Command get() = Command.ClearSavedQueues
     /** Renames a saved queue, or the playing one when [savedQueueId] is null; a blank label is ignored. */
     fun renameQueue(savedQueueId: String?, label: String) = Command.RenameQueue(CommandRenameQueueInner(savedQueueId, label))
     fun saveQueueAsPlaylist(savedQueueId: String?, name: String) =

@@ -21,6 +21,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.Commands
@@ -73,6 +74,30 @@ class FullPlayerLayoutTest {
         compose.onNodeWithTag("nowPlaying.sheet").performSemanticsAction(SemanticsActions.Expand)
         compose.waitUntil(5_000) { exists("player.playPause") }
         compose.waitForIdle()
+    }
+
+    /** Holding the queue's name or its chevron switches to the last queue, without opening either. */
+    @Test
+    fun holdingTheQueueButtonOrTheSwitcherSwitchesToTheLastQueue() {
+        startExpanded()
+        fun last() = app.hocket.ui.queue.mostRecentOtherQueue(core.client.savedQueues.value, core.client.queue.value.savedQueueId)
+        compose.waitUntil(5_000) { last() != null }
+        val first = last()!!
+        compose.onNodeWithTag("player.mode.queue").performTouchInput { longClick() }
+        compose.waitUntil(5_000) { core.client.queue.value.contextLabel == first.label }
+        compose.mainClock.advanceTimeBy(1_500)
+        compose.waitForIdle()
+        assertTrue("the queue didn't open", !exists("queue.list"))
+        compose.waitUntil(5_000) { last() != null }
+        val second = last()!!
+        compose.onNodeWithTag("player.switchQueue").performTouchInput { longClick() }
+        compose.waitUntil(5_000) { core.client.queue.value.contextLabel == second.label }
+        compose.mainClock.advanceTimeBy(1_500)
+        compose.waitForIdle()
+        assertTrue("the switcher didn't open", !exists("queues.playing"))
+        // A plain tap still opens the queue.
+        tap("player.mode.queue")
+        compose.waitUntil(5_000) { exists("queue.list") }
     }
 
     @Test

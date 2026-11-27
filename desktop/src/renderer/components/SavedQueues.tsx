@@ -1,7 +1,8 @@
 // The Queues page, drilled into from the queue's name in the side panel: the
-// playing queue (rename, save as playlist) above the pinned and recent saved
-// queues, each with rename, pin and delete. Delete is immediate; the core
-// makes it undoable like any queue change. Restoring one returns to the queue.
+// playing queue (pin, rename, save as playlist) above the pinned and recent saved
+// queues, each with rename, pin and delete, and Recent with Clear. Delete and
+// Clear are immediate; the core makes them undoable like any queue change.
+// Restoring one returns to the queue.
 import { useEffect, useRef, useState } from "react";
 import { t } from "@shared/strings";
 import type { SavedQueue } from "@core/api";
@@ -21,6 +22,7 @@ export function SavedQueues() {
   const queues = useApp((s) => s.savedQueues);
   const label = useApp((s) => s.queue.contextLabel);
   const count = useApp((s) => s.queue.total);
+  const playingId = useApp((s) => s.queue.savedQueueId);
   const position = useApp((s) => (s.queue.currentIndex !== undefined ? s.queue.currentIndex + 1 : 0));
   const [renaming, setRenaming] = useState<string | null | undefined>(undefined);
   const d = bridge().dispatch;
@@ -38,6 +40,7 @@ export function SavedQueues() {
   const sorted = [...queues].sort((a, b) => b.lastInteractedAt - a.lastInteractedAt);
   const pinned = sorted.filter((q) => q.pinned);
   const recent = sorted.filter((q) => !q.pinned);
+  const playingPinned = !!queues.find((q) => q.id === playingId)?.pinned;
   // One grouped list per section: the first and last rows round their outer corners.
   const row = (q: SavedQueue) => (
     <li key={q.id} className="sq-row" onContextMenu={(e) => void openContextMenu(e, { type: "savedQueue", data: { id: q.id } }, { savedQueueId: q.id })} data-testid="saved-queue-row">
@@ -72,21 +75,30 @@ export function SavedQueues() {
           {position ? <Icon name="equalizer" size={22} /> : null}
         </div>
         <div className="sq-current-actions">
+          <button type="button" className={`btn sm sq-card-btn ${playingPinned ? "on" : ""}`} aria-pressed={playingPinned} disabled={!playingPinned && count <= 1} title={playingPinned ? t("savedQueues.unpinPlaying") : t("savedQueues.pinPlaying")} onClick={() => d({ type: "pinCurrentQueue", data: { pinned: !playingPinned } })} data-testid="saved-queues-current-pin"><Icon name="pin" size={18} filled={playingPinned} />{playingPinned ? t("savedQueues.unpin") : t("savedQueues.pin")}</button>
           <button type="button" className="btn sm sq-card-btn" disabled={count === 0} onClick={() => void executeAction("ui.saveQueueAsPlaylist")} data-testid="saved-queues-create-playlist"><Icon name="playlistAdd" size={18} />{t("savedQueues.createPlaylist")}</button>
           {label ? <button type="button" className="btn sm sq-card-btn" aria-label={t("savedQueues.renameNamed", { name: label })} onClick={() => setRenaming(null)} data-rename-for="" data-testid="saved-queues-current-rename"><Icon name="edit" size={18} />{t("savedQueues.rename")}</button> : null}
         </div>
       </div>
       {pinned.length ? <Group title={t("savedQueues.pinned")} id="sq-pinned">{pinned.map(row)}</Group> : null}
-      <Group title={t("savedQueues.recent")} id="sq-recent">{recent.map(row)}</Group>
+      <Group title={t("savedQueues.recent")} id="sq-recent"
+        action={recent.length ? <button type="button" className="btn ghost sm sq-clear" title={t("savedQueues.clearRecent")} aria-label={t("savedQueues.clearRecent")} onClick={() => d({ type: "clearSavedQueues" })} data-testid="saved-queues-clear">{t("savedQueues.clear")}</button> : null}>
+        {recent.map(row)}
+      </Group>
       {!recent.length ? <p className="sq-empty" data-testid="saved-queues-empty">{t("savedQueues.empty")}</p> : null}
     </div>
   );
 }
 
-function Group({ title, id, children }: { title: string; id: string; children: React.ReactNode }) {
+function Group({ title, id, action, children }: { title: string; id: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="sq-group">
-      <h3 className="sq-eyebrow" id={id}>{title}</h3>
+      {action ? (
+        <div className="sq-group-head">
+          <h3 className="sq-eyebrow" id={id}>{title}</h3>
+          {action}
+        </div>
+      ) : <h3 className="sq-eyebrow" id={id}>{title}</h3>}
       {Array.isArray(children) && children.length === 0 ? null : <ul className="plain-list sq-list" aria-labelledby={id}>{children}</ul>}
     </div>
   );

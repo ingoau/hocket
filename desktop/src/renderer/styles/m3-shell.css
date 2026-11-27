@@ -291,6 +291,9 @@
 .sq-card-btn { height: 36px; padding: 0 16px 0 12px; gap: 8px; border-radius: var(--shape-full); background: var(--state-selected); color: var(--accent-text); font-weight: 700; }
 .sq-card-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-text) 10%, var(--state-selected)); }
 .sq-card-btn:disabled { opacity: 0.6; }
+.sq-group-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; }
+.sq-group-head .sq-eyebrow { flex: 1; min-width: 0; }
+.sq-clear { margin: 0 2px 2px 0; color: var(--accent-text); font-weight: 700; }
 .sq-current .sq-rename { width: 100%; margin: -4px 0 0 -6px; height: 30px; background: color-mix(in srgb, #000 14%, var(--accent)); color: var(--accent-fg); border: none; box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent-fg) 80%, transparent); font-size: var(--fs-lg); font-weight: 700; padding: 0 6px; }
 .sq-list { display: flex; flex-direction: column; gap: 2px; }
 .queues-page .sq-row { margin: 0; display: flex; align-items: center; gap: 2px; padding: 0 6px 0 0; min-height: 52px; border-radius: var(--shape-xs); background: var(--surface-tonal-sunken); }

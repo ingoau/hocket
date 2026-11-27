@@ -143,6 +143,9 @@ Playing something new replaces the queue and the old one is kept. Snapshotting d
 | Dedupe | Keyed on context identity, so replaying an album bumps one entry rather than adding three. |
 | Pinned | Never expire and don't count toward the cap. Evicted only if the pinned queues alone exceed the byte budget (least recently used first), which keeps the document under the frame limit. |
 | Restore | Includes history and playback position, so you land mid-track with your back button intact. |
+| Pin the playing queue | The Queues page's playing-queue card has a Pin toggle (`PinCurrentQueue`): pinning saves the queue first if it has no entry yet. The queue view carries `savedQueueId`, the entry holding the playing context, so the UIs know whether it is pinned. |
+| Clear | Recent's header has Clear (`ClearSavedQueues`): it removes every unpinned entry at once, without asking; undo brings them back. |
+| Last queue | Holding the queue button or the queue switcher (Android: either half of the player's queue split button; desktop: the player bar's and the fullscreen pill's queue toggles and the queue selector) restores the most recently played saved queue other than the playing one. |
 | Sync | A last-write-wins set keyed on context identity; pin state rides along as another LWW field. |
 | Size | Most reference their context by ID. Ad-hoc contexts — a search result, an arbitrary selection — store the track list, so cap on total bytes (512 KiB, a protocol constant). A snapshot keeps the latest 200 history entries and at most 1,000 entries in all; past that it stores only the current entry and rebuilds the rest from the context on restore (shuffled again if it was shuffled). |
 

@@ -122,6 +122,8 @@ impl Actor {
             | Command::SkipUnavailable { .. }
             | Command::PinSavedQueue { .. }
             | Command::DeleteSavedQueue { .. }
+            | Command::PinCurrentQueue { .. }
+            | Command::ClearSavedQueues
             | Command::RenameQueue { .. }) => self.queue_command(c),
 
             // -- saved queues --

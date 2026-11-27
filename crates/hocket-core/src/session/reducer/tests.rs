@@ -1016,7 +1016,7 @@ fn a_long_queue_is_saved_by_reference_and_rebuilt_around_its_song() {
 fn saved_queue_management_ops() {
     let e = DeterministicEntropy::new(1);
     let d = play(&fresh(), &e, album("a", 3), Some(0), false);
-    let d = doc_of(QueueOp::SaveCurrentQueue { pinned: true }, &d, &e);
+    let d = doc_of(QueueOp::PinCurrentQueue { pinned: true }, &d, &e);
     assert!(d.saved_queues[0].pinned);
     let id = d.saved_queues[0].id.clone();
     let r = doc_of(
@@ -1055,6 +1055,46 @@ fn saved_queue_management_ops() {
         err(&x, &e, QueueOp::DeleteSavedQueue { id: id.clone() }),
         ReduceError::UnknownSavedQueue(id)
     );
+}
+
+#[test]
+fn pin_current_queue_toggles_its_entry_and_the_view_names_it() {
+    let e = DeterministicEntropy::new(1);
+    let d = play(&fresh(), &e, album("a", 3), Some(0), false);
+    assert_eq!(derive_window(&d, 1, 1).saved_queue_id, None);
+    // Unpinning a queue with no entry saves nothing.
+    let u = doc_of(QueueOp::PinCurrentQueue { pinned: false }, &d, &e);
+    assert!(u.saved_queues.is_empty());
+    let p = doc_of(QueueOp::PinCurrentQueue { pinned: true }, &d, &e);
+    assert_eq!(p.saved_queues.len(), 1);
+    assert!(p.saved_queues[0].pinned);
+    let id = p.saved_queues[0].id.clone();
+    assert_eq!(derive_window(&p, 1, 1).saved_queue_id, Some(id.clone()));
+    let u = doc_of(QueueOp::PinCurrentQueue { pinned: false }, &p, &e);
+    assert_eq!(u.saved_queues.len(), 1);
+    assert!(!u.saved_queues[0].pinned);
+    assert_eq!(u.saved_queues[0].id, id);
+    // Pinning again reuses the entry.
+    let r = doc_of(QueueOp::PinCurrentQueue { pinned: true }, &u, &e);
+    assert_eq!(r.saved_queues.len(), 1);
+    assert!(r.saved_queues[0].pinned);
+    // Another context playing: the view no longer names it.
+    let o = play(&r, &e, album("b", 3), Some(0), false);
+    assert_ne!(derive_window(&o, 1, 1).saved_queue_id, Some(id));
+}
+
+#[test]
+fn clear_saved_queues_keeps_the_pinned_ones() {
+    let e = DeterministicEntropy::new(1);
+    let d = play(&fresh(), &e, album("a", 3), Some(0), false);
+    let d = doc_of(QueueOp::PinCurrentQueue { pinned: true }, &d, &e);
+    let d = play(&d, &e, album("b", 3), Some(0), false);
+    let d = play(&d, &e, album("c", 3), Some(0), false);
+    assert_eq!(d.saved_queues.len(), 2, "a pinned, b recent");
+    let c = doc_of(QueueOp::ClearSavedQueues, &d, &e);
+    assert_eq!(c.saved_queues.len(), 1);
+    assert!(c.saved_queues[0].pinned);
+    assert_eq!(c.context, d.context);
 }
 
 // -- limits and the view -------------------------------------------------------

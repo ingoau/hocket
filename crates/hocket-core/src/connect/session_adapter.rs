@@ -152,7 +152,8 @@ pub fn to_queue_op(op: &SessionOp) -> Option<QueueOp> {
         SessionOp::SetContextTracks { tracks } => QueueOp::SetContextTracks {
             tracks: tracks.clone(),
         },
-        SessionOp::SaveCurrentQueue { pinned } => QueueOp::SaveCurrentQueue { pinned: *pinned },
+        SessionOp::PinCurrentQueue { pinned } => QueueOp::PinCurrentQueue { pinned: *pinned },
+        SessionOp::ClearSavedQueues => QueueOp::ClearSavedQueues,
         SessionOp::PinSavedQueue { id, pinned } => QueueOp::PinSavedQueue {
             id: id.clone(),
             pinned: *pinned,
@@ -384,7 +385,8 @@ mod tests {
                 tracks: None,
             },
             SessionOp::SetContextTracks { tracks: vec![] },
-            SessionOp::SaveCurrentQueue { pinned: true },
+            SessionOp::PinCurrentQueue { pinned: true },
+            SessionOp::ClearSavedQueues,
             SessionOp::PinSavedQueue {
                 id: "i".into(),
                 pinned: true,
