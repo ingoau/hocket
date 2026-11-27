@@ -100,6 +100,7 @@ import app.hocket.ui.components.ActionSheet
 import app.hocket.ui.components.Artwork
 import app.hocket.ui.components.Badge
 import app.hocket.ui.components.EmptyState
+import app.hocket.ui.components.FastScrollbar
 import app.hocket.ui.components.ContentMaxWidth
 import app.hocket.ui.components.adaptiveColumns
 import app.hocket.ui.components.contentMaxWidth
@@ -211,6 +212,8 @@ private fun DetailScaffold(
                             content()
                         }
                     }
+                    // A long playlist's thumb, under the bar and clear of the bottom chrome.
+                    FastScrollbar(listState, Modifier.align(Alignment.TopEnd), top = with(LocalDensity.current) { barBottom.toDp() }, bottom = BottomContentInset)
                     DetailTopBar(title, collapsed = collapsed, onBack = if (embedded) null else ({ nav.popBackStack() }), overArt = overArt, shade = look.immersive && pastShade && !collapsed,
                         // A card page: the bar fills in as soon as the tile reaches it.
                         filled = collapsed || (!look.immersive && scrolled), actions = barActions)
@@ -683,6 +686,7 @@ private fun ArtistSubPage(artist: String, title: String, count: String?, onBack:
                 }
                 content(width)
             }
+            FastScrollbar(listState, Modifier.align(Alignment.TopEnd), top = androidx.compose.foundation.layout.WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 64.dp, bottom = BottomContentInset)
             DetailTopBar(title, collapsed = collapsed, onBack = onBack, actions = {})
         }
     }
