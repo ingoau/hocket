@@ -132,7 +132,11 @@ fun LyricsBackground(coverArt: String?, animated: Boolean, visible: Boolean, mod
     if (Build.VERSION.SDK_INT >= 33) {
         val shader = remember(tex) {
             RuntimeShader(WARP_SHADER).also {
-                it.setInputShader("image", BitmapShader(tex, Shader.TileMode.MIRROR, Shader.TileMode.MIRROR))
+                // A shader handed to a RuntimeShader doesn't inherit the paint's bitmap filtering:
+                // left at FILTER_MODE_DEFAULT it samples nearest, and the 48 px texture showed as
+                // blocks across the screen. The warp shader's B-spline taps rely on it being linear.
+                val image = BitmapShader(tex, Shader.TileMode.MIRROR, Shader.TileMode.MIRROR).apply { filterMode = BitmapShader.FILTER_MODE_LINEAR }
+                it.setInputShader("image", image)
                 it.setFloatUniform("texSize", tex.width.toFloat(), tex.height.toFloat())
             }
         }
@@ -176,7 +180,26 @@ half4 main(float2 p) {
     float2 w = float2(sin(uv.y * 3.1 + t) * 0.09 + sin(uv.x * 2.3 - t * 0.7) * 0.05,
                       cos(uv.x * 2.7 - t) * 0.09 + sin(uv.y * 2.1 + t * 0.6) * 0.05);
     float2 q = 0.5 + (uv + w - 0.5) * 0.82;
-    return image.eval(q * texSize);
+    // Cubic B-spline sampling from four bilinear taps: the texture is stretched ~25-50x, where
+    // plain bilinear leaves visible creases along the texel grid.
+    float2 st = q * texSize - 0.5;
+    float2 i = floor(st);
+    float2 f = st - i;
+    float2 f2 = f * f;
+    float2 f3 = f2 * f;
+    float2 w0 = (1.0 - f) * (1.0 - f) * (1.0 - f) / 6.0;
+    float2 w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
+    float2 w3 = f3 / 6.0;
+    float2 w2 = 1.0 - w0 - w1 - w3;
+    float2 s0 = w0 + w1;
+    float2 s1 = w2 + w3;
+    float2 p0 = i - 0.5 + w1 / s0;
+    float2 p1 = i + 1.5 + w3 / s1;
+    float4 c = s0.x * s0.y * float4(image.eval(float2(p0.x, p0.y)))
+             + s1.x * s0.y * float4(image.eval(float2(p1.x, p0.y)))
+             + s0.x * s1.y * float4(image.eval(float2(p0.x, p1.y)))
+             + s1.x * s1.y * float4(image.eval(float2(p1.x, p1.y)));
+    return half4(c);
 }
 """
 
