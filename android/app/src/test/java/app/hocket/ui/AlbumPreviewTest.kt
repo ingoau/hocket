@@ -10,7 +10,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
-import androidx.compose.ui.test.swipe
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.swipeLeft
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.api.Track
@@ -39,24 +39,37 @@ class AlbumPreviewTest {
 
     private fun exists(tag: String) = compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()
 
+    /** Shows the album page while [shown] is true. */
+    private val shown = androidx.compose.runtime.mutableStateOf(true)
+
     private fun open(core: TestCore): List<Track> {
         val album = core.fake.library.albums.first { core.fake.library.albumTracks(it.id).size >= 3 }
         val tracks = core.fake.library.albumTracks(album.id)
-        compose.setThemedContent(core) { AlbumDetailScreen(androidx.navigation.compose.rememberNavController(), album.id) }
+        compose.setThemedContent(core) { if (shown.value) AlbumDetailScreen(androidx.navigation.compose.rememberNavController(), album.id) }
         core.start()
         compose.waitUntil(5_000) { compose.onAllNodesWithText(tracks[0].title).fetchSemanticsNodes().isNotEmpty() }
         compose.waitForIdle()
         return tracks
     }
 
-    private fun pull(dp: Float) {
+    /** A slow pull (no flick): only the distance decides. */
+    private fun pull(dp: Float, settle: Boolean = true) {
         compose.onRoot().performTouchInput {
             val from = Offset(width / 2f, height * 0.3f)
-            swipe(from, from + Offset(0f, dp * density), 400)
+            down(from)
+            val steps = 30
+            for (i in 1..steps) moveTo(from + Offset(0f, dp * density * i / steps), 40)
+            // Held still before letting go, so the release has no speed.
+            repeat(8) { moveBy(Offset.Zero, 40) }
+            up()
         }
-        compose.mainClock.advanceTimeBy(1_000)
-        compose.waitForIdle()
+        if (settle) {
+            compose.mainClock.advanceTimeBy(1_000)
+            compose.waitForIdle()
+        }
     }
+
+    private fun previewing(core: TestCore) = core.client.preview.value?.takeIf { it.playing }?.trackId
 
     @Test
     fun aPullPreviewsTheSongsAndPuttingItAwayGivesPlaybackBack() {
@@ -66,7 +79,7 @@ class AlbumPreviewTest {
         val playingId = core.client.nowPlaying.value?.track?.id
         assertNull(core.client.preview.value)
 
-        pull(260f)
+        pull(200f)
         assertTrue(exists("albumPreview.pager"))
         compose.waitUntil(5_000) { core.client.preview.value != null }
         // Opens on the playing song when it is this album's, else the first.
@@ -74,11 +87,13 @@ class AlbumPreviewTest {
         assertEquals(tracks.indexOfFirst { it.id == playingId }.coerceAtLeast(0), opened)
         assertTrue(opened < tracks.lastIndex)
         assertFalse("the preview pauses this device", core.client.transport.value.position.isPlaying)
+        assertEquals("the preview plays", tracks[opened].id, previewing(core))
 
         compose.onNodeWithTag("albumPreview.pager").performTouchInput { swipeLeft(startX = width * 0.7f, endX = width * 0.3f, durationMillis = 250) }
         compose.mainClock.advanceTimeBy(1_000)
         compose.waitForIdle()
-        compose.waitUntil(5_000) { core.client.preview.value?.trackId == tracks[opened + 1].id }
+        compose.waitUntil(5_000) { previewing(core) == tracks[opened + 1].id }
+        assertFalse(core.client.transport.value.position.isPlaying)
 
         compose.onNodeWithTag("albumPreview.close").performSemanticsAction(SemanticsActions.OnClick)
         compose.mainClock.advanceTimeBy(1_000)
@@ -87,6 +102,46 @@ class AlbumPreviewTest {
         assertFalse(exists("albumPreview"))
         compose.waitUntil(5_000) { core.client.transport.value.position.isPlaying }
         assertEquals(playingId, core.client.nowPlaying.value?.track?.id)
+    }
+
+    @Test
+    fun backPutsItAwayAndLeavingThePageStopsIt() {
+        val core = TestCore(startPlaying = true)
+        open(core)
+        compose.waitUntil(5_000) { core.client.transport.value.position.isPlaying }
+        pull(200f)
+        compose.waitUntil(5_000) { previewing(core) != null }
+        compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.waitForIdle()
+        assertNull(core.client.preview.value)
+        assertFalse(exists("albumPreview"))
+        compose.waitUntil(5_000) { core.client.transport.value.position.isPlaying }
+
+        // Open again, then the page goes away with it open: the preview stops, playback comes back.
+        pull(200f)
+        compose.waitUntil(5_000) { previewing(core) != null }
+        assertFalse(core.client.transport.value.position.isPlaying)
+        shown.value = false
+        compose.waitForIdle()
+        assertNull(core.client.preview.value)
+        compose.waitUntil(5_000) { core.client.transport.value.position.isPlaying }
+    }
+
+    @Test
+    fun aTapAsAShortPullSpringsBackStartsNothing() {
+        val core = TestCore(startPlaying = false)
+        open(core)
+        compose.mainClock.autoAdvance = false
+        pull(80f, settle = false)
+        compose.mainClock.advanceTimeBy(48)
+        // Where the docked card and its controls would be, while the cover is still on its way home.
+        compose.onRoot().performTouchInput { click(Offset(width / 2f, height * 0.35f)); click(Offset(width / 2f, height * 0.75f)) }
+        compose.mainClock.autoAdvance = true
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.waitForIdle()
+        assertFalse(exists("albumPreview"))
+        assertNull(core.client.preview.value)
     }
 
     @Test
@@ -102,7 +157,7 @@ class AlbumPreviewTest {
     fun playFromHerePlaysTheAlbumFromThatSong() {
         val core = TestCore(startPlaying = false)
         val tracks = open(core)
-        pull(260f)
+        pull(200f)
         compose.waitUntil(5_000) { core.client.preview.value != null }
         val previewed = core.client.preview.value!!.trackId
         compose.onNodeWithTag("albumPreview.playFrom").performSemanticsAction(SemanticsActions.OnClick)

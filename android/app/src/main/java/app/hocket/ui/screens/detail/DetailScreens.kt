@@ -192,7 +192,7 @@ private fun DetailScaffold(
         // bar's icons over the cover, then over the filled-in bar (on a phone: a wide layout's pane
         // shares the status bar with the list beside it).
         // The preview is dark (the player's blurred cover), whatever the header had under the status bar.
-        val previewUp by remember(preview) { androidx.compose.runtime.derivedStateOf { preview?.active == true } }
+        val previewUp by remember(preview) { androidx.compose.runtime.derivedStateOf { preview != null && (preview.open || preview.progress > 0.5f) } }
         if (!embedded) app.hocket.ui.nav.PageColors(look.scheme, statusLight = if (previewUp) false else overArt ?: !look.dark)
         MaterialTheme(colorScheme = look.scheme) {
             androidx.compose.runtime.CompositionLocalProvider(app.hocket.ui.theme.LocalDarkTheme provides look.dark, androidx.compose.material3.LocalContentColor provides look.scheme.onBackground) {
@@ -207,6 +207,7 @@ private fun DetailScaffold(
                                     onTitleBottom = { titleBottom = it },
                                     footer = heroFooter.takeIf { !loading },
                                     artModifier = { radius, size -> if (preview != null && !loading) Modifier.albumPreviewSource(preview, radius, size, previewLabel) else Modifier },
+                                    hideCover = { preview?.active == true },
                                     actions = { if (loading) { Box(Modifier.weight(1f).height(56.dp).skeleton(CircleShape)); Box(Modifier.weight(1f).height(56.dp).skeleton(CircleShape)) } else heroActions() },
                                 )
                             }

@@ -195,6 +195,9 @@ internal class AlbumPreviewState(private val scope: CoroutineScope) {
     /** The gesture began with the list at its top: only then does a pull bring the cover out. */
     internal var armed = false
 
+    /** Set by the overlay: stops the preview (closing, from wherever, stops it at once). */
+    internal var stopPreview: () -> Unit = {}
+
     private var settle: Job? = null
 
     /**
@@ -211,6 +214,8 @@ internal class AlbumPreviewState(private val scope: CoroutineScope) {
         val mark = if (open) CLOSE_AT else 1f
         if (before < mark && travel >= mark) haptics?.performHapticFeedback(if (open) HapticFeedbackType.SegmentTick else HapticFeedbackType.GestureThresholdActivate)
         else if (before >= mark && travel < mark) haptics?.performHapticFeedback(if (open) HapticFeedbackType.GestureThresholdActivate else HapticFeedbackType.SegmentFrequentTick)
+        // Pushed all the way back: no longer a pull, so the list's fling is its own again.
+        if (travel == 0f && !open) dragging = false
         return (travel - before) * pullPx
     }
 
@@ -236,7 +241,10 @@ internal class AlbumPreviewState(private val scope: CoroutineScope) {
     /** Put the cover back in the header. */
     fun close() {
         if (!active) return
-        if (open) haptics?.performHapticFeedback(HapticFeedbackType.GestureEnd)
+        if (open) {
+            haptics?.performHapticFeedback(HapticFeedbackType.GestureEnd)
+            stopPreview()
+        }
         open = false
         dragging = false
         settleTo(0f)
@@ -261,7 +269,8 @@ internal class AlbumPreviewState(private val scope: CoroutineScope) {
                 }
                 travel = target
             } finally {
-                settling = false
+                // A settle cancelled by the next one leaves the flag to it.
+                if (settle === coroutineContext[Job]) settling = false
             }
         }
     }
@@ -291,7 +300,7 @@ internal class AlbumPreviewPull(private val state: AlbumPreviewState) : NestedSc
     }
 
     override suspend fun onPreFling(available: Velocity): Velocity {
-        if (!state.dragging || state.open) return Velocity.Zero
+        if (!state.dragging || state.open || state.progress <= 0f) return Velocity.Zero
         state.release(available.y)
         return available
     }
@@ -352,12 +361,11 @@ internal fun BoxScope.AlbumPreviewOverlay(
     state.haptics = LocalHapticFeedback.current
     state.reducedMotion = LocalReducedMotion.current
     val active by remember(state) { derivedStateOf { state.active } }
-    BackHandler(enabled = active) { state.close() }
+    BackHandler(enabled = state.open) { state.close() }
     // Put away (or the page left with it open): stop the preview, which gives back what it paused.
-    LaunchedEffect(state) {
-        snapshotFlow { state.open }.drop(1).collect { if (!it) client.dispatch(Command.PreviewStop) }
-    }
+    state.stopPreview = { client.dispatch(Command.PreviewStop) }
     DisposableEffect(state) { onDispose { if (state.open) client.dispatch(Command.PreviewStop) } }
+    val requests = remember(client) { PreviewRequests(client) }
     if (!active || tracks.isEmpty()) return
 
     var hostOrigin by remember { mutableStateOf(Offset.Zero) }
@@ -395,9 +403,19 @@ internal fun BoxScope.AlbumPreviewOverlay(
 
         MaterialTheme(colorScheme = scheme) {
             CompositionLocalProvider(LocalContentColor provides scheme.onSurface, app.hocket.ui.theme.LocalDarkTheme provides true) {
-                PreviewCards(state, pager, tracks, coverArt, side, target, dismiss)
+              // Until it's open (on the way out after a short pull, or home after closing) nothing
+              // here takes a touch: the controls are invisible, and a tap must not start a preview.
+              Box(Modifier.matchParentSize().pointerInput(state) {
+                  awaitPointerEventScope {
+                      while (true) {
+                          val event = awaitPointerEvent(PointerEventPass.Initial)
+                          if (!state.open) event.changes.forEach { it.consume() }
+                      }
+                  }
+              }) {
+                PreviewCards(state, pager, tracks, coverArt, side, target, dismiss, requests)
                 FlyingCover(state, coverArt, target, hostOrigin)
-                PreviewInfo(state, pager, tracks, albumArtist, target, infoWidth, stillWave = saver.has(app.hocket.core.api.SaverFeature.StillSeekWave), onPlayFrom)
+                PreviewInfo(state, pager, tracks, albumArtist, target, infoWidth, stillWave = saver.has(app.hocket.core.api.SaverFeature.StillSeekWave), requests, onPlayFrom)
                 // A way out you can see, as well as back and the drag.
                 IconButton(
                     onClick = { state.close() },
@@ -405,8 +423,32 @@ internal fun BoxScope.AlbumPreviewOverlay(
                         .graphicsLayer { alpha = ((state.progress - 0.6f) / 0.4f).coerceIn(0f, 1f) }.testTag("albumPreview.close"),
                     enabled = state.open,
                 ) { Icon(HocketIcons.Filled.Close, stringResource(R.string.album_preview_close)) }
+              }
             }
         }
+    }
+}
+
+/**
+ * The previews this overlay asks for. Asking for the song that's already previewing toggles it, so
+ * a request still on its way is not repeated; one for another song still on its way doesn't count
+ * the song the core reports as already playing.
+ */
+private class PreviewRequests(private val client: CoreClient) {
+    private var requested: Pair<String, Long>? = null
+
+    fun ensure(t: Track) {
+        val r = requested
+        val fresh = r != null && SystemClock.uptimeMillis() - r.second < REQUEST_HOLD_MS
+        if (fresh) {
+            if (r!!.first == t.id) return
+        } else if (client.preview.value?.trackId == t.id) return
+        requested = t.id to SystemClock.uptimeMillis()
+        client.dispatch(Commands.previewStart(t.ref))
+    }
+
+    fun reset() {
+        requested = null
     }
 }
 
@@ -459,6 +501,7 @@ private fun FlyingCover(state: AlbumPreviewState, coverArt: String?, target: Rec
 private fun PreviewCards(
     state: AlbumPreviewState, pager: PagerState, tracks: List<Track>, coverArt: String?, side: Dp, target: Rect,
     dismiss: androidx.compose.foundation.gestures.DraggableState,
+    requests: PreviewRequests,
 ) {
     val client = LocalCoreClient.current
     val haptics = LocalHapticFeedback.current
@@ -515,7 +558,7 @@ private fun PreviewCards(
                     if (page != pager.currentPage) scope.launch { pager.animateScrollToPage(page) }
                     else {
                         haptics.performHapticFeedback(if (playing) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn)
-                        if (sample == null) client.dispatch(Commands.previewStart(track.ref)) else client.dispatch(Command.PreviewToggle)
+                        if (sample == null) requests.ensure(track) else client.dispatch(Command.PreviewToggle)
                     }
                 }
                 .semantics { contentDescription = label; stateDescription = position }
@@ -547,7 +590,8 @@ private fun PreviewCards(
 /** Under the docked card, as in the full player: the song, its preview's progress, the transport and Play from here; and what keeps the preview on the card in the middle. */
 @Composable
 private fun BoxScope.PreviewInfo(
-    state: AlbumPreviewState, pager: PagerState, tracks: List<Track>, albumArtist: String?, target: Rect, width: Dp, stillWave: Boolean, onPlayFrom: (Int) -> Unit,
+    state: AlbumPreviewState, pager: PagerState, tracks: List<Track>, albumArtist: String?, target: Rect, width: Dp, stillWave: Boolean,
+    requests: PreviewRequests, onPlayFrom: (Int) -> Unit,
 ) {
     val client = LocalCoreClient.current
     val haptics = LocalHapticFeedback.current
@@ -557,23 +601,12 @@ private fun BoxScope.PreviewInfo(
     val track = tracks[page]
     val sample = preview?.takeIf { it.trackId == track.id }
 
-    // The preview follows the card in the middle once the row settles. Asking for the song that's
-    // already previewing toggles it, so a request still on its way is not repeated.
-    var requested by remember { mutableStateOf<Pair<String, Long>?>(null) }
-    val ensure: (Track) -> Unit = { t ->
-        val current = client.preview.value
-        val r = requested
-        val inFlight = r != null && r.first == t.id && SystemClock.uptimeMillis() - r.second < REQUEST_HOLD_MS
-        if (current?.trackId != t.id && !inFlight) {
-            requested = t.id to SystemClock.uptimeMillis()
-            client.dispatch(Commands.previewStart(t.ref))
-        }
-    }
-    val currentEnsure by rememberUpdatedState(ensure)
+    val currentEnsure: (Track) -> Unit = requests::ensure
     var first by remember { mutableStateOf(true) }
+    // The preview follows the card in the middle once the row settles.
     LaunchedEffect(state.open, pager.settledPage) {
         if (!state.open) {
-            requested = null
+            requests.reset()
             first = true
             return@LaunchedEffect
         }
@@ -582,16 +615,24 @@ private fun BoxScope.PreviewInfo(
         first = false
         currentEnsure(tracks[pager.settledPage.coerceIn(0, tracks.lastIndex)])
     }
-    // Near a song's end, on to the next card (asked for first, so the preview never closes between them).
-    LaunchedEffect(sample, state.open) {
+    // Near a song's end, on to the next card (asked for first, so the preview never closes between
+    // them). On the last card it stops short and pauses back where it started: a preview that ran out
+    // would give playback back under the open preview. The scroll runs on its own, as the next
+    // song's report changes this effect's keys.
+    LaunchedEffect(sample?.trackId, sample?.playing, sample?.takenAt, state.open) {
         val s = sample ?: return@LaunchedEffect
-        if (!s.playing || !state.open || page >= tracks.lastIndex) return@LaunchedEffect
+        if (!s.playing || !state.open) return@LaunchedEffect
         val d = s.durationMs.toLong()
         if (d <= 0) return@LaunchedEffect
         val at = previewPositionMs(s.positionMs.toLong(), s.takenAt, true, d, client.now())
         delay((d - at - ADVANCE_EARLY_MS).coerceAtLeast(0))
-        currentEnsure(tracks[page + 1])
-        pager.animateScrollToPage(page + 1)
+        if (page < tracks.lastIndex) {
+            currentEnsure(tracks[page + 1])
+            scope.launch { pager.animateScrollToPage(page + 1) }
+        } else {
+            client.dispatch(Command.PreviewToggle)
+            client.dispatch(Commands.previewSeek((d * 0.3).toLong()))
+        }
     }
 
     val now by produceState(client.now(), sample?.playing, sample?.takenAt, sample?.positionMs) {
@@ -604,7 +645,8 @@ private fun BoxScope.PreviewInfo(
     val duration = sample?.durationMs?.toLong()?.takeIf { it > 0 } ?: track.durationMs.toLong()
     // Not started yet: where it will start (30% in, as the core opens a preview).
     val startAt = (duration * 0.3).toLong()
-    val position = if (sample != null) previewPositionMs(sample.positionMs.toLong(), sample.takenAt, sample.playing, duration, now) else startAt
+    // Read in the seek bar's lambda, so the clock's tick redraws the bar and nothing else.
+    val position = { if (sample != null) previewPositionMs(sample.positionMs.toLong(), sample.takenAt, sample.playing, duration, now) else startAt }
     val playing = sample?.playing == true
 
     Column(
@@ -623,7 +665,7 @@ private fun BoxScope.PreviewInfo(
         Spacer(Modifier.height(8.dp))
         key(track.id) {
             WavySeekBar(
-                position = { position }, durationMs = duration, playing = playing, stillWave = stillWave,
+                position = position, durationMs = duration, playing = playing, stillWave = stillWave,
                 onSeek = { ms ->
                     // Not started yet: start it, then seek (the core keeps a seek made before the song reports in).
                     if (sample == null) currentEnsure(track)

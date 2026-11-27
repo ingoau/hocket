@@ -47,11 +47,10 @@ import java.io.FileOutputStream
  * middle, two swipes move the preview on a song each, a drag on the seek bar, pause and play, then
  * a drag up puts the cover back and the song that was playing carries on. The finger is drawn as a
  * dot. For review by eye (stitch with ffmpeg at 60 fps); only runs with an output directory, and
- * wears real covers with HOCKET_COVERS (a folder of images, one per album in turn), classified as
- * the app does with HOCKET_HOST_LIB (the core built for the host). SDK 32, as ImmersiveScreenshotTest:
- * covers don't decode under Robolectric's SDK 35.
+ * wears real covers with HOCKET_COVERS (a folder of images, one per album in turn). SDK 32, as
+ * ImmersiveScreenshotTest: covers don't decode under Robolectric's SDK 35.
  *
- *     HOCKET_SCREENSHOT_DIR=/tmp/rec HOCKET_COVERS=/tmp/covers HOCKET_HOST_LIB=target/debug/libhocket_android.so ./gradlew :app:testDebugUnitTest --tests '*AlbumPreviewRecordingTest*' --rerun
+ *     HOCKET_SCREENSHOT_DIR=/tmp/rec HOCKET_COVERS=/tmp/covers ./gradlew :app:testDebugUnitTest --tests '*AlbumPreviewRecordingTest*' --rerun
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [32], application = android.app.Application::class, qualifiers = "w411dp-h891dp-xhdpi")
@@ -62,8 +61,6 @@ class AlbumPreviewRecordingTest {
 
     private fun env(name: String): String? = (System.getProperty(name) ?: System.getenv(name))?.takeIf { it.isNotBlank() }
     private val outDir: File? = env("HOCKET_SCREENSHOT_DIR")?.let(::File)
-    /** The core built for the host, for the real artwork classifier (immersive headers, a cover's colours); optional. */
-    private val lib = env("HOCKET_HOST_LIB")?.let(::File)?.takeIf { it.exists() }
     private val covers = env("HOCKET_COVERS")?.let { File(it).listFiles()?.filter { f -> f.isFile }?.sortedBy { f -> f.name } }.orEmpty()
 
     /** The fake core, with album `i` wearing cover `i` (round the folder). */
@@ -83,7 +80,6 @@ class AlbumPreviewRecordingTest {
         val out = outDir
         assumeTrue("set HOCKET_SCREENSHOT_DIR to write recording frames", out != null)
         dir = File(out!!, "album-preview").apply { mkdirs() }
-        if (lib != null) System.setProperty("uniffi.component.hocket_android.libraryOverride", lib.absolutePath)
         // One clock for the fake's samples and the UI's extrapolation: the test's frames, so a
         // preview advances 16 ms a frame however long a frame takes to draw.
         val t0 = System.currentTimeMillis().toDouble()
@@ -103,20 +99,19 @@ class AlbumPreviewRecordingTest {
                 CompositionLocalProvider(LocalCoreClient provides client, LocalFakeCoreBanner provides false) { AppRoot(client) }
             }
         }
-        // The clock by hand throughout: with real covers Home animates without end, so it never idles.
-        compose.mainClock.autoAdvance = false
         client.requestSnapshot()
-        until { client.started.value && exists("home.screen") }
+        compose.waitUntil(5_000) { client.started.value && exists("home.screen") }
         compose.onNodeWithTag("navBar.library").performSemanticsAction(SemanticsActions.OnClick)
-        until { exists("library.grid") }
+        compose.waitUntil(5_000) { exists("library.grid") }
         compose.onNodeWithTag("library.grid").performScrollToNode(hasTestTag("library.album"))
-        until { exists("library.album") }
+        compose.waitUntil(5_000) { exists("library.album") }
         settle()
         compose.onAllNodesWithTag("library.album").onFirst().performSemanticsAction(SemanticsActions.OnClick)
-        until { exists("detail.header") }
-        settle()
+        compose.waitUntil(5_000) { exists("detail.header") }
         settle()
 
+        // From here the clock goes by hand, a frame at a time.
+        compose.mainClock.autoAdvance = false
         frames(30)
         // Pull: slowly at first, past the threshold, then let go.
         val art = bounds("detail.artwork")
@@ -149,17 +144,8 @@ class AlbumPreviewRecordingTest {
             Thread.sleep(200)
             org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(400))
             compose.mainClock.advanceTimeBy(600)
+            compose.waitForIdle()
         }
-    }
-
-    private fun until(condition: () -> Boolean) {
-        repeat(100) {
-            if (condition()) return
-            Thread.sleep(20)
-            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(100))
-            compose.mainClock.advanceTimeBy(100)
-        }
-        error("timed out")
     }
 
     private fun density() = compose.activity.resources.displayMetrics.density
