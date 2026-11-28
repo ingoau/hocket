@@ -49,18 +49,18 @@ function useSlideAccents(slides: SpotlightSlide[]): Record<string, string | unde
  * accent, so the rest of Home can wear it; [onEmpty] says when there's nothing to show. With
  * [dynamic] (colour from artwork) off, slides keep the app's accent.
  *
- * It loads on arriving at Home, when another album starts, and when the favourites or the albums
- * to resume change; not per track. What's playing as it loads is left out, except from the slide
- * in view: pressing Play on a slide keeps it there rather than pulling it out from under the pointer.
+ * It loads once on arriving at Home (and again if the albums to resume turn up after that), then
+ * holds still: skipping songs, another album starting, a play landing in the favourites or a resume
+ * point moving doesn't reshuffle it under the user. What's playing as it loads is left out, except
+ * from the slide in view: pressing Play on a slide keeps it there rather than pulling it out from
+ * under the pointer.
  */
 export function HomeSpotlight({ stats, statsReady, dynamic, onAccent, onEmpty }: { stats?: ListeningStats; statsReady: boolean; dynamic: boolean; onAccent: (accent: string | undefined) => void; onEmpty: (empty: boolean) => void }) {
   const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const navigate = useApp((s) => s.navigate);
   const resumes = useApp((s) => s.albumResumes);
-  const playingAlbum = useApp((s) => s.nowPlaying?.track.albumId);
-  const resumeKey = resumes.map((r) => r.albumId).sort().join(",");
-  // What the picks are made from, not the stats object itself (a new one after every library sync).
-  const statsKey = stats ? [...stats.topAlbums.slice(0, 12).map((a) => a.id), "|", ...stats.topArtists.slice(0, 4).map((a) => a.id)].join(",") : "";
+  // Resume points can arrive after Home does; that's worth a reload, any later change isn't.
+  const hasResumes = resumes.length > 0;
   const statsRef = useRef(stats);
   statsRef.current = stats;
   const theme = useResolvedTheme();
@@ -95,7 +95,7 @@ export function HomeSpotlight({ stats, statsReady, dynamic, onAccent, onEmpty }:
         if (live) setSlides((s) => s ?? []);
       });
     return () => { live = false; };
-  }, [serverId, statsReady, statsKey, resumeKey, playingAlbum]);
+  }, [serverId, statsReady, hasResumes]);
   const list = slides ?? [];
   const at = Math.min(index, Math.max(0, list.length - 1));
   shownKey.current = list[at] ? slideKey(list[at]) : undefined;
