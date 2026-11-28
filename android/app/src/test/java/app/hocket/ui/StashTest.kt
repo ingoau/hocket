@@ -11,6 +11,10 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.Commands
 import app.hocket.core.SettingKeys
@@ -85,26 +89,56 @@ class StashTest {
     }
 
     @Test
-    fun sheetActsOnTheStashAndKeepsItUntilCleared() {
+    fun sheetActsOnTheWholeStashUntilSongsArePickedAndKeepsItUntilCleared() {
         val core = start()
         stashSome(core, 3)
         compose.onNodeWithTag("stash.chip").performClick()
         compose.waitForIdle()
         compose.onNodeWithTag("stash.sheet").assertIsDisplayed()
         compose.onAllNodesWithTag("stash.row").assertCountEquals(3)
-        compose.onNodeWithTag("stash.playLater").performClick()
+        // Nothing picked: the menu (no header of its own) acts on all three, and keeps them.
+        compose.onAllNodesWithTag("stash.menu.header").assertCountEquals(0)
+        compose.onNodeWithTag("stash.acting").assertTextEquals("For all 3 songs")
+        compose.onAllNodesWithTag("stash.menu.remove").assertCountEquals(0)
+        val queued = core.client.queue.value.restEntries.size
+        compose.onNodeWithTag("stash.menu.action.playLater").performScrollTo().performClick()
+        compose.waitUntil(5_000) { core.client.queue.value.restEntries.size >= queued }
         compose.waitForIdle()
         assertTrue(core.client.stash.value.size == 3)
-        // Remove one with ×.
-        compose.onAllNodesWithTag("stash.remove")[0].performClick()
+        // Tapping a song picks it: the menu acts on that one, and can take it out of the stash.
+        compose.onAllNodesWithTag("stash.row")[0].performScrollTo().performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("stash.summary").assertTextEquals("1 of 3 selected")
+        compose.onNodeWithTag("stash.acting").assertTextEquals("For the 1 selected song")
+        val first = core.client.stash.value.first().entryId
+        // (Clicked through its semantics: Play later's snackbar may cover the bottom of the sheet.)
+        compose.onNodeWithTag("stash.menu.remove").performScrollTo().performSemanticsAction(SemanticsActions.OnClick)
         compose.waitUntil(5_000) { core.client.stash.value.size == 2 }
         compose.waitForIdle()
+        assertTrue(core.client.stash.value.none { it.entryId == first })
         compose.onAllNodesWithTag("stash.row").assertCountEquals(2)
+        compose.onNodeWithTag("stash.acting").assertTextEquals("For all 2 songs")
         // Clear: the sheet and the chip go.
         compose.onNodeWithTag("stash.clear").performClick()
         compose.waitUntil(5_000) { core.client.stash.value.isEmpty() }
         compose.waitForIdle()
         compose.onAllNodesWithTag("stash.chip").assertCountEquals(0)
+    }
+
+    @Test
+    fun aSongsMenuOpensOverTheStashAndRemovesIt() {
+        val core = start()
+        stashSome(core, 2)
+        compose.onNodeWithTag("stash.chip").performClick()
+        compose.waitForIdle()
+        val title = core.client.stash.value.first().track.title
+        compose.onNodeWithContentDescription("More options for $title", useUnmergedTree = true).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("songMenu").assertIsDisplayed()
+        // Its Add to stash gives way to Remove from stash.
+        compose.onAllNodesWithTag("songMenu.action.stash").assertCountEquals(0)
+        compose.onNodeWithTag("songMenu.removeFromStash", useUnmergedTree = true).performScrollTo().performClick()
+        compose.waitUntil(5_000) { core.client.stash.value.size == 1 }
     }
 
     @Test

@@ -1579,23 +1579,25 @@
         <item quantity="one">Stash, %d song</item>
         <item quantity="other">Stash, %d songs</item>
     </plurals>
-    <plurals name="stash_selected">
-        <item quantity="one">%d selected</item>
-        <item quantity="other">%d selected</item>
+    <plurals name="stash_selected_of">
+        <item quantity="one">%1$d of %2$d selected</item>
+        <item quantity="other">%1$d of %2$d selected</item>
     </plurals>
-    <string name="stash_play">Play</string>
-    <string name="stash_shuffle">Shuffle</string>
-    <string name="stash_play_next">Play next</string>
-    <string name="stash_add_to_queue">Add to queue</string>
-    <string name="stash_play_later">Play later</string>
-    <string name="stash_add_to_playlist">Add to playlist</string>
-    <string name="stash_new_playlist">New playlist</string>
-    <string name="stash_download">Download</string>
+    <plurals name="stash_acting_all">
+        <item quantity="one">For the %d song</item>
+        <item quantity="other">For all %d songs</item>
+    </plurals>
+    <plurals name="stash_acting_selected">
+        <item quantity="one">For the %d selected song</item>
+        <item quantity="other">For the %d selected songs</item>
+    </plurals>
+    <string name="stash_remove_one">Remove from stash</string>
+    <plurals name="stash_remove_n">
+        <item quantity="one">Remove %d from stash</item>
+        <item quantity="other">Remove %d from stash</item>
+    </plurals>
     <string name="stash_clear">Clear</string>
     <string name="stash_deselect">Deselect</string>
-    <string name="stash_remove">Remove %1$s from the stash</string>
-    <string name="stash_reorder">Drag to reorder %1$s</string>
-    <string name="stash_play_from">Play from %1$s</string>
     <string name="stash_move_up">Move up</string>
     <string name="stash_move_down">Move down</string>
     <plurals name="stash_queued">
