@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { SortOrder, TrackRef } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
@@ -12,6 +12,7 @@ import { loadListSort, saveListSort, type ListSort } from "../lib/list-sort";
 import { GROUP_SIZE } from "../lib/list-groups";
 import { refOf, refKey } from "../lib/track-ref";
 import { SourceChips, useLibrarySource } from "../components/SourceChips";
+import { useScrollMemory } from "../lib/scroll-memory";
 
 export function Songs() {
   const source = useLibrarySource();
@@ -25,23 +26,26 @@ export function Songs() {
     if (r.type !== "tracks") throw new Error("bad result");
     return { items: r.data.items, total: r.data.total };
   }, [source, sort, desc]);
-  const { rows, total, onNeedRange } = usePagedTracks(fetchPage, [source, sort, desc], TRACKS_DEPS);
+  const { rows, total, loaded, onNeedRange } = usePagedTracks(fetchPage, [source, sort, desc], TRACKS_DEPS);
   const onPlay = (index: number) => {
     // "All songs" is an ad-hoc context; play from the sorted list around the row.
     const refs = rows.filter((x): x is NonNullable<typeof x> => !!x).map(refOf);
     const start = rows.slice(0, index).filter(Boolean).length;
     bridge().dispatch({ type: "playTracks", data: { tracks: refs, start_index: start, label: t("songs.title"), shuffle: false } });
   };
+  // The page scrolls as a whole (one scrollbar, the groups scrolling away above the table); Back
+  // returns to where it was left.
+  const page = useRef<HTMLDivElement>(null);
+  useScrollMemory(page, "songs", loaded);
   return (
-    <div className="view" data-testid="view-songs">
+    <div ref={page} className="view page-songs" data-testid="view-songs">
       <div className="view-header"><h1 className="brand-type">{t("songs.title")}</h1><span className="muted count-chip">{total}</span><SourceChips /></div>
       <div className="list-top">
-        {/* The table below keeps most of the height: the groups scroll on their own when the window is short. */}
         <div className="list-top-groups"><SongGroups /></div>
         <ListHeader id="songs-all" title={t("songs.all")} actions={<SortMenu list="songs" value={order} onChange={choose} testId="songs-sort" />} className="list-all" />
       </div>
-      <div className="view-body no-pad" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <TrackTable tracks={rows} total={total} columns={["art", "title", "artist", "album", "year", "genre", "rating", "love", "plays", "bpm", "duration", "offline"]} scope="songs" sort={sort} descending={desc} onSort={(s, d) => choose({ sort: s, descending: d })} onNeedRange={onNeedRange} onPlay={onPlay} playingTrackId={playing} emptyMessage={t("songs.empty")} testId="songs-table" />
+      <div className="view-body no-pad">
+        <TrackTable pageScroll loading={!loaded} tracks={rows} total={total} columns={["art", "title", "artist", "album", "year", "genre", "rating", "love", "plays", "bpm", "duration", "offline"]} scope="songs" sort={sort} descending={desc} onSort={(s, d) => choose({ sort: s, descending: d })} onNeedRange={onNeedRange} onPlay={onPlay} playingTrackId={playing} emptyMessage={t("songs.empty")} testId="songs-table" />
       </div>
     </div>
   );

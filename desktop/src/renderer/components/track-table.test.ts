@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { fitColumns, type ColumnId } from "./TrackTable";
+import type { Track } from "@core/api";
+import { discStarts, fitColumns, type ColumnId } from "./TrackTable";
 
 const SONGS: ColumnId[] = ["art", "title", "artist", "album", "year", "genre", "rating", "love", "plays", "bpm", "duration", "offline"];
 
@@ -28,5 +29,17 @@ describe("track table columns at narrow widths (200% zoom, small windows)", () =
       const kept = fitColumns(SONGS, w);
       expect(kept.reduce((s, c) => s + (min[c] ?? 0), 34), `width ${w}`).toBeLessThanOrEqual(w);
     }
+  });
+});
+
+describe("disc headings", () => {
+  const disc = (n: number | undefined) => ({ id: String(n), discNumber: n }) as Track;
+  it("marks where each disc starts when the songs span several", () => {
+    expect([...discStarts([disc(1), disc(1), disc(2), disc(2), disc(3)])]).toEqual([[0, 1], [2, 2], [4, 3]]);
+  });
+  it("marks nothing for one disc or songs without a disc number, and skips rows still loading", () => {
+    expect(discStarts([disc(1), disc(1)]).size).toBe(0);
+    expect(discStarts([disc(undefined), disc(undefined)]).size).toBe(0);
+    expect([...discStarts([disc(1), undefined, disc(2)])]).toEqual([[0, 1], [2, 2]]);
   });
 });

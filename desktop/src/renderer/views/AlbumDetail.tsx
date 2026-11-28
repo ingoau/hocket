@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import { t } from "@shared/strings";
 import { useApp, useSetting } from "../store/app";
 import { SK } from "@shared/settings-keys";
@@ -12,12 +12,12 @@ import { openContextMenu, openItemsMenu, openMenuFromButton } from "../component
 import { fmtDate, fmtDuration, fmtTime } from "../lib/format";
 import { Tile, TileList } from "../components/Tile";
 import { executeAction } from "../store/actions";
-import { trackTableHeight } from "../lib/track-row";
 import { releaseKind } from "../lib/release-kind";
 import { offlineLabel } from "../components/OfflineBadge";
 import { useAlbumDwellPrime, usePlayIntent } from "../lib/use-prime";
 import type { AlbumResumePoint, Track } from "@core/api";
 import { primeKey } from "../lib/track-ref";
+import { useScrollMemory } from "../lib/scroll-memory";
 
 function resumeFraction(list: Track[], resume: AlbumResumePoint): number {
   const duration = list.find((t) => t.id === resume.trackId)?.durationMs || resume.durationMs;
@@ -60,22 +60,28 @@ export function AlbumDetail({ id }: { id: string }) {
   const showArtist = allArtists || anyOther;
   const columns = useMemo<ColumnId[]>(() => ["index", "title", ...(showArtist ? ["artist" as const] : []), "rating", "love", "plays", "duration", "offline"], [showArtist]);
   const kept = a?.offline === "downloaded" || a?.offline === "downloading";
+  const playOrResume = () => (resume ? bridge().dispatch({ type: "resumeAlbum", data: { album_id: id } }) : play());
+  // Until the songs are in, the album's own count holds their place (no "No songs", no jump).
+  const loadingTracks = tracks.data === undefined && !tracks.error;
+  // Back returns to where the page was left, once everything that sets its height is in.
+  const page = useRef<HTMLDivElement>(null);
+  const settled = (q: { data?: unknown; error?: string }) => q.data !== undefined || q.error !== undefined;
+  useScrollMemory(page, "album", !!a && !loadingTracks && (!a.artistId || settled(more)));
   return (
-    <div className="view detail-page" data-testid="view-album">
-      <DetailHead coverArt={a?.coverArt} icon="album" onContextMenu={(e) => a && void openContextMenu(e, { type: "albums", data: { ids: [a.id] } })} testId="album-head" actions={
+    <div ref={page} className="view detail-page" data-testid="view-album">
+      <DetailHead coverArt={a?.coverArt} loading={!a && !album.error} title={a?.name ?? ""} barAction={<button type="button" className="btn primary detail-bar-play" aria-label={resume ? t("album.resume") : t("album.play")} title={resume ? t("album.resume") : t("album.play")} onClick={playOrResume} data-testid="album-bar-play"><Icon name={resume ? "resume" : "play"} size={22} filled /></button>} icon="album" onContextMenu={(e) => a && void openContextMenu(e, { type: "albums", data: { ids: [a.id] } })} testId="album-head" actions={
         <>
-          <button type="button" className="btn primary fab album-play" aria-label={resume ? t("album.resumeMenu") : t("album.play")} onClick={() => (resume ? bridge().dispatch({ type: "resumeAlbum", data: { album_id: id } }) : play())} onContextMenu={resume ? (e) => { e.preventDefault(); e.stopPropagation(); openItemsMenu(e, [{ id: "startOver", label: t("album.startOver"), icon: "refresh", enabled: true, run: startOver }]); } : undefined} {...primer.bind(resume ? undefined : primeKey(list[0]))} data-testid="album-play"><Icon name={resume ? "resume" : "play"} size={24} filled /> {resume ? t("album.resume") : t("album.play")}</button>
+          <button type="button" className="btn primary fab album-play" aria-label={resume ? t("album.resumeMenu") : t("album.play")} onClick={playOrResume} onContextMenu={resume ? (e) => { e.preventDefault(); e.stopPropagation(); openItemsMenu(e, [{ id: "startOver", label: t("album.startOver"), icon: "refresh", enabled: true, run: startOver }]); } : undefined} {...primer.bind(resume ? undefined : primeKey(list[0]))} data-testid="album-play"><Icon name={resume ? "resume" : "play"} size={24} filled /> {resume ? t("album.resume") : t("album.play")}</button>
           <button type="button" className="btn icon" aria-label={t("album.shuffle")} title={t("album.shuffle")} onClick={() => play(undefined, true)} data-testid="album-shuffle"><Icon name="shuffle" size={24} /></button>
-          {a ? <Heart size={24} on={a.loved} onToggle={() => bridge().dispatch({ type: "setLoved", data: { targets: [{ type: "album", data: { id: a.id } }], loved: !a.loved } })} /> : null}
-          {a ? <button type="button" className={`btn icon ${kept ? "on" : ""}`} aria-pressed={kept} aria-label={kept ? t("album.downloaded") : t("album.download")} title={kept ? t("album.downloaded") : t("album.download")} onClick={() => void executeAction(kept ? "unpin" : "download", { type: "albums", data: { ids: [a.id] } })} data-testid="album-download"><Icon name="download" size={24} filled={kept} /></button> : null}
+          {/* Every action is there from the start (inert until the album is in), so the row never reflows as it loads. */}
+          <Heart size={24} on={!!a?.loved} onToggle={() => a && bridge().dispatch({ type: "setLoved", data: { targets: [{ type: "album", data: { id: a.id } }], loved: !a.loved } })} />
+          <button type="button" className={`btn icon ${kept ? "on" : ""}`} aria-pressed={kept} aria-label={kept ? t("album.downloaded") : t("album.download")} title={kept ? t("album.downloaded") : t("album.download")} onClick={() => a && void executeAction(kept ? "unpin" : "download", { type: "albums", data: { ids: [a.id] } })} data-testid="album-download"><Icon name="download" size={24} filled={kept} /></button>
           <button type="button" className="btn icon" aria-label={t("misc.more")} aria-haspopup="menu" title={t("misc.more")} onClick={(e) => a && openMenuFromButton(e, { type: "albums", data: { ids: [a.id] } }, undefined, resume ? [{ id: "startOver", label: t("album.startOver"), icon: "refresh", enabled: true, run: startOver }] : undefined)} data-testid="album-more"><Icon name="more" /></button>
           <span className="spacer" />
-          {a ? (
-            <div className="detail-rating">
-              <span className="detail-rating-label" aria-hidden="true">{t("album.yourRating")}</span>
-              <Stars value={a.rating} label={t("a11y.ratingOf", { title: a.name })} onChange={(r) => bridge().dispatch({ type: "setRating", data: { targets: [{ type: "album", data: { id: a.id } }], rating: r } })} />
-            </div>
-          ) : null}
+          <div className="detail-rating" style={a ? undefined : { visibility: "hidden" }}>
+            <span className="detail-rating-label" aria-hidden="true">{t("album.yourRating")}</span>
+            <Stars value={a?.rating ?? 0} label={t("a11y.ratingOf", { title: a?.name ?? "" })} onChange={(r) => a && bridge().dispatch({ type: "setRating", data: { targets: [{ type: "album", data: { id: a.id } }], rating: r } })} />
+          </div>
         </>
       }>
           {offlineLabel(a?.offline) ? <span className="eyebrow" data-testid="album-offline">{offlineLabel(a?.offline)}</span> : null}
@@ -91,9 +97,7 @@ export function AlbumDetail({ id }: { id: string }) {
             <h2 id="album-tracks-title">{t("album.tracksTitle")}</h2>
             <span className="muted">{t("album.tracks", { count: list.length, duration: fmtTime(list.reduce((n, x) => n + (x.durationMs ?? 0), 0)) })}</span>
           </div>
-          <div style={{ height: trackTableHeight(list.length), display: "flex", flexDirection: "column" }}>
-            <TrackTable tracks={list} total={list.length} columns={columns} omitArtist={allArtists ? undefined : (a?.artist ?? "")} scope={`album:${id}`} label={a?.name} onPlay={(i) => play(i)} playingTrackId={playing} resumeTrackId={resume && playing !== resume.trackId ? resume.trackId : undefined} resumeFraction={resume ? resumeFraction(list, resume) : undefined} emptyMessage={t("songs.empty")} testId="album-tracks" primer={primer} />
-          </div>
+          <TrackTable pageScroll discs loading={loadingTracks} tracks={list} total={loadingTracks ? (a?.songCount ?? 0) : list.length} columns={columns} omitArtist={allArtists ? undefined : (a?.artist ?? "")} scope={`album:${id}`} label={a?.name} onPlay={(i) => play(i)} playingTrackId={playing} resumeTrackId={resume && playing !== resume.trackId ? resume.trackId : undefined} resumeFraction={resume ? resumeFraction(list, resume) : undefined} emptyMessage={t("songs.empty")} testId="album-tracks" primer={primer} />
           {footnote ? <div className="detail-footnote">{footnote}</div> : null}
         </section>
         {others.length && a ? (
