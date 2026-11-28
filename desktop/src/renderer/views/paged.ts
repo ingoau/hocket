@@ -7,6 +7,8 @@ import { evictPages, materializePages } from "../lib/paged-window";
 export function usePagedGrid<T extends { id: string }>(fetchPage: (offset: number, limit: number) => Promise<{ items: T[]; total: number }>, deps: unknown[], library?: LibraryDeps, pageSize = 100) {
   const [rows, setRows] = useState<(T | undefined)[]>([]);
   const [total, setTotal] = useState(0);
+  // Whether the current query has answered (until then a total of 0 isn't an empty list).
+  const [loaded, setLoaded] = useState(false);
   const loading = useRef(new Set<number>());
   const gen = useRef(0);
   const pages = useRef(new Map<number, T[]>());
@@ -24,8 +26,12 @@ export function usePagedGrid<T extends { id: string }>(fetchPage: (offset: numbe
         evictPages(pages.current, around.current);
         setTotal(res.total);
         setRows(materializePages(pages.current, res.total, pageSize));
+        setLoaded(true);
       })
-      .catch((err: unknown) => console.warn("[paged] load failed", err))
+      .catch((err: unknown) => {
+        console.warn("[paged] load failed", err);
+        if (g === gen.current) setLoaded(true);
+      })
       .finally(() => {
         // A page from before a reload must not mark the reload's request for it done.
         if (g === gen.current) loading.current.delete(page);
@@ -43,6 +49,7 @@ export function usePagedGrid<T extends { id: string }>(fetchPage: (offset: numbe
       around.current = 0;
       setRows([]);
       setTotal(0);
+      setLoaded(false);
       load(0);
       return;
     }
@@ -56,5 +63,5 @@ export function usePagedGrid<T extends { id: string }>(fetchPage: (offset: numbe
       if (!pages.current.has(p) && p * pageSize < Math.max(total, 1)) load(p);
     }
   }, [load, pageSize, total]);
-  return { rows, total, onNeedRange };
+  return { rows, total, loaded, onNeedRange };
 }

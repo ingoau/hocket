@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { Genre } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
@@ -12,6 +12,8 @@ import { SortMenu } from "../components/SortMenu";
 import { loadListSort, saveListSort, sortGenres, type ListSort } from "../lib/list-sort";
 import { recentGenres } from "../lib/list-groups";
 import { refOf, refKey } from "../lib/track-ref";
+import { useGridVars } from "../lib/grid-columns";
+import { useScrollMemory } from "../lib/scroll-memory";
 
 /** Genres: Pinned, the genres of the songs played lately, then all of them (sorted here; the core hands them over whole). */
 export function Genres() {
@@ -20,6 +22,10 @@ export function Genres() {
   const [order, setOrder] = useState<ListSort>(() => loadListSort("genres"));
   const { data, loading } = useQuery(() => ({ type: "genres", data: { server_id: "" } }), "genres", [serverId]);
   const sorted = useMemo(() => sortGenres(data ?? [], order.sort, order.descending), [data, order]);
+  const body = useRef<HTMLDivElement>(null);
+  // Recent's cards take the grid's column size; Back returns to where the page was left.
+  const vars = useGridVars(body, ".genre-grid");
+  useScrollMemory(body, "genres", !!data);
   const tile = (g: Genre, testId: string) => (
     <li key={g.name} onContextMenu={(e) => openItemsMenu(e, genreMenuItems(g.name, serverId))}>
       <button type="button" className="genre-tile" data-roving onClick={() => navigate({ view: "genre", id: g.name })} data-testid={testId} style={{ "--genre-hue": genreHue(g.name) } as React.CSSProperties}>
@@ -31,7 +37,7 @@ export function Genres() {
   return (
     <div className="view" data-testid="view-genres">
       <div className="view-header"><h1 className="brand-type">{t("genres.title")}</h1>{data?.length ? <span className="muted count-chip">{data.length}</span> : null}</div>
-      <div className="view-body">
+      <div ref={body} className={`view-body ${vars ? "sized-cols" : ""}`} style={vars}>
         <GenreGroups genres={data ?? []} tile={tile} />
         <ListSection id="genres-all" title={t("genres.all")} actions={<SortMenu list="genres" value={order} onChange={(v) => { setOrder(v); saveListSort("genres", v); }} testId="genres-sort" />}>
           {!loading && !data?.length ? <EmptyState message={t("genres.empty")} icon="genre" /> : null}

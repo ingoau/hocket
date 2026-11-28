@@ -18,6 +18,8 @@ import { libraryDragProps } from "../lib/queue-drag";
 import { playlistDropZone } from "../lib/playlist-drop";
 
 const clampWidth = (w: number) => Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, w));
+/** How far past its narrowest the splitter is dragged before the sidebar becomes the rail. */
+const SNAP_TO_RAIL = 80;
 
 // The sidebar, one scrolling column: the places (the customisable sidebar actions), the pins, then
 // Your library (SidebarLibrary). Settings stays at the foot. Collapsed (the top bar's first button,
@@ -36,13 +38,23 @@ export function Sidebar() {
 
   useEffect(() => {
     if (!dragging) return;
-    const move = (e: MouseEvent) => setPanels({ sidebarWidth: clampWidth(startW.current + e.clientX - startX.current) });
+    // Dragged well past its narrowest, the sidebar snaps to the rail (back out, it opens again).
+    const move = (e: MouseEvent) => {
+      const w = startW.current + e.clientX - startX.current;
+      const cur = useApp.getState().panels;
+      if (w < SIDEBAR_MIN - SNAP_TO_RAIL) {
+        if (!cur.sidebarCollapsed) setPanels({ sidebarCollapsed: true });
+      } else if (cur.sidebarCollapsed || cur.sidebarWidth !== clampWidth(w)) setPanels({ sidebarCollapsed: false, sidebarWidth: clampWidth(w) });
+    };
     const up = () => setDragging(false);
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
+    // The resize cursor holds over the whole window while dragging, as a native splitter's does.
+    document.documentElement.dataset.resizing = "col";
     return () => {
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
+      delete document.documentElement.dataset.resizing;
     };
   }, [dragging, setPanels]);
 

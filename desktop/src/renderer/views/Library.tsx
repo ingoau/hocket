@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { t } from "@shared/strings";
 import type { Album } from "@core/api";
 import { useApp } from "../store/app";
@@ -9,6 +10,7 @@ import { Tile, TileList } from "../components/Tile";
 import { Icon } from "../components/Icon";
 import { Artwork } from "../components/Artwork";
 import type { ViewName } from "../store/app";
+import { useScrollMemory } from "../lib/scroll-memory";
 
 /** How many Recently added albums the Library lists before Albums takes over. */
 const RECENT_ALBUMS = 60;
@@ -25,6 +27,9 @@ export function Library() {
   const month = useQuery(() => ({ type: "stats", data: { period_days: 30 } }), "stats", []);
   const year = useQuery(() => (month.data && !month.data.topAlbums.length ? { type: "stats", data: { period_days: 365 } } : null), "stats", [month.data?.topAlbums.length]);
   const topCovers = ((month.data?.topAlbums.length ? month.data : year.data)?.topAlbums ?? []).map((a) => a.coverArt).filter((c): c is string => !!c).slice(0, 3);
+  // Back returns to where the page was left, once Recently added (most of its height) is in.
+  const body = useRef<HTMLDivElement>(null);
+  useScrollMemory(body, "library", !!recent.data);
   const playAlbum = (a: Album) => bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "album", data: { id: a.id } }, label: a.name, sort: "default", tracks: [] }, shuffle: false, saveOutgoing: true } } });
   const tile = (view: ViewName, label: string, icon: string, cls: string, testId: string, param?: string, covers: string[] = []) => (
     <button type="button" className={`lib-tile ${cls}`} onClick={() => navigate({ view, param })} data-testid={testId}>
@@ -47,7 +52,7 @@ export function Library() {
   return (
     <div className="view page-library" data-testid="view-library">
       <div className="view-header"><h1 className="brand-type">{t("library.title")}</h1></div>
-      <div className="view-body">
+      <div ref={body} className="view-body">
         <div className="lib-browse">
           {tile("albums", t("nav.albums"), "album", "wide", "library-albums", undefined, topCovers)}
           {tile("artists", t("nav.artists"), "artist", "artists", "library-artists")}

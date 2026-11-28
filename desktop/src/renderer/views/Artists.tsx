@@ -26,14 +26,14 @@ export function Artists() {
     if (r.type !== "artists") throw new Error("bad result");
     return { items: r.data.items, total: r.data.total };
   }, [source, sort, desc]);
-  const { rows, total, onNeedRange } = usePagedGrid<Artist>(fetchPage, [source, sort, desc], ARTIST_DEPS, 120);
+  const { rows, total, loaded, onNeedRange } = usePagedGrid<Artist>(fetchPage, [source, sort, desc], ARTIST_DEPS, 120);
   const items: (GridItem | undefined)[] = rows.map((a) => (a ? { id: a.id, title: a.name, subtitle: albumCount(a), coverArt: a.coverArt, round: true } : undefined));
   const playArtist = (id: string, label: string) => bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "artist", data: { id } }, label, sort: "default", tracks: [] }, shuffle: true, saveOutgoing: true } } });
   const sorter = <SortMenu list="artists" value={order} onChange={(v) => { setOrder(v); saveListSort("artists", v); }} testId="artists-sort" />;
   return (
     <div className="view" data-testid="view-artists">
       <div className="view-header"><h1 className="brand-type">{t("artists.title")}</h1><span className="muted count-chip">{total}</span><SourceChips /></div>
-      <AlbumGrid items={items} total={total} scope="artists" targetKind="artists" onOpen={(it) => navigate({ view: "artist", id: it.id })} onPlay={(it) => playArtist(it.id, it.title)} onNeedRange={onNeedRange} tileWidth={150} emptyMessage={t("artists.empty")} testId="artists-grid" label={t("artists.title")}
+      <AlbumGrid items={items} total={total} scope="artists" targetKind="artists" onOpen={(it) => navigate({ view: "artist", id: it.id })} onPlay={(it) => playArtist(it.id, it.title)} onNeedRange={onNeedRange} tileWidth={150} emptyMessage={t("artists.empty")} loading={!loaded} testId="artists-grid" label={t("artists.title")}
         header={<><ArtistGroups play={playArtist} /><ListHeader id="artists-all" title={t("artists.all")} actions={sorter} className="list-all" /></>} />
     </div>
   );
