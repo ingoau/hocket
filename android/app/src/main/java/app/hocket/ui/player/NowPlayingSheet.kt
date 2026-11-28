@@ -1353,8 +1353,7 @@ private fun animateColorScheme(target: ColorScheme, animate: Boolean): ColorSche
 
 /** Resolves the artwork's seed colour: palette from the cached file, else the id-derived placeholder hue. */
 @Composable
-fun artworkSeed(coverArt: String?): androidx.compose.runtime.State<Color?> {
-    val client = LocalCoreClient.current
+fun artworkSeed(coverArt: String?, client: app.hocket.core.client.CoreClient = LocalCoreClient.current): androidx.compose.runtime.State<Color?> {
     // Null while worked out; one worked out before (a neighbour's, say) is there from the first frame.
     val state = remember(coverArt) { mutableStateOf(coverArt?.let { seeds.get(it) }) }
     LaunchedEffect(state) {

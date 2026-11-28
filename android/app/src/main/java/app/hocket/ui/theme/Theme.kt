@@ -27,23 +27,25 @@ import app.hocket.core.SettingKeys
 import app.hocket.core.client.CoreClient
 import app.hocket.ui.a11y.LocalReducedMotion
 import app.hocket.ui.a11y.rememberReducedMotion
+import app.hocket.ui.player.nowPlayingSeed
 
-/** The accent colour taken from the playing artwork, provided by the now-playing sheet while it is open. */
+/** The accent colour the app's scheme is built from when it comes from artwork (what's playing, or a preview), else null. */
 val LocalArtworkSeed = compositionLocalOf<Color?> { null }
 
 /** Whether the app is in dark mode after applying the theme setting. */
 val LocalDarkTheme = compositionLocalOf { false }
 
-/** A setter the now-playing sheet uses to publish the artwork seed to the whole tree. */
+/** A setter the now-playing sheet uses to preview a cover's colours across the whole tree (with colour from artwork off). */
 class ArtworkSeedState { var seed: Color? by mutableStateOf(null) }
 val LocalArtworkSeedState = compositionLocalOf { ArtworkSeedState() }
 
 /**
  * Material 3 Expressive theme: expressive colour scheme, expressive motion scheme, and the system
- * font on an expressive type scale. The colours come from, in order: the playing artwork (while the
- * now-playing sheet publishes a seed and `display.dynamicColour` is on), a picked accent
- * (`display.accent`), then the wallpaper on Android 12+. `display.dynamicColour` only gates the
- * artwork: turning it off falls back to the wallpaper, not the stock scheme.
+ * font on an expressive type scale. The colours come from, in order: the playing artwork (with
+ * `display.dynamicColour` on; while a new cover's seed is worked out the last one holds), a cover
+ * the now-playing sheet previews (with it off), a picked accent (`display.accent`), then the
+ * wallpaper on Android 12+. `display.dynamicColour` only gates the artwork: turning it off falls
+ * back to the accent or the wallpaper, not the stock scheme.
  */
 @Composable
 fun HocketTheme(client: CoreClient?, content: @Composable () -> Unit) {
@@ -55,10 +57,14 @@ fun HocketTheme(client: CoreClient?, content: @Composable () -> Unit) {
     val dark = when (themeSetting) { "light" -> false; "dark" -> true; else -> isSystemInDarkTheme() }
     val context = LocalContext.current
     val seedState = remember { ArtworkSeedState() }
-    val artworkSeed = seedState.seed
-    val scheme: ColorScheme = remember(dark, accentSetting, dynamicColour, artworkSeed) {
+    val playingSeed = if (client != null && dynamicColour) {
+        val nowPlaying by client.nowPlaying.collectAsStateWithLifecycle()
+        nowPlayingSeed(nowPlaying?.track?.coverArt, client)
+    } else null
+    val artworkSeed = if (dynamicColour) playingSeed else seedState.seed
+    val scheme: ColorScheme = remember(dark, accentSetting, artworkSeed) {
         when {
-            artworkSeed != null && dynamicColour -> ArtworkColors.scheme(artworkSeed, dark)
+            artworkSeed != null -> ArtworkColors.scheme(artworkSeed, dark)
             accentSetting != null -> runCatching { Color(android.graphics.Color.parseColor(if (accentSetting.startsWith("#")) accentSetting else "#$accentSetting")) }.getOrNull()?.let { ArtworkColors.scheme(it, dark) }
                 ?: baseScheme(dark, context)
             else -> baseScheme(dark, context)
