@@ -289,7 +289,7 @@ internal class HeroGeometry {
      * The big artwork's top in its area (px): [artPad], or lower on a tall screen, where the area
      * has more height than the artwork needs and the artwork is centred in it.
      */
-    var artTop = 0f
+    var artTop by mutableStateOf(0f)
     /** The header's height (px) as the page laid it out. */
     var headerHeight = 0f
     /**
@@ -297,7 +297,7 @@ internal class HeroGeometry {
      * top of the page (under the header), or higher where the area is shorter than the artwork, so
      * that its bottom never runs past the area into the controls.
      */
-    var immersiveTop = 0f
+    var immersiveTop by mutableStateOf(0f)
     /** How much the title row's stars have folded away (px; they show in artwork mode only): the mode area takes it. */
     var titleFold = 0f
     /** The full player's skip swipe (px, read in layer lambdas): the immersive continuation slides with it. */
@@ -899,6 +899,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                                 artworkHidden = { flying },
                                 artworkScale = { artScale.value },
                                 lyricsVisible = expanded && settledOpen && mode == PlayerMode.Lyrics,
+                                lyricLineVisible = expanded && settledOpen && mode == PlayerMode.Artwork,
                                 onPreviewToggle = { seed -> seedState.seed = if (seedState.seed == null) seed else null },
                                 coverArt = coverArt,
                                 immersive = artworkLayout,

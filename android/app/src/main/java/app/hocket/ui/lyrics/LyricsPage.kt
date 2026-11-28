@@ -149,30 +149,7 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolea
     // while paused (the position is frozen until a seek, play or another track).
     // A fresh stamp from the player can land a little behind the extrapolated position; the
     // lyrics then run at half speed until it catches up (PlayheadSmoother) instead of stepping back.
-    var positionMs by remember { mutableStateOf(0L) }
-    LaunchedEffect(visible, reducedMotion, batterySaver, simple, trackId) {
-        if (!visible) return@LaunchedEffect
-        // At most about 60 a second: on a 90 or 120 Hz screen every other frame or so (the springs
-        // still run at the screen's rate).
-        val interval = when {
-            reducedMotion -> 250_000_000L
-            simple -> 80_000_000L
-            batterySaver -> 33_000_000L
-            else -> 15_000_000L
-        }
-        var last = 0L
-        val smoother = PlayheadSmoother()
-        while (true) {
-            val mark = client.positionMark()
-            withFrameNanos { now ->
-                if (!mark.moving || interval == 0L || now - last >= interval) {
-                    positionMs = smoother.next(client.positionNow(), mark.moving && !reducedMotion)
-                    last = now
-                }
-            }
-            client.awaitPositionMayMove(mark)
-        }
-    }
+    val positionMs by rememberLyricsPlayhead(visible, reducedMotion, batterySaver, simple, trackId)
 
     // Battery saver: 60 Hz while the lyrics show (the full player's own cap covers it there too).
     app.hocket.ui.player.RefreshRateCap(active = visible)
@@ -210,6 +187,42 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolea
             if (track != null && track.id == doc.trackId && request.line in doc.lines.indices) LyricsShareDialog(doc, track, request, onDismiss = { share = null })
         }
     }
+}
+
+/**
+ * The lyrics' playhead (ms), ticking while [visible]: every display frame up to ~60 fps, 30 on
+ * battery saver ([batterySaver]: lighter lyrics), ~12 with [simple] lyrics, 4 a second with
+ * [reducedMotion]; no frames at all while paused. Smoothed by [PlayheadSmoother].
+ */
+@Composable
+internal fun rememberLyricsPlayhead(visible: Boolean, reducedMotion: Boolean, batterySaver: Boolean, simple: Boolean, trackId: String?): androidx.compose.runtime.State<Long> {
+    val client = LocalCoreClient.current
+    val positionMs = remember { mutableStateOf(0L) }
+    var value by positionMs
+    LaunchedEffect(visible, reducedMotion, batterySaver, simple, trackId) {
+        if (!visible) return@LaunchedEffect
+        // At most about 60 a second: on a 90 or 120 Hz screen every other frame or so (the springs
+        // still run at the screen's rate).
+        val interval = when {
+            reducedMotion -> 250_000_000L
+            simple -> 80_000_000L
+            batterySaver -> 33_000_000L
+            else -> 15_000_000L
+        }
+        var last = 0L
+        val smoother = PlayheadSmoother()
+        while (true) {
+            val mark = client.positionMark()
+            withFrameNanos { now ->
+                if (!mark.moving || interval == 0L || now - last >= interval) {
+                    value = smoother.next(client.positionNow(), mark.moving && !reducedMotion)
+                    last = now
+                }
+            }
+            client.awaitPositionMayMove(mark)
+        }
+    }
+    return positionMs
 }
 
 /**

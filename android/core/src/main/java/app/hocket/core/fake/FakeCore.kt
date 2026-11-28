@@ -165,6 +165,7 @@ class FakeCore(
         def(SettingKeys.LYRICS_EXTERNAL_ENABLED, "false", SettingScope.AccountSynced)
         def(SettingKeys.LYRICS_EXTERNAL_PROVIDER, "\"lrclib\"", SettingScope.AccountSynced)
         def(SettingKeys.LYRICS_DEFAULT_OFFSET_MS, "0", SettingScope.DeviceLocal)
+        def(SettingKeys.LYRICS_PLAYER_LINE, "false", SettingScope.DeviceLocal)
         def(SettingKeys.RATINGS_LOVE_BRIDGE_ENABLED, "false", SettingScope.AccountSynced)
         def(SettingKeys.RATINGS_LOVE_BRIDGE_THRESHOLD, "4", SettingScope.AccountSynced)
         def(SettingKeys.BATTERY_AUTO_ENGAGE, "true", SettingScope.DeviceLocal)
