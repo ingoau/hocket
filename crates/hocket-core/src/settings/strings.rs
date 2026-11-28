@@ -66,6 +66,8 @@ pub const TEXTS: &[SettingText] = &[
     t("swipe.queue.endToStart", "Queue: swipe left", "What swiping a queue item towards the start of the line does (left in left-to-right languages)."),
     t("swipe.list.startToEnd", "Song lists: swipe right", "What swiping a song in an album, playlist, search results or the library does, towards the end of the line."),
     t("swipe.list.endToStart", "Song lists: swipe left", "What swiping a song in an album, playlist, search results or the library does, towards the start of the line."),
+    t("swipe.stash.startToEnd", "Stash: swipe right", "What swiping a song in the stash does, towards the end of the line (right in left-to-right languages)."),
+    t("swipe.stash.endToStart", "Stash: swipe left", "What swiping a song in the stash does, towards the start of the line (left in left-to-right languages)."),
     t("swipe.playerUp", "Player: swipe up", "What swiping up on the player's artwork opens: the queue, the lyrics, the devices to play on or the song's menu."),
     t("shortcuts", "Keyboard shortcuts", "Custom key bindings for this device."),
     t(

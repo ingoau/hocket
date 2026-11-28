@@ -78,7 +78,7 @@ class SwipeAction(
     val icon: ImageVector,
     val container: Color,
     val content: Color,
-    /** The row goes away (remove from queue): it slides out instead of springing back. */
+    /** The row goes away (remove from the queue or the stash): it slides out instead of springing back. */
     val dismisses: Boolean,
     val onSwipe: () -> Unit,
 )
@@ -87,6 +87,7 @@ class SwipeAction(
 enum class SwipeSurface(val startToEndKey: String, val endToStartKey: String) {
     Queue(SettingKeys.SWIPE_QUEUE_START_TO_END, SettingKeys.SWIPE_QUEUE_END_TO_START),
     List(SettingKeys.SWIPE_LIST_START_TO_END, SettingKeys.SWIPE_LIST_END_TO_START),
+    Stash(SettingKeys.SWIPE_STASH_START_TO_END, SettingKeys.SWIPE_STASH_END_TO_START),
 }
 
 /** The configured action ids (start-to-end, end-to-start) for [surface]; the registry defaults until the core has sent them. */
@@ -109,6 +110,7 @@ fun swipeLook(id: String, loved: Boolean = false): SwipeLook? {
     val scheme = MaterialTheme.colorScheme
     return when (id) {
         ActionIds.REMOVE_FROM_QUEUE -> SwipeLook(HocketIcons.Filled.Delete, scheme.errorContainer, scheme.onErrorContainer)
+        ActionIds.REMOVE_FROM_STASH -> SwipeLook(HocketIcons.Filled.RemoveCircleOutline, scheme.errorContainer, scheme.onErrorContainer)
         ActionIds.PLAY_NEXT -> SwipeLook(HocketIcons.AutoMirrored.Filled.PlaylistPlay, scheme.primaryContainer, scheme.onPrimaryContainer)
         ActionIds.PLAY_LATER -> SwipeLook(HocketIcons.AutoMirrored.Filled.QueueMusic, scheme.secondaryContainer, scheme.onSecondaryContainer)
         ActionIds.ADD_TO_QUEUE -> SwipeLook(HocketIcons.AutoMirrored.Filled.QueueMusic, scheme.primaryContainer, scheme.onPrimaryContainer)
@@ -140,6 +142,8 @@ fun trackSwipeAction(id: String, track: TrackSummary, target: ActionTarget, onAd
     }
     return when (id) {
         ActionIds.REMOVE_FROM_QUEUE -> action(id, dismisses = true, run = run(id))
+        // The core's toast offers Undo.
+        ActionIds.REMOVE_FROM_STASH -> action(id, dismisses = true, run = run(id))
         ActionIds.PLAY_NEXT -> action(id, run = run(id))
         ActionIds.PLAY_LATER -> action(id, run = run(id))
         // Without the queue section there is no queue to add to: the song goes to the end, as play later.

@@ -102,6 +102,8 @@ object SettingKeys {
     const val SWIPE_QUEUE_END_TO_START = "swipe.queue.endToStart"
     const val SWIPE_LIST_START_TO_END = "swipe.list.startToEnd"
     const val SWIPE_LIST_END_TO_START = "swipe.list.endToStart"
+    const val SWIPE_STASH_START_TO_END = "swipe.stash.startToEnd"
+    const val SWIPE_STASH_END_TO_START = "swipe.stash.endToStart"
     /** What swiping up on the full player opens: one of [SwipeOptions.PLAYER_UP]. */
     const val SWIPE_PLAYER_UP = "swipe.playerUp"
 
@@ -152,6 +154,7 @@ object ActionIds {
     const val COPY_DIAGNOSTICS = "copyDiagnostics" // ui-handled
     const val STASH = "stash"
     const val OPEN_STASH = "openStash" // ui-handled
+    const val REMOVE_FROM_STASH = "removeFromStash"
     const val CLEAR_STASH = "clearStash"
     const val SNOOZE = "snooze"
     const val UNSNOOZE = "unsnooze"
@@ -202,18 +205,21 @@ object MenuItemIds {
 }
 
 /**
- * The choices of the swipe settings (`SWIPE_QUEUE_ACTIONS` / `SWIPE_LIST_ACTIONS` in the core's
+ * The choices of the swipe settings (`SWIPE_QUEUE_ACTIONS` / `SWIPE_LIST_ACTIONS` / `SWIPE_STASH_ACTIONS` in the core's
  * settings registry) and their defaults. "love" toggles: the row runs love or unlove by its state.
  */
 object SwipeOptions {
     const val NONE = "none"
     val QUEUE = listOf(NONE, ActionIds.REMOVE_FROM_QUEUE, ActionIds.PLAY_NEXT, ActionIds.LOVE, ActionIds.ADD_TO_PLAYLIST, ActionIds.DOWNLOAD, ActionIds.SNOOZE, ActionIds.UNSNOOZE, ActionIds.PREVIEW)
     val LIST = listOf(NONE, ActionIds.PLAY_NEXT, ActionIds.ADD_TO_QUEUE, ActionIds.PLAY_LATER, ActionIds.LOVE, ActionIds.ADD_TO_PLAYLIST, ActionIds.DOWNLOAD, ActionIds.STASH, ActionIds.SNOOZE, ActionIds.UNSNOOZE, ActionIds.PREVIEW)
+    val STASH = listOf(NONE, ActionIds.REMOVE_FROM_STASH, ActionIds.PLAY_NEXT, ActionIds.ADD_TO_QUEUE, ActionIds.PLAY_LATER, ActionIds.LOVE, ActionIds.ADD_TO_PLAYLIST, ActionIds.DOWNLOAD, ActionIds.SNOOZE, ActionIds.UNSNOOZE, ActionIds.PREVIEW)
     val DEFAULTS = mapOf(
         SettingKeys.SWIPE_QUEUE_START_TO_END to ActionIds.REMOVE_FROM_QUEUE,
         SettingKeys.SWIPE_QUEUE_END_TO_START to ActionIds.REMOVE_FROM_QUEUE,
         SettingKeys.SWIPE_LIST_START_TO_END to ActionIds.PLAY_NEXT,
         SettingKeys.SWIPE_LIST_END_TO_START to ActionIds.PLAY_LATER,
+        SettingKeys.SWIPE_STASH_START_TO_END to ActionIds.REMOVE_FROM_STASH,
+        SettingKeys.SWIPE_STASH_END_TO_START to ActionIds.REMOVE_FROM_STASH,
     )
 
     /** What swiping up on the full player can open (`SWIPE_PLAYER_UP_ACTIONS`); the first is the default. */

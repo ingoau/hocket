@@ -1743,6 +1743,10 @@ impl Actor {
             },
             volume_unknown: self.volume_control().0.is_none(),
             snoozed_tracks: self.snoozed_ids().into_iter().map(|t| t.id).collect(),
+            stash_entries: crate::stash::live(&self.stash)
+                .into_iter()
+                .map(|e| (e.track.clone(), e.entry_id.clone()))
+                .collect(),
             hocket_library_sources: self
                 .accounts
                 .iter()

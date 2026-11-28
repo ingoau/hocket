@@ -909,6 +909,39 @@ fn handlers_map_to_commands() {
     assert_eq!(r.label("clearQueue"), Some("Clear queue"));
 }
 
+/// Removing from the stash finds the entry listing each song; songs not in the stash leave it off.
+#[test]
+fn remove_from_stash_names_the_listed_entries() {
+    let r = ActionRegistry::new(Platform::Linux);
+    let res = NoResolver;
+    let s = StateView {
+        stash_entries: vec![
+            (TrackRef::new("srv", "a"), "e-a".into()),
+            (TrackRef::new("srv", "b"), "e-b".into()),
+        ],
+        ..state()
+    };
+    assert_eq!(
+        r.commands("removeFromStash", &tracks(&["b", "x"]), &s, &res)
+            .unwrap(),
+        vec![Command::StashRemove {
+            entry_ids: vec!["e-b".into()]
+        }]
+    );
+    assert_eq!(
+        r.commands("removeFromStash", &tracks(&["x"]), &s, &res),
+        Err(ActionError::Disabled("removeFromStash".into()))
+    );
+    // Another account's song of the same id isn't the stashed one.
+    let other = ActionTarget::Tracks {
+        tracks: vec![TrackRef::new("other", "a")],
+    };
+    assert_eq!(
+        r.commands("removeFromStash", &other, &s, &res),
+        Err(ActionError::Disabled("removeFromStash".into()))
+    );
+}
+
 #[test]
 fn media_session_buttons_follow_customisation() {
     let mut r = ActionRegistry::new(Platform::Android);

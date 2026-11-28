@@ -1,5 +1,6 @@
 // Two-finger trackpad swipes on the real surfaces: a queue row swipes away (remove, by default), a
-// song row runs its swipe action (play next), and a swipe over the page goes back. A short swipe
+// song row runs its swipe action (play next), a stashed song swipes out of the stash either way, and
+// a swipe over the page goes back. A short swipe
 // springs back, a vertical scroll and a mouse wheel's notches never swipe, and Settings turns a
 // surface off. Playwright's wheel input carries no AppKit phases, so this runs on Linux's idle-gap
 // release, with natural scrolling (fingers to the right are negative deltaX).
@@ -77,6 +78,46 @@ test.describe("trackpad swipes", () => {
     await swipeOver(page, row, width * 0.4);
     await expect(page.getByTestId("queue-row-group").first()).toContainText(title);
     await expect(page.getByTestId("view-songs")).toBeVisible();
+  });
+
+  test("a stashed song swipes out of the stash either way, whatever is selected", async ({ hocket }) => {
+    const { page } = hocket;
+    await openPlace(page, "albums");
+    await page.getByTestId("grid-tile").first().dblclick();
+    const tracks = page.getByTestId("track-row");
+    await tracks.nth(0).click({ position: { x: 130, y: 12 } });
+    await tracks.nth(2).click({ position: { x: 130, y: 12 }, modifiers: ["Shift"] });
+    await page.keyboard.press("Control+s");
+    await expect(page.getByTestId("stash-count")).toHaveText("3");
+    await page.getByTestId("stash-chip").click();
+    const rows = page.getByTestId("stash-row");
+    await expect(rows).toHaveCount(3);
+    const { width } = await pointAt(page, rows.first());
+
+    // Short of the threshold: springs back.
+    await swipeOver(page, rows.first(), -width * 0.08);
+    await expect(rows).toHaveCount(3);
+
+    // Left: out of the stash, with the core's Undo.
+    const first = await rows.first().getAttribute("data-entry");
+    await swipeOver(page, rows.first(), -width * 0.5);
+    await expect(rows).toHaveCount(2);
+    await expect(page.locator(`[data-testid=stash-row][data-entry="${first}"]`)).toHaveCount(0);
+    await expect(page.getByTestId("toast").filter({ hasText: "Removed 1 song from the stash" })).toBeVisible();
+
+    // Right, on a row while another is selected: that row goes, the selection stays.
+    await rows.first().click();
+    await expect(rows.first()).toHaveClass(/selected/);
+    const second = await rows.nth(1).getAttribute("data-entry");
+    await swipeOver(page, rows.nth(1), width * 0.5);
+    await expect(rows).toHaveCount(1);
+    await expect(page.locator(`[data-testid=stash-row][data-entry="${second}"]`)).toHaveCount(0);
+    await expect(rows.first()).toHaveClass(/selected/);
+
+    // The stash's own setting: nothing for a swipe right, and the song stays.
+    await page.evaluate(() => window.hocket.dispatch({ type: "setSetting", data: { key: "swipe.stash.startToEnd", value: JSON.stringify("none") } }));
+    await swipeOver(page, rows.first(), width * 0.5);
+    await expect(rows).toHaveCount(1);
   });
 
   test("a swipe over the page goes back; with page swipes off it does not", async ({ hocket }) => {

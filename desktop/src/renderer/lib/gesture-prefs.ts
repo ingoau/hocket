@@ -1,7 +1,7 @@
 // Device-local: trackpad swipe gestures (Settings, Gestures). Which surfaces swipe, how far a
 // swipe goes, which way the fingers run, and whether macOS plays haptics. Stored with the other
 // local UI conveniences: the trackpad is this machine's. What a row's swipe does is the core's
-// synced `swipe.list.*` / `swipe.queue.*`, shared with the phone.
+// synced `swipe.list.*` / `swipe.queue.*` / `swipe.stash.*`, shared with the phone.
 import { useMemo, useSyncExternalStore } from "react";
 import { loadLocal, saveLocal } from "./local-settings";
 import { resolveTuning, type DirectionPref, type Platform, type Sensitivity, type SwipeSurface, type SwipeTuning } from "./swipe";
@@ -20,7 +20,7 @@ export interface GesturePrefs {
 
 export const DEFAULT_GESTURE_PREFS: GesturePrefs = {
   enabled: true,
-  surfaces: { rows: true, queue: true, cover: true, page: true },
+  surfaces: { rows: true, queue: true, stash: true, cover: true, page: true },
   sensitivity: "medium",
   direction: "system",
   haptics: true,
@@ -38,7 +38,7 @@ export function normaliseGesturePrefs(raw: unknown): GesturePrefs {
   const bool = (v: unknown, f: boolean) => (typeof v === "boolean" ? v : f);
   return {
     enabled: bool(o.enabled, d.enabled),
-    surfaces: { rows: bool(s.rows, true), queue: bool(s.queue, true), cover: bool(s.cover, true), page: bool(s.page, true) },
+    surfaces: { rows: bool(s.rows, true), queue: bool(s.queue, true), stash: bool(s.stash, true), cover: bool(s.cover, true), page: bool(s.page, true) },
     sensitivity: SENSITIVITIES.includes(o.sensitivity as Sensitivity) ? (o.sensitivity as Sensitivity) : d.sensitivity,
     direction: DIRECTIONS.includes(o.direction as DirectionPref) ? (o.direction as DirectionPref) : d.direction,
     haptics: bool(o.haptics, d.haptics),

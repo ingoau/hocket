@@ -257,6 +257,31 @@ fn stash(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Command> {
     vec![Command::StashAdd { tracks }]
 }
 
+/// The listed stash entries of the target's songs.
+fn stash_entry_ids(t: &ActionTarget, s: &StateView) -> Vec<String> {
+    match t {
+        ActionTarget::Tracks { tracks } => s
+            .stash_entries
+            .iter()
+            .filter(|(track, _)| tracks.contains(track))
+            .map(|(_, id)| id.clone())
+            .collect(),
+        _ => vec![],
+    }
+}
+
+fn in_stash(t: &ActionTarget, s: &StateView) -> bool {
+    !stash_entry_ids(t, s).is_empty()
+}
+
+fn remove_from_stash(t: &ActionTarget, s: &StateView, _: &dyn Resolver) -> Vec<Command> {
+    let entry_ids = stash_entry_ids(t, s);
+    if entry_ids.is_empty() {
+        return vec![];
+    }
+    vec![Command::StashRemove { entry_ids }]
+}
+
 fn clear_stash(_: &ActionTarget, _: &StateView, _: &dyn Resolver) -> Vec<Command> {
     vec![Command::StashClear]
 }
@@ -929,6 +954,16 @@ static ALL: &[ActionDef] = &[
         none,
         default_shortcut = Some("Mod+Shift+S"),
         ui_handled = true
+    ),
+    action!(
+        "removeFromStash",
+        "Remove from stash",
+        "remove",
+        Queue,
+        &[TargetKind::Tracks],
+        in_stash,
+        remove_from_stash,
+        undoable = true
     ),
     action!(
         "clearStash",

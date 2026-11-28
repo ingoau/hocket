@@ -337,7 +337,7 @@ Symbols name in the script, list it under its group, and re-run; the output is c
   `Confirm` on a completed skip, `LongPress` on entering selection mode.
 - Lists: long-press enters selection mode, the actions come from `Query.Actions(contextMenu, …)`
   in an expressive `HorizontalFloatingToolbar`; drag handles reorder (playlists, queue); swipe
-  removes from the queue (undo from the core's toast).
+  removes from the queue or the stash by default (undo from the core's toast).
 - Lyrics: syllable gradient sweep per syllable driven by `withFrameNanos` and `LyricsCursor`,
   30 fps with battery saver's lighter lyrics (whole lines at ~12 fps with simple lyrics), stopped
   when not visible; AGSL warp background on Android 13+, static

@@ -1771,6 +1771,8 @@ class FakeCore(
             id == ActionIds.STASH_QUEUE_GROUP -> handle(Command.StashQueueGroup)
             id == ActionIds.PREVIEW -> trackIds.firstOrNull()?.let { previewStart(it) }
             id == ActionIds.STASH -> stashAdd(trackIds)
+            id == ActionIds.REMOVE_FROM_STASH -> stash.filter { it.second in trackIds }.map { it.first }.takeIf { it.isNotEmpty() }
+                ?.let { handle(Command.StashRemove(CommandStashRemoveInner(it))) }
             id == ActionIds.CLEAR_STASH -> handle(Command.StashClear)
             id == ActionIds.LOVE -> setLoved(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it, serverId)) }, true)
             id == ActionIds.UNLOVE -> setLoved(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it, serverId)) }, false)
@@ -1877,6 +1879,7 @@ class FakeCore(
                 library + listOf(
                     d(ActionIds.SNOOZE, "Snooze", "bedtime", "queue", enabled = fresh),
                     d(ActionIds.UNSNOOZE, "Unsnooze", "bedtime", "queue", enabled = snoozed),
+                    d(ActionIds.REMOVE_FROM_STASH, "Remove from stash", "remove", "queue", enabled = stash.any { it.second in ids }),
                     d(ActionIds.GO_TO_ALBUM, "Go to album", "album", "navigation", undoable = false),
                     d(ActionIds.GO_TO_ARTIST, "Go to artist", "artist", "navigation", undoable = false),
                 )

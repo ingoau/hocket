@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { hasString } from "@shared/strings";
-import { rowSwipeAction, sideKey, SWIPE_DEFAULTS, SWIPE_LIST_ACTIONS, SWIPE_QUEUE_ACTIONS, swipeChoiceLabel } from "./swipe-actions";
+import { rowSwipeAction, sideKey, SWIPE_DEFAULTS, SWIPE_LIST_ACTIONS, SWIPE_QUEUE_ACTIONS, SWIPE_STASH_ACTIONS, swipeChoiceLabel } from "./swipe-actions";
 import { DEFAULT_GESTURE_PREFS, normaliseGesturePrefs } from "./gesture-prefs";
 
 const facts = { loved: false, downloaded: false, snoozed: false, queueSection: true };
@@ -13,9 +13,10 @@ describe("the core's swipe settings", () => {
   it("offers the registry's choices, in its order", () => {
     expect(list("SWIPE_LIST_ACTIONS")).toEqual([...SWIPE_LIST_ACTIONS]);
     expect(list("SWIPE_QUEUE_ACTIONS")).toEqual([...SWIPE_QUEUE_ACTIONS]);
+    expect(list("SWIPE_STASH_ACTIONS")).toEqual([...SWIPE_STASH_ACTIONS]);
   });
   it("falls back to the registry's defaults", () => {
-    for (const [key, id] of [["SWIPE_LIST_START_TO_END", SWIPE_DEFAULTS.list.startToEnd], ["SWIPE_LIST_END_TO_START", SWIPE_DEFAULTS.list.endToStart], ["SWIPE_QUEUE_START_TO_END", SWIPE_DEFAULTS.queue.startToEnd], ["SWIPE_QUEUE_END_TO_START", SWIPE_DEFAULTS.queue.endToStart]] as const) {
+    for (const [key, id] of [["SWIPE_LIST_START_TO_END", SWIPE_DEFAULTS.list.startToEnd], ["SWIPE_LIST_END_TO_START", SWIPE_DEFAULTS.list.endToStart], ["SWIPE_QUEUE_START_TO_END", SWIPE_DEFAULTS.queue.startToEnd], ["SWIPE_QUEUE_END_TO_START", SWIPE_DEFAULTS.queue.endToStart], ["SWIPE_STASH_START_TO_END", SWIPE_DEFAULTS.stash.startToEnd], ["SWIPE_STASH_END_TO_START", SWIPE_DEFAULTS.stash.endToStart]] as const) {
       expect(registry).toMatch(new RegExp(`${key},\\s*Synced,\\s*SettingKind::Enum\\(\\w+\\),\\s*\\|\\| json!\\("${id}"\\)`));
     }
   });
@@ -23,14 +24,15 @@ describe("the core's swipe settings", () => {
 
 describe("rowSwipeAction", () => {
   it("names every choice in the pickers", () => {
-    for (const id of [...SWIPE_LIST_ACTIONS, ...SWIPE_QUEUE_ACTIONS]) {
+    for (const id of [...SWIPE_LIST_ACTIONS, ...SWIPE_QUEUE_ACTIONS, ...SWIPE_STASH_ACTIONS]) {
       expect(hasString(`swipe.choice.${id}`)).toBe(true);
       expect(swipeChoiceLabel(id)).not.toBe("");
     }
   });
 
-  it("slides a removed queue row out; everything else springs back", () => {
+  it("slides a row removed from the queue or the stash out; everything else springs back", () => {
     expect(rowSwipeAction("removeFromQueue", facts)).toMatchObject({ runId: "removeFromQueue", dismisses: true, tone: "danger" });
+    expect(rowSwipeAction("removeFromStash", facts)).toMatchObject({ runId: "removeFromStash", dismisses: true, tone: "danger" });
     expect(rowSwipeAction("playNext", facts)).toMatchObject({ runId: "playNext", dismisses: false });
     expect(rowSwipeAction("none", facts)).toBeNull();
   });

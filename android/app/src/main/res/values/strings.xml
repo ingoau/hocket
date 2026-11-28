@@ -893,6 +893,7 @@
     <string name="settings_swipe_hint">What swiping a song sideways does. Every action is also in the song\'s menu.</string>
     <string name="settings_swipe_queue">In the queue</string>
     <string name="settings_swipe_lists">In albums, playlists, search and the library</string>
+    <string name="settings_swipe_stash">In the stash</string>
     <string name="settings_swipe_right">Swipe right</string>
     <string name="settings_swipe_left">Swipe left</string>
     <string name="settings_swipe_none">None</string>
@@ -1173,6 +1174,7 @@
     <string name="snooze_title">Snoozed</string>
     <string name="snooze_empty">Nothing snoozed. Snooze a song from its menu to leave it out of shuffle, playlists and autoplay for a while.</string>
     <string name="action_label_clear_stash">Clear stash</string>
+    <string name="action_label_remove_from_stash">Remove from stash</string>
     <string name="action_label_unpin">Remove download</string>
     <string name="action_label_go_to_album">Go to album</string>
     <string name="action_label_go_to_artist">Go to artist</string>

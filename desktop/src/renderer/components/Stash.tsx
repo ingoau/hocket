@@ -1,12 +1,14 @@
 // The song stash (#150) in the top bar: a chip that grows in once something is stashed (a fan of
 // the first two covers and the count) and opens a popover listing the stash, with actions on the
 // whole of it or on a selection within it. Acting on the stash keeps it; Clear empties it (the core
-// toasts an Undo). The list reorders by drag and removes with × or Delete.
+// toasts an Undo). The list reorders by drag and removes with ×, Delete or a two-finger swipe (the
+// synced swipe.stash.* settings, remove by default either way).
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ActionTarget, StashItem } from "@core/api";
 import { t } from "@shared/strings";
 import { ARTWORK_SIZES } from "@shared/constants";
-import { useApp } from "../store/app";
+import { SK } from "@shared/settings-keys";
+import { useApp, useSetting } from "../store/app";
 import { bridge } from "../core/bridge";
 import { executeAction } from "../store/actions";
 import { usePresence } from "../lib/presence";
@@ -16,6 +18,12 @@ import { Artwork } from "./Artwork";
 import { Icon } from "./Icon";
 import { openContextMenu } from "./ContextMenu";
 import { refOf } from "../lib/track-ref";
+import { usePrefersReducedMotion } from "../lib/media";
+import { useSurfaceTuning } from "../lib/gesture-prefs";
+import { useSettle, useSwipe } from "../lib/swipe-hook";
+import { isRtl, rowSwipeAction, runRowSwipe, SWIPE_DEFAULTS, SWIPE_KEYS, type RowSwipeAction } from "../lib/swipe-actions";
+import type { Side } from "../lib/swipe";
+import { SwipeReveal } from "./SwipeReveal";
 
 const count = (n: number) => (n === 1 ? t("stash.countOne") : t("stash.count", { count: n }));
 
@@ -129,6 +137,58 @@ function StashPopover({ items, exitProps, motion, close }: { items: StashItem[];
     showToast(next ? (n === 1 ? t("stash.addedNextOne") : t("stash.addedNext", { count: n })) : n === 1 ? t("stash.addedOne") : t("stash.added", { count: n }));
   };
   const remove = (entryIds: string[]) => bridge().dispatch({ type: "stashRemove", data: { entry_ids: entryIds } });
+  // Two-finger swipes on a row run the swipe.stash.* settings' actions on that one song, whatever is
+  // selected (remove by default, which slides the row out; the core's toast offers Undo).
+  const swipeTuning = useSurfaceTuning("stash");
+  const reducedMotion = usePrefersReducedMotion();
+  const settle = useSettle(swipeTuning, reducedMotion);
+  const queueSection = useSetting<boolean>(SK.queueSection, true);
+  const swipeStart = useSetting<string>(SWIPE_KEYS.stash.startToEnd, SWIPE_DEFAULTS.stash.startToEnd);
+  const swipeEnd = useSetting<string>(SWIPE_KEYS.stash.endToStart, SWIPE_DEFAULTS.stash.endToStart);
+  const snoozedIds = useApp((s) => s.snoozes.map((x) => x.trackRef.id).join("\n"));
+  /** The actions a row's swipe right and left run (right is start-to-end in left-to-right text). */
+  const swipeActions = (item: StashItem | undefined): { right: RowSwipeAction | null; left: RowSwipeAction | null } => {
+    if (!item) return { right: null, left: null };
+    const tr = item.track;
+    const facts = { loved: !!tr.loved, downloaded: tr.offline === "downloaded", snoozed: snoozedIds.split("\n").includes(tr.id), queueSection };
+    const rtl = isRtl();
+    return { right: rowSwipeAction(rtl ? swipeEnd : swipeStart, facts), left: rowSwipeAction(rtl ? swipeStart : swipeEnd, facts) };
+  };
+  /** A row swiped away: it slides out, then the core drops it from the stash. */
+  const [leaving, setLeaving] = useState<{ id: string; side: Side } | undefined>(undefined);
+  const swipe = useSwipe<string>(listRef, {
+    tuning: swipeTuning,
+    disabled: !!drag,
+    begin: (ev) => {
+      const id = (ev.target as Element | null)?.closest<HTMLElement>(".stash-row[data-entry]")?.dataset.entry;
+      const a = swipeActions(id ? items.find((x) => x.entryId === id) : undefined);
+      return id && id !== leaving?.id && (a.right || a.left) ? { key: id, sides: { start: !!a.right, end: !!a.left } } : null;
+    },
+    onCommit: (side, _how, id) => {
+      const item = id ? items.find((x) => x.entryId === id) : undefined;
+      const a = item ? (side > 0 ? swipeActions(item).right : swipeActions(item).left) : null;
+      if (!id || !item || !a) return;
+      const row = listRef.current?.querySelector<HTMLElement>(`[data-entry="${CSS.escape(id)}"]`) ?? null;
+      const ref = refOf(item.track);
+      const run = () => runRowSwipe(a, { type: "tracks", data: { tracks: [ref] } }, ref, row);
+      if (!a.dismisses) return run();
+      setLeaving({ id, side });
+      // Let the row slide out before the list drops it.
+      window.setTimeout(run, reducedMotion ? 0 : 200);
+      window.setTimeout(() => setLeaving((l) => (l?.id === id ? undefined : l)), 1500);
+    },
+  });
+  /** Where a row's content is drawn while swiped or sliding out, and what it uncovers. */
+  const swipeOf = (item: StashItem): { reveal: RowSwipeAction | null; side: Side; armed: boolean; style: React.CSSProperties } | undefined => {
+    if (leaving?.id === item.entryId) {
+      return { reveal: leaving.side > 0 ? swipeActions(item).right : swipeActions(item).left, side: leaving.side, armed: true, style: { translate: `${leaving.side * 105}% 0`, transition: reducedMotion ? undefined : "translate 180ms cubic-bezier(.3,0,.8,.15)" } };
+    }
+    if (swipe.key !== item.entryId || !(swipe.stage === "tracking" || swipe.settling)) return undefined;
+    const tracking = swipe.stage === "tracking";
+    const side = swipe.side;
+    const reveal = side === 0 ? null : side > 0 ? swipeActions(item).right : swipeActions(item).left;
+    return { reveal, side: side === 0 ? 1 : side, armed: swipe.armed !== 0, style: { translate: `${tracking ? swipe.offset : 0}px 0`, transition: tracking || settle === "none" ? undefined : settle } };
+  };
   const toggle = (id: string) => {
     const next = new Set(selected);
     if (next.has(id)) next.delete(id);
@@ -177,10 +237,11 @@ function StashPopover({ items, exitProps, motion, close }: { items: StashItem[];
           const on = selected.has(item.entryId);
           const before = drag && drag.over === i && dragFrom !== i && dragFrom !== i - 1;
           const after = drag && i === items.length - 1 && drag.over === items.length && dragFrom !== i;
+          const swiped = swipeOf(item);
           return (
             <li
               key={item.entryId}
-              className={`stash-row ${on ? "selected" : ""} ${dragFrom === i ? "dragging" : ""} ${before ? "drop-before" : ""} ${after ? "drop-after" : ""}`}
+              className={`stash-row ${on ? "selected" : ""} ${dragFrom === i ? "dragging" : ""} ${before ? "drop-before" : ""} ${after ? "drop-after" : ""} ${swiped ? "swiping" : ""}`}
               tabIndex={0}
               draggable
               data-entry={item.entryId}
@@ -215,6 +276,8 @@ function StashPopover({ items, exitProps, motion, close }: { items: StashItem[];
               onDrop={(e) => { e.preventDefault(); drop(); }}
               onDragEnd={() => setDrag(undefined)}
             >
+              {swiped?.reveal ? <SwipeReveal action={swiped.reveal} side={swiped.side} armed={swiped.armed} /> : null}
+              <span className="stash-row-body" style={swiped?.style}>
               <Icon name="grip" size={16} className="stash-grip" />
               <Artwork id={item.track.coverArt ?? undefined} size={ARTWORK_SIZES.thumb} className="art" />
               <span className="stash-text">
@@ -233,6 +296,7 @@ function StashPopover({ items, exitProps, motion, close }: { items: StashItem[];
               >
                 <Icon name="close" size={16} />
               </button>
+              </span>
             </li>
           );
         })}

@@ -140,6 +140,7 @@ import app.hocket.ui.components.itemMenu
 import app.hocket.ui.components.SongMenuExtra
 import app.hocket.ui.components.songSubject
 import app.hocket.ui.components.TrackRow
+import app.hocket.ui.components.SwipeSurface
 import app.hocket.ui.components.formatClock
 import app.hocket.ui.components.segmentedShape
 import app.hocket.ui.components.songsSubject
@@ -678,6 +679,9 @@ private fun StashList(
                     selected = item.entryId in picked,
                     selectionActive = true,
                     onToggleSelect = { onToggle(item.entryId) },
+                    // A swipe acts on its own row, whatever is picked.
+                    swipe = SwipeSurface.Stash,
+                    swipeWhileSelecting = true,
                     extraActions = moves,
                     segment = index to shown.size,
                     subtitle = listOfNotNull(track.artist, formatClock(track.durationMs.toLong())).joinToString(dot),

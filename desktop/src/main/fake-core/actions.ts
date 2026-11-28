@@ -31,6 +31,7 @@ export const REGISTRY: RegistryEntry[] = [
   { id: "addToPlaylist", label: "Add to playlist…", icon: "playlistAdd", category: "library", targets: ["tracks", "albums", "queueItems"], surfaces: ["contextMenu"], undoable: true },
   { id: "stash", label: "Stash", icon: "stash", category: "queue", targets: ["none", "tracks", "albums", "artists", "playlists", "queueItems"], surfaces: ["contextMenu", "palette", "mediaSession"], defaultShortcut: "Mod+S" },
   { id: "openStash", label: "Open stash", icon: "stash", category: "view", targets: ["none"], surfaces: ["palette"], defaultShortcut: "Mod+Shift+S" },
+  { id: "removeFromStash", label: "Remove from stash", icon: "remove", category: "queue", targets: ["tracks"], surfaces: ["palette"], undoable: true },
   { id: "clearStash", label: "Clear stash", icon: "clear_all", category: "queue", targets: ["none"], surfaces: ["palette"] },
   { id: "snooze", label: "Snooze", icon: "bedtime", category: "queue", targets: ["tracks", "queueItems"], surfaces: ["contextMenu", "palette"], undoable: true },
   { id: "unsnooze", label: "Unsnooze", icon: "bedtime", category: "queue", targets: ["tracks", "queueItems"], surfaces: ["contextMenu", "palette"], undoable: true },
