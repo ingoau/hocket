@@ -121,6 +121,7 @@ impl Actor {
             handoff: None,
             clipped: clip,
             clip_start_ms: position_ms,
+            clip_armed: false,
         });
         if let Err(e) = self.backend.preview_load(source, position_ms) {
             self.log("debug", format!("preview load: {e}"));
@@ -168,6 +169,7 @@ impl Actor {
         preview.position_at = now;
         preview.positioned = true;
         preview.clip_start_ms = position_ms;
+        preview.clip_armed = false;
         if let Err(e) = self.backend.preview_seek(position_ms) {
             self.log("debug", format!("preview seek: {e}"));
         }
@@ -352,6 +354,7 @@ impl Actor {
             preview.position_at = now;
             preview.positioned = true;
             preview.clip_start_ms = position_ms;
+            preview.clip_armed = false;
             if let Err(e) = self.backend.preview_seek(position_ms) {
                 self.log("debug", format!("preview seek: {e}"));
             }
@@ -372,10 +375,14 @@ impl Actor {
             position_ms
         };
         preview.playing = playing;
+        let clip = Self::clip_of(preview);
+        if (clip.start_ms..clip.end_ms).contains(&preview.position_ms) {
+            preview.clip_armed = true;
+        }
         let clip_over = preview.clipped
             && preview.handoff.is_none()
-            && preview.positioned
-            && preview.position_ms >= Self::clip_of(preview).end_ms;
+            && preview.clip_armed
+            && preview.position_ms >= clip.end_ms;
         if (cap > 0 && preview.position_ms >= cap) || clip_over {
             self.stop_preview(true);
             return;

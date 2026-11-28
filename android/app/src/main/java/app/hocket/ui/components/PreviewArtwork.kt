@@ -12,7 +12,9 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -58,7 +60,12 @@ fun PreviewArtwork(coverArt: String?, track: TrackRef?, size: Dp, shape: Shape, 
             delay(50)
         }
     }
-    val fraction = sample?.let { previewClipFraction(it, now) } ?: 0f
+    // While the overlay fades out the preview is gone: it keeps drawing the last one, so the ring
+    // doesn't snap back and a paused glyph doesn't flip.
+    val last = remember { mutableStateOf<PreviewState?>(null) }
+    if (sample != null) last.value = sample
+    val drawn = sample ?: last.value
+    val fraction = drawn?.let { previewClipFraction(it, now) } ?: 0f
     val label = when {
         sample == null -> stringResource(R.string.menu_preview_play)
         sample.playing -> stringResource(R.string.menu_preview_pause)
@@ -96,7 +103,7 @@ fun PreviewArtwork(coverArt: String?, track: TrackRef?, size: Dp, shape: Shape, 
                     gapSize = 0.dp,
                 )
                 Icon(
-                    if (sample?.playing == false) HocketIcons.Filled.PlayArrow else HocketIcons.Filled.Pause,
+                    if (drawn?.playing == false) HocketIcons.Filled.PlayArrow else HocketIcons.Filled.Pause,
                     null,
                     tint = Color.White,
                     modifier = Modifier.size(size * 0.32f),

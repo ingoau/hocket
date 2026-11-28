@@ -233,6 +233,7 @@ export class FakeCore implements CoreHandle {
     if (this.ticker) clearInterval(this.ticker);
     for (const t of this.timers) clearTimeout(t);
     this.timers.clear();
+    clearTimeout(this.previewClipTimer);
     for (const resolve of this.roomDiagnosticsWaiting) resolve("Other devices: not collected (the core shut down).\n");
     this.roomDiagnosticsWaiting.clear();
   }
@@ -2835,7 +2836,7 @@ export class FakeCore implements CoreHandle {
         this.handle({ type: "stashQueueGroup" });
         return;
       case "preview":
-        if (trackIds.length === 1) this.previewStart(trackIds[0]!, false);
+        if (trackIds.length === 1) this.previewStart(trackIds[0]!, true);
         return;
       case "stash":
         this.stashAdd(trackIds);

@@ -334,7 +334,8 @@ fun sheetLayout(
         }
     }
     val (removing, others) = extras.filter { it.item == null }.partition { it.destructive }
-    val (extraMore, extraShort) = others.partition { it.underMore }
+    // A More holding only an extra is a tap for nothing: with nothing folded it stays in the list.
+    val (extraMore, extraShort) = if (more.isEmpty()) emptyList<SongMenuExtra>() to others else others.partition { it.underMore }
     var short = extraShort.map { MenuEntry.Extra(it) } + primary
     var folded: List<MenuEntry> = extraMore.map { MenuEntry.Extra(it) } + more
     if (short.isEmpty()) { short = folded; folded = emptyList() }

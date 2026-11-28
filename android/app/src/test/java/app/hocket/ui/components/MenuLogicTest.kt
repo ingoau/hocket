@@ -129,6 +129,10 @@ class MenuLogicTest {
         assertTrue(l.primary.none { it.key == "sleep" })
         assertEquals("sleep", l.more.first().key)
         assertEquals(0, menuExtraCount(listOf(sleep)))
+        // A menu that folds nothing keeps it in the list rather than alone under More.
+        val short = sheetLayout(CoreMenu(song.items.map { it.copy(folded = false) }), listOf(sleep), canGoToAlbum = true, canGoToArtist = true, snoozed = false)
+        assertEquals("sleep", short.primary.first().key)
+        assertTrue(short.more.isEmpty())
     }
 
     @Test

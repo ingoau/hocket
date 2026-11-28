@@ -362,7 +362,6 @@ export function ContextMenu() {
   const coverCell = previewable ? cells.length : -1;
   if (previewable) {
     cells.push({ label: "", enabled: true, line, run: previewCommand });
-    commands.set("preview", previewCommand);
     line++;
   }
   model.forEach((r, ri) => {
