@@ -87,7 +87,7 @@ class AppScreenshotTest {
         shot(dir, "android-dark-17-queue-$size")
     }
 
-    /** A song by two artists: its artist line, and the sheet listing both. */
+    /** A song by two artists: its artist line, and the song's details linking both. */
     @Test
     @Config(qualifiers = "+night")
     fun duetDark() = captureDuet("dark")
@@ -114,9 +114,9 @@ class AppScreenshotTest {
         settle()
         shot(dir, "android-$theme-06c-player-two-artists")
         click("player.artistLine")
-        awaitTag("player.artists.artist.1")
+        awaitTag("player.about.artistLink.1")
         settle()
-        shot(dir, "android-$theme-06d-artists-sheet-two-artists")
+        shot(dir, "android-$theme-06d-info-sheet-two-artists")
         dismissSheet()
     }
 
@@ -219,15 +219,6 @@ class AppScreenshotTest {
             awaitTag("player.about")
             settle()
             shot(dir, "$prefix-06-info-sheet")
-            dismissSheet()
-        }
-
-        step {
-            // The artist line's sheet: the song's artists, then its album.
-            click("player.artistLine")
-            awaitTag("player.artists.album")
-            settle()
-            shot(dir, "$prefix-06b-artists-sheet")
             dismissSheet()
         }
 

@@ -166,7 +166,7 @@ import kotlin.math.roundToLong
  * - the drag handle (a tap collapses the player);
  * - the mode area: the big artwork in [PlayerMode.Artwork], or the lyrics or the queue in its place,
  *   straight on the player's backdrop (the artwork then sits small beside the title);
- * - the title row: a thumbnail slot (lyrics / queue), title and "artist · album" (a tap opens the
+ * - the title row: a thumbnail slot (lyrics / queue), title and artist (a tap on either opens the
  *   song's details in a sheet), the star rating (draggable; hidden by `display.playerRating`) and a
  *   tonal add-to-playlist button;
  * - spread over what is left: the wavy seek bar with elapsed and
@@ -225,7 +225,6 @@ internal fun FullPlayer(
     var handoffPull by remember { mutableStateOf<app.hocket.ui.components.SheetPull?>(null) }
     var queues by remember { mutableStateOf(false) }
     var info by remember { mutableStateOf(false) }
-    var artists by remember { mutableStateOf(false) }
     var lyricsTiming by remember { mutableStateOf(false) }
     // While the lyrics show, the song menu offers their timing (the row that sat under them).
     val lyricsDoc = if (mode == PlayerMode.Lyrics) app.hocket.ui.lyrics.rememberCurrentLyrics().lyrics else null
@@ -352,7 +351,7 @@ internal fun FullPlayer(
                     ) { header() }
                 },
                 area = { ModeArea(mode, hero, lyricsVisible, queueModifier = if (folding) Modifier.nestedScroll(collapse.connection) else Modifier, queueDrawer = wide) },
-                title = { Box(pickHidden) { PlayerTitle(mode, hero, showRating, carousel, neighbours, thumbInRow = !artAbove, onInfo = { info = true }, onArtists = { artists = true }, onAddTo = { addTo = true }, shown = shown) } },
+                title = { Box(pickHidden) { PlayerTitle(mode, hero, showRating, carousel, neighbours, thumbInRow = !artAbove, onInfo = { info = true }, onAddTo = { addTo = true }, shown = shown) } },
                 seek = { Box(pickHidden) { PlayerSeek(position, fold, shown) } },
                 transport = {
                     val playing by client.isPlaying.collectAsStateWithLifecycle()
@@ -425,7 +424,6 @@ internal fun FullPlayer(
     if (queues) QueuesSheet(onDismiss = { queues = false })
     if (lyricsTiming) app.hocket.ui.lyrics.LyricsTimingSheet(onDismiss = { lyricsTiming = false })
     if (info) SongInfoSheet(onDismiss = { info = false }, onOpenAlbum = { info = false; onOpenAlbum(it) }, onOpenArtist = { info = false; onOpenArtist(it) })
-    if (artists && track != null) ArtistsSheet(track, onDismiss = { artists = false }, onOpenAlbum = { artists = false; onOpenAlbum(it) }, onOpenArtist = { artists = false; onOpenArtist(it) })
     if (addTo && track != null) PlaylistPicker(Commands.tracks(listOf(track.ref)), onDismiss = { addTo = false })
 }
 
@@ -810,7 +808,7 @@ private fun Modifier.fadingEdges(top: Dp = 20.dp, bottom: Dp = 28.dp): Modifier 
 
 /** The title row ([TitleRow]), or what to do when nothing is queued. */
 @Composable
-private fun PlayerTitle(mode: PlayerMode, hero: HeroGeometry, showRating: Boolean, carousel: SkipCarousel, neighbours: Neighbours, thumbInRow: Boolean, onInfo: () -> Unit, onArtists: () -> Unit, onAddTo: () -> Unit, shown: () -> Boolean) {
+private fun PlayerTitle(mode: PlayerMode, hero: HeroGeometry, showRating: Boolean, carousel: SkipCarousel, neighbours: Neighbours, thumbInRow: Boolean, onInfo: () -> Unit, onAddTo: () -> Unit, shown: () -> Boolean) {
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val track = entry?.track
@@ -821,7 +819,7 @@ private fun PlayerTitle(mode: PlayerMode, hero: HeroGeometry, showRating: Boolea
                 Text(stringResource(R.string.empty_queue_body), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
             }
         } else {
-            TitleRow(track, compact = mode != PlayerMode.Artwork, hero, showRating, carousel, neighbours, thumbInRow, onInfo, onArtists, onAddTo, shown)
+            TitleRow(track, compact = mode != PlayerMode.Artwork, hero, showRating, carousel, neighbours, thumbInRow, onInfo, onAddTo, shown)
         }
     }
 }
@@ -920,8 +918,8 @@ private fun SeekStatus() {
 }
 
 /**
- * The title (one target: the song's details, [SongInfoSheet]) and the artist line (another: the
- * song's artists and album, [ArtistsSheet]), the star rating under them (when [showRating]), and
+ * The title and the artist line (two targets, both opening the song's details, [SongInfoSheet]),
+ * the star rating under them (when [showRating]), and
  * add to playlist (a tonal round button). The title's target takes the row's top margin and the
  * artist's reaches 48 dp down where nothing is below it (the stars in artwork mode leave it its line,
  * with Compose's touch slop round it). In a non-artwork mode a thumbnail slot opens at the start of
@@ -933,10 +931,9 @@ private fun SeekStatus() {
  * with the swipe.
  */
 @Composable
-private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, showRating: Boolean, carousel: SkipCarousel, neighbours: Neighbours, thumbInRow: Boolean, onInfo: () -> Unit, onArtists: () -> Unit, onAddTo: () -> Unit, shown: () -> Boolean) {
+private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, showRating: Boolean, carousel: SkipCarousel, neighbours: Neighbours, thumbInRow: Boolean, onInfo: () -> Unit, onAddTo: () -> Unit, shown: () -> Boolean) {
     val client = LocalCoreClient.current
     val infoLabel = stringResource(R.string.player_about_title)
-    val artistsLabel = stringResource(R.string.player_artists_action)
     val trackDesc = stringResource(R.string.player_track_a11y, track.title, track.artist ?: stringResource(R.string.unknown_artist))
     val previous = neighbours.previous?.track
     val capHeight = rememberCapHeightPx(MaterialTheme.typography.headlineSmallEmphasized.fontSize)
@@ -969,13 +966,13 @@ private fun TitleRow(track: TrackSummary, compact: Boolean, hero: HeroGeometry, 
                                 .testTag("player.title")
                                 .padding(top = 16.dp),
                         ) { MarqueeText(track.title, titleStyle(), running = !swiping, shown = shown) }
-                        // The artist line: the song's artists and its album.
+                        // The artist line: a second target for the song's details.
                         Box(
                             Modifier
                                 .fillMaxWidth()
                                 .heightIn(min = if (showRating && !compact) 0.dp else 48.dp)
                                 .clip(RoundedCornerShape(12.dp))
-                                .clickable(onClickLabel = artistsLabel, role = Role.Button, onClick = onArtists)
+                                .clickable(onClickLabel = infoLabel, role = Role.Button, onClick = onInfo)
                                 .testTag("player.artistLine"),
                         ) { ArtistLine(track, tagged = true, running = !swiping, shown = shown) }
                     }

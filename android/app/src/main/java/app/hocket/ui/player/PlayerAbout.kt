@@ -1,6 +1,9 @@
 package app.hocket.ui.player
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Spacer
@@ -93,10 +96,10 @@ import java.util.Locale
 
 /**
  * The song's details, the info sheet's content (from a tap on the player's title, or a song menu's
- * "Song info"): a header (the cover, the title, the artist and album, which go to their pages),
- * then three tabs as a connected button group. Song: plays and last played, the rating (one
- * adjustable control, tag `rating`), length, track, year and genre as tiles, the album and artist
- * as links, the comment. About: what the server adds from Last.fm and MusicBrainz (the album's
+ * "Song info"): a header (the cover, the title, the artist and album, which go to their pages; with
+ * several artists the artist string opens a menu of them), then three tabs as a connected button
+ * group. Song: plays and last played, the rating (one adjustable control, tag `rating`), length,
+ * track, year and genre as tiles, the album and each of the song's artists as links, the comment. About: what the server adds from Last.fm and MusicBrainz (the album's
  * notes, the artist's biography, similar songs and artists, the two sites). File: format, quality,
  * bitrate, size, ReplayGain, the path and MusicBrainz id (copyable). Fetched once per track; while
  * that loads, the summary's fields show on their own. No other actions.
@@ -180,10 +183,7 @@ private fun AboutHeader(summary: TrackSummary, title: String, onClose: (() -> Un
                 Text(summary.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.semantics { heading(); contentDescription = "$title: ${summary.title}" })
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    summary.artist?.let { a ->
-                        Text(a, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false).heightIn(min = 36.dp).wrapContentHeight().then(if (onOpenArtist != null && summary.artistId != null) Modifier.clickable(onClickLabel = stringResource(R.string.action_go_to_artist)) { onOpenArtist(summary.artistId!!) } else Modifier))
-                    }
+                    summary.artist?.let { a -> HeaderArtists(a, summary.trackArtists(), onOpenArtist, Modifier.weight(1f, fill = false)) }
                     summary.album?.let { al ->
                         Text(stringResource(R.string.dot_separator), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(al, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -194,6 +194,50 @@ private fun AboutHeader(summary: TrackSummary, title: String, onClose: (() -> Un
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     }
+}
+
+/** One of a song's artists: its library id (when the server gave one) and its name. */
+internal data class TrackArtist(val id: String?, val name: String)
+
+/**
+ * The song's artists, in the order the server lists them (the core's `artists`), or without that
+ * list the one artist the summary names (its `artistId` and its artist string).
+ */
+internal fun TrackSummary.trackArtists(): List<TrackArtist> =
+    artists?.filter { it.name.isNotBlank() }?.takeIf { it.isNotEmpty() }?.map { TrackArtist(it.id, it.name) }
+        ?: listOfNotNull(artist?.takeIf { it.isNotBlank() }?.let { TrackArtist(artistId, it) })
+
+/**
+ * The header's artist string, as the server gives it ("A feat. B"). A tap goes to the artist's
+ * page; with several artists in the library it opens a menu of them to pick from.
+ */
+@Composable
+private fun HeaderArtists(text: String, artists: List<TrackArtist>, onOpenArtist: ((String) -> Unit)?, modifier: Modifier = Modifier) {
+    val linked = if (onOpenArtist == null) emptyList() else artists.filter { it.id != null }
+    var menu by remember { mutableStateOf(false) }
+    Box(modifier) {
+        Text(text, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.heightIn(min = 36.dp).wrapContentHeight().then(when (linked.size) {
+                0 -> Modifier
+                1 -> Modifier.clickable(onClickLabel = stringResource(R.string.action_go_to_artist)) { onOpenArtist!!(linked[0].id!!) }
+                else -> Modifier.clickable(onClickLabel = stringResource(R.string.action_go_to_artist)) { menu = true }
+            }).testTag("player.about.artist"))
+        if (linked.size > 1) DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, shape = RoundedCornerShape(16.dp)) {
+            linked.forEachIndexed { i, a ->
+                DropdownMenuItem(text = { Text(a.name) }, onClick = { menu = false; onOpenArtist!!(a.id!!) }, modifier = Modifier.testTag("player.about.artist.menu.$i"))
+            }
+        }
+    }
+}
+
+/** A song tab link row's avatar: the artist's picture, where the library has one. */
+@Composable
+private fun artistCover(id: String): String? {
+    val client = LocalCoreClient.current
+    val cover by produceState<String?>(null, id) {
+        value = (client.query(Queries.artist(id)) as? QueryResult.ArtistDetail)?.data?.coverArt
+    }
+    return cover
 }
 
 /** A bento tile: a small label over a value, in a group's segment shape. */
@@ -256,21 +300,19 @@ private fun SongTab(summary: TrackSummary, d: Track?, album: Album?, dot: String
             Tile(stringResource(R.string.player_about_genre), corners(be = Big), Modifier.weight(1f).fillMaxHeight()) { TileValue(d?.genre?.takeIf { it.isNotBlank() } ?: "–") }
         }
         Spacer(Modifier.height(14.dp))
-        val links = listOfNotNull(
-            summary.albumId?.takeIf { onOpenAlbum != null }?.let { aid -> Triple(stringResource(R.string.player_about_album), summary.album.orEmpty()) { onOpenAlbum!!(aid) } },
-            summary.artistId?.takeIf { onOpenArtist != null }?.let { aid -> Triple(stringResource(R.string.player_about_artist), summary.artist.orEmpty()) { onOpenArtist!!(aid) } },
-        )
-        links.forEachIndexed { i, (label, name, open) ->
-            Segment(i, links.size, onClick = open) {
-                Row(Modifier.heightIn(min = 72.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    val isArtist = label == stringResource(R.string.player_about_artist)
-                    Artwork(if (isArtist) null else summary.coverArt, ArtworkSizes.THUMB, null, Modifier.size(52.dp), if (isArtist) CircleShape else RoundedCornerShape(14.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    Icon(HocketIcons.Filled.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+        // The album, then each of the song's artists (by name, to its own page).
+        val albumLink = summary.albumId?.takeIf { onOpenAlbum != null }
+        val artistLinks = if (onOpenArtist == null) emptyList() else summary.trackArtists().filter { it.id != null }
+        val count = (if (albumLink != null) 1 else 0) + artistLinks.size
+        albumLink?.let { aid ->
+            LinkRow(0, count, stringResource(R.string.player_about_album), summary.album.orEmpty(), Modifier.testTag("player.about.album"), onClick = { onOpenAlbum!!(aid) }) {
+                Artwork(summary.coverArt, ArtworkSizes.THUMB, null, Modifier.size(52.dp), RoundedCornerShape(14.dp))
+            }
+        }
+        val first = if (albumLink != null) 1 else 0
+        artistLinks.forEachIndexed { i, a ->
+            LinkRow(first + i, count, stringResource(R.string.player_about_artist), a.name, Modifier.testTag("player.about.artistLink.$i"), onClick = { onOpenArtist!!(a.id!!) }) {
+                Artwork(artistCover(a.id!!), ArtworkSizes.THUMB, null, Modifier.size(52.dp), CircleShape)
             }
         }
         d?.comment?.takeIf { it.isNotBlank() }?.let { c ->
@@ -283,6 +325,21 @@ private fun SongTab(summary: TrackSummary, d: Track?, album: Album?, dot: String
             }
         }
         if (d == null) Text(stringResource(R.string.player_about_loading), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(4.dp))
+    }
+}
+
+/** A song tab link: its picture, a label over a name, and a chevron; a tap goes to the page. */
+@Composable
+private fun LinkRow(index: Int, count: Int, label: String, name: String, modifier: Modifier, onClick: () -> Unit, leading: @Composable () -> Unit) {
+    Segment(index, count, onClick = onClick, modifier = modifier) {
+        Row(Modifier.heightIn(min = 72.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            leading()
+            Column(Modifier.weight(1f)) {
+                Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Icon(HocketIcons.Filled.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
