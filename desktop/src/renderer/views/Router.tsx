@@ -18,17 +18,20 @@ import { Filters } from "./Filters";
 import { Stats } from "./Stats";
 import { Settings } from "./Settings";
 import { DeveloperDiagnostics } from "./DeveloperDiagnostics";
+import { useScrollMemory } from "../lib/scroll-memory";
 
 /** Detail views: a different id is a different page. */
 const DETAIL = new Set<Route["view"]>(["album", "artist", "playlist", "genre"]);
 
 /**
  * The routed view, keyed on the page (not on a tab or section param, so
- * switching tabs keeps focus) so every navigation mounts afresh and plays the
- * enter transition in m3-shell.css (off under reduced motion).
+ * switching tabs keeps focus) so every navigation mounts afresh, at the top, and
+ * plays the enter transition in m3-shell.css (off under reduced motion). Back and
+ * Forward put the page's scroll back where it was left (lib/scroll-memory.ts).
  */
 export function Router() {
   const route = useApp((s) => s.route);
+  useScrollMemory(route);
   const key = DETAIL.has(route.view) ? `${route.view}:${route.id ?? ""}` : route.view;
   // A page that fails to render shows its error in place; another page starts afresh.
   return <ErrorBoundary key={key} name={`the ${route.view} page`}><RouteView route={route} /></ErrorBoundary>;

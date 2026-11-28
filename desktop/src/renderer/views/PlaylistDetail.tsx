@@ -11,7 +11,6 @@ import { openContextMenu, openMenuFromButton } from "../components/ContextMenu";
 import { fmtDuration } from "../lib/format";
 import { usePlayIntent } from "../lib/use-prime";
 import { executeAction } from "../store/actions";
-import { trackTableHeight } from "../lib/track-row";
 import { primeKey } from "../lib/track-ref";
 import { dropOnPlaylist, playlistAccepts, playlistDropZone } from "../lib/playlist-drop";
 
@@ -24,7 +23,7 @@ export function PlaylistDetail({ id }: { id: string }) {
     if (r.type !== "tracks") throw new Error("bad result");
     return { items: r.data.items, total: r.data.total };
   }, [id]);
-  const { rows, total, onNeedRange } = usePagedTracks(fetchPage, [id], queryLibraryDeps({ type: "playlistTracks", data: { id, page: { offset: 0, limit: 0 } } }));
+  const { rows, total, loaded, onNeedRange } = usePagedTracks(fetchPage, [id], queryLibraryDeps({ type: "playlistTracks", data: { id, page: { offset: 0, limit: 0 } } }));
   const p = pl.data;
   // Resting on a play button primes that track's start (the album primer, per track).
   const primer = usePlayIntent(`playlist:${id}`);
@@ -36,11 +35,11 @@ export function PlaylistDetail({ id }: { id: string }) {
   return (
     // Your own playlist takes songs, albums and queue rows dropped anywhere on it (at the end), or between its rows.
     <div className="view detail-page" data-testid="view-playlist" {...(editable && p ? playlistDropZone(id, p.name) : {})}>
-      <DetailHead coverArt={p?.coverArt} icon="playlist" onContextMenu={(e) => p && void openContextMenu(e, { type: "playlists", data: { ids: [p.id] } })} testId="playlist-head" actions={
+      <DetailHead coverArt={p?.coverArt} loading={!p && !pl.error} title={p?.name ?? ""} barAction={<button type="button" className="btn primary detail-bar-play" aria-label={t("album.play")} title={t("album.play")} onClick={() => play()} data-testid="playlist-bar-play"><Icon name="play" size={22} filled /></button>} icon="playlist" onContextMenu={(e) => p && void openContextMenu(e, { type: "playlists", data: { ids: [p.id] } })} testId="playlist-head" actions={
         <>
           <button type="button" className="btn primary fab" onClick={() => play()} {...primer.bind(primeKey(rows[0]))} data-testid="playlist-play"><Icon name="play" size={24} filled /> {t("album.play")}</button>
           <button type="button" className="btn icon" aria-label={t("album.shuffle")} title={t("album.shuffle")} onClick={() => play(undefined, true)} data-testid="playlist-shuffle"><Icon name="shuffle" size={24} /></button>
-          {p ? <button type="button" className={`btn icon ${kept ? "on" : ""}`} aria-pressed={kept} aria-label={kept ? t("album.downloaded") : t("album.download")} title={kept ? t("album.downloaded") : t("album.download")} onClick={() => void executeAction(kept ? "unpin" : "download", { type: "playlists", data: { ids: [p.id] } })} data-testid="playlist-download"><Icon name="download" size={24} filled={kept} /></button> : null}
+          <button type="button" className={`btn icon ${kept ? "on" : ""}`} aria-pressed={kept} aria-label={kept ? t("album.downloaded") : t("album.download")} title={kept ? t("album.downloaded") : t("album.download")} onClick={() => p && void executeAction(kept ? "unpin" : "download", { type: "playlists", data: { ids: [p.id] } })} data-testid="playlist-download"><Icon name="download" size={24} filled={kept} /></button>
           <button type="button" className="btn icon" aria-label={t("misc.more")} aria-haspopup="menu" title={t("misc.more")} onClick={(e) => p && openMenuFromButton(e, { type: "playlists", data: { ids: [p.id] } })} data-testid="playlist-more"><Icon name="more" /></button>
         </>
       }>
@@ -53,13 +52,11 @@ export function PlaylistDetail({ id }: { id: string }) {
       <div className="view-body">
         <section className="detail-section" aria-labelledby="playlist-tracks-title">
           <div className="detail-section-head"><h2 id="playlist-tracks-title">{t("album.tracksTitle")}</h2></div>
-          <div style={{ height: trackTableHeight(total), display: "flex", flexDirection: "column" }}>
-            <TrackTable tracks={rows} total={total} columns={["position", "art", "title", "artist", "album", "love", "duration", "offline"]} scope={`playlist:${id}`} label={p?.name} onNeedRange={onNeedRange} onPlay={(i) => play(i)} playingTrackId={playing} context={{ playlistId: id }}
+          <TrackTable pageScroll loading={!loaded} tracks={rows} total={loaded ? total : (p?.songCount ?? 0)} columns={["position", "art", "title", "artist", "album", "love", "duration", "offline"]} scope={`playlist:${id}`} label={p?.name} onNeedRange={onNeedRange} onPlay={(i) => play(i)} playingTrackId={playing} context={{ playlistId: id }}
               onReorder={editable ? (from, to) => bridge().dispatch({ type: "playlistMove", data: { playlist_id: id, from_index: from, to_index: to } }) : undefined}
               onDropItems={editable && p ? (d, at) => void dropOnPlaylist(d, id, p.name, at) : undefined} acceptsDrop={(d) => playlistAccepts(d, id)}
               onDelete={editable ? (indices) => bridge().dispatch({ type: "playlistRemove", data: { playlist_id: id, indices } }) : undefined}
               emptyMessage={t("songs.empty")} testId="playlist-tracks" primer={primer} />
-          </div>
         </section>
       </div>
     </div>

@@ -475,7 +475,8 @@ h3 { font-size: var(--fs-lg); }
 .offline-badge.downloaded { color: var(--ok); }
 .offline-badge.cached { color: var(--fg-muted); }
 /* The index cell's play button replaces the number on hover (the row is the Tab stop; Enter plays). */
-.tr .td.index { position: relative; }
+/* The full row's height, so the play button over the number is its full size. */
+.tr .td.index { position: relative; align-self: stretch; display: flex; align-items: center; }
 .tr .row-play { position: absolute; inset: 2px 0 2px auto; width: 26px; display: flex; align-items: center; justify-content: center; opacity: 0; background: transparent; border: none; border-radius: 50%; color: var(--fg); padding: 0; }
 .tr .row-play:hover { background: var(--bg-hover); }
 .tr:hover .row-play, .tr .row-play:focus-visible { opacity: 1; }

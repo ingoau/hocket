@@ -20,6 +20,7 @@ import { executeAction, type ActionContext } from "../store/actions";
 import { fmtDate, fmtTime } from "../lib/format";
 import { Artwork } from "./Artwork";
 import { TRACK_HEAD_H, TRACK_ROW_H } from "../lib/track-row";
+import { scrollParent } from "../lib/scroll-parent";
 import { Heart, Stars } from "./Stars";
 import { Icon } from "./Icon";
 import { OfflineBadge } from "./OfflineBadge";
@@ -125,12 +126,53 @@ export interface TrackTableProps {
   primer?: Primer;
   /** An album's artist: the artist column leaves it out, naming only the tracks by someone else. */
   omitArtist?: string;
+  /**
+   * The table is part of a page that scrolls as a whole (album, playlist): it never scrolls itself,
+   * it is as tall as its rows and virtualises against the page's scroller, so there is one scrollbar
+   * however long the list.
+   */
+  pageScroll?: boolean;
+  /** The rows are still loading: no empty message yet (`total` may already hold placeholders). */
+  loading?: boolean;
+}
+
+/**
+ * Where `body` starts in `scroller`'s content, kept current as anything above it (a header, an
+ * image loading in) or around it resizes.
+ */
+function useScrollMargin(body: HTMLElement | null, scroller: HTMLElement | null): number {
+  const [margin, setMargin] = useState(0);
+  useLayoutEffect(() => {
+    if (!body || !scroller) return;
+    const measure = () => {
+      const m = Math.max(0, Math.round(body.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop));
+      setMargin((cur) => (cur === m ? cur : m));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(scroller);
+    for (let el: Element | null = body; el && el !== scroller; el = el.parentElement) {
+      ro.observe(el);
+      for (let s = el.previousElementSibling; s; s = s.previousElementSibling) ro.observe(s);
+    }
+    return () => ro.disconnect();
+  }, [body, scroller]);
+  return margin;
 }
 
 export function TrackTable(props: TrackTableProps) {
-  const { tracks, total, scope, sort, descending, onSort, onNeedRange, onPlay, context, onReorder, onDelete, playingTrackId, primer } = props;
+  const { tracks, total, scope, sort, descending, onSort, onNeedRange, onPlay, context, onReorder, onDelete, playingTrackId, primer, pageScroll = false } = props;
   const parentRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<HTMLDivElement>(null);
+  // In a page that scrolls as a whole, the rows are windowed against the page's scroller, offset by
+  // everything above the table.
+  const [pageScroller, setPageScroller] = useState<HTMLElement | null>(null);
+  const [body, setBody] = useState<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    setBody(parentRef.current);
+    setPageScroller(pageScroll && parentRef.current ? scrollParent(parentRef.current) : null);
+  }, [pageScroll]);
+  const scrollMargin = useScrollMargin(body, pageScroller);
   const [width, setWidth] = useState(0);
   // The body's own scrollbar, when it scrolls itself: the header stops short of it too, so the
   // column labels stay over their columns.
@@ -209,7 +251,9 @@ export function TrackTable(props: TrackTableProps) {
     const f = focusRef.current;
     return f < range.count && !base.includes(f) ? [...base, f].sort((a, b) => a - b) : base;
   }, []);
-  const rowVirtualizer = useVirtualizer({ count: total, getScrollElement: () => parentRef.current, estimateSize: () => TRACK_ROW_H, overscan: 6, rangeExtractor });
+  const rowVirtualizer = useVirtualizer({ count: total, getScrollElement: () => (pageScroll ? pageScroller : parentRef.current), estimateSize: () => TRACK_ROW_H, overscan: pageScroll ? 10 : 6, rangeExtractor, scrollMargin: pageScroll ? scrollMargin : 0 });
+  /** Where the virtualiser's offsets (counted from the scroller's top) start in the body. */
+  const rowOffset = pageScroll ? scrollMargin : 0;
   const items = rowVirtualizer.getVirtualItems();
 
   // Two-finger swipes on a row run the swipe.list.* settings' actions on that one song (the
@@ -278,7 +322,7 @@ export function TrackTable(props: TrackTableProps) {
 
   // A table shown in full on its page (album, playlist) doesn't scroll itself: the page does. Keeping
   // the focused row in view and sizing Page Up/Down then go by the page's scroller instead.
-  const ownScroll = () => { const el = parentRef.current; return !!el && el.scrollHeight > el.clientHeight + 1; };
+  const ownScroll = () => { const el = parentRef.current; return !pageScroll && !!el && el.scrollHeight > el.clientHeight + 1; };
   const visibleHeight = () => {
     const el = parentRef.current;
     if (!el) return 300;
@@ -398,7 +442,7 @@ export function TrackTable(props: TrackTableProps) {
   const count = selectionCount(selection);
   const label = props.label ?? t("a11y.tracksTable");
   return (
-    <div ref={tableRef} className="table" style={gutter ? { "--table-gutter": `${gutter}px` } as CSSProperties : undefined} role="grid" aria-label={count ? `${label}, ${t("selection.count", { count })}` : label} aria-rowcount={total + 1} aria-colcount={columns.length} aria-multiselectable="true" data-testid={props.testId ?? "track-table"}>
+    <div ref={tableRef} className={`table${pageScroll ? " in-page" : ""}`} style={gutter ? { "--table-gutter": `${gutter}px` } as CSSProperties : undefined} role="grid" aria-label={count ? `${label}, ${t("selection.count", { count })}` : label} aria-rowcount={total + 1} aria-colcount={columns.length} aria-multiselectable="true" data-testid={props.testId ?? "track-table"}>
       <div role="rowgroup" style={{ display: "contents" }}>
         <div className="table-head" style={{ gridTemplateColumns: template }} role="row" aria-rowindex={1}>
           {columns.map((c) => {
@@ -424,7 +468,7 @@ export function TrackTable(props: TrackTableProps) {
         onDragOver={onDropItems ? (e) => { if (e.defaultPrevented || !external(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = "copy"; setDropGap(total); } : undefined}
         onDrop={onDropItems ? (e) => rowDrop(e, "end") : undefined}
         onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropGap(undefined); }}>
-        {total === 0 ? <div className="empty" role="row"><div role="gridcell" className="empty-cell"><span className="empty-icon" aria-hidden="true"><Icon name="song" size={32} /></span>{props.emptyMessage ?? t("songs.empty")}</div></div> : null}
+        {total === 0 && !props.loading ? <div className="empty" role="row"><div role="gridcell" className="empty-cell"><span className="empty-icon" aria-hidden="true"><Icon name="song" size={32} /></span>{props.emptyMessage ?? t("songs.empty")}</div></div> : null}
         <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}>
           {items.map((vi) => {
             const tr = tracks[vi.index];
@@ -438,7 +482,7 @@ export function TrackTable(props: TrackTableProps) {
             const reveal = swiped && swipe.side !== 0 ? (swipe.side > 0 ? swipeActions(tr).right : swipeActions(tr).left) : null;
             return (
               <Fragment key={vi.key}>
-              {reveal && swipe.side !== 0 ? <SwipeReveal action={reveal} side={swipe.side} armed={swipe.armed !== 0} style={{ top: 0, left: "var(--table-inset)", right: "var(--table-inset)", height: vi.size, transform: `translateY(${vi.start}px)` }} /> : null}
+              {reveal && swipe.side !== 0 ? <SwipeReveal action={reveal} side={swipe.side} armed={swipe.armed !== 0} style={{ top: 0, left: "var(--table-inset)", right: "var(--table-inset)", height: vi.size, transform: `translateY(${vi.start - rowOffset}px)` }} /> : null}
               <div
                 className={`tr ${selected ? "selected" : ""} ${focused ? "focused" : ""} ${playing ? "playing" : ""} ${faded ? "snoozed" : ""}${away ? " offline-unavailable" : ""}${swiped ? " swiping" : ""}${flash && flash.i === vi.index && flash.id === tr?.id ? " swipe-flash" : ""}${dropGap === vi.index ? " drop-before" : ""}${dropGap === vi.index + 1 && vi.index === total - 1 ? " drop-after" : ""}`}
                 role="row"
@@ -449,7 +493,7 @@ export function TrackTable(props: TrackTableProps) {
                 title={away ? t("misc.notAvailableOffline") : undefined}
                 tabIndex={focused ? 0 : -1}
                 data-index={vi.index}
-                style={{ gridTemplateColumns: template, transform: `translateY(${vi.start}px)`, height: vi.size, ...(swiped ? { translate: `${tracking ? swipe.offset : 0}px 0`, transition: tracking ? "none" : settle } : null) }}
+                style={{ gridTemplateColumns: template, transform: `translateY(${vi.start - rowOffset}px)`, height: vi.size, ...(swiped ? { translate: `${tracking ? swipe.offset : 0}px 0`, transition: tracking ? "none" : settle } : null) }}
                 onFocus={(e) => { if (e.target !== e.currentTarget) return; if (vi.index !== focusIdx) setFocusIdx(vi.index); primer?.enter(primeKey(tr)); }}
                 onBlur={(e) => { if (e.target === e.currentTarget) primer?.leave(primeKey(tr)); }}
                 onClick={(e) => click(e, vi.index)}
@@ -548,6 +592,8 @@ function Cell({ col, track, index, playing, serverId, onPlay, primer, omitArtist
 export function usePagedTracks(fetchPage: ((offset: number, limit: number) => Promise<{ items: Track[]; total: number }>) | null, deps: unknown[], library?: LibraryDeps, pageSize = 200) {
   const [rows, setRows] = useState<(Track | undefined)[]>([]);
   const [total, setTotal] = useState(0);
+  // Whether this list's first answer is in (until then `total` 0 is "not known yet", not "empty").
+  const [loaded, setLoaded] = useState(false);
   const loading = useRef(new Set<number>());
   const generation = useRef(0);
   const pages = useRef(new Map<number, Track[]>());
@@ -564,6 +610,7 @@ export function usePagedTracks(fetchPage: ((offset: number, limit: number) => Pr
         pages.current.set(page, res.items);
         evictPages(pages.current, around.current);
         setTotal(res.total);
+        setLoaded(true);
         setRows(materializePages(pages.current, res.total, pageSize));
       })
       .finally(() => {
@@ -585,6 +632,7 @@ export function usePagedTracks(fetchPage: ((offset: number, limit: number) => Pr
       around.current = 0;
       setRows([]);
       setTotal(0);
+      setLoaded(false);
       load(0);
       return;
     }
@@ -598,5 +646,5 @@ export function usePagedTracks(fetchPage: ((offset: number, limit: number) => Pr
       if (!pages.current.has(p)) load(p);
     }
   }, [load, pageSize]);
-  return { rows, total, onNeedRange, reload: () => { generation.current += 1; loading.current.clear(); pages.current = new Map(); load(0); } };
+  return { rows, total, loaded, onNeedRange, reload: () => { generation.current += 1; loading.current.clear(); pages.current = new Map(); load(0); } };
 }

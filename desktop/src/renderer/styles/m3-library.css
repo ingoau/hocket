@@ -151,18 +151,38 @@
 .home-section .scroller .tile { width: 172px; scroll-snap-align: start; }
 
 /* ---- Detail pages (album, artist, playlist) -------------------------------- */
-/* The page scrolls as a whole: the hero, the actions under it, then sections. */
-.view.detail-page { overflow-y: auto; overflow-x: hidden; }
+/* The page scrolls as a whole, one scrollbar: the hero, the actions under it, then sections (a track
+   table included, however long: it windows its rows against this scroller). The compact bar sticks
+   at the top; what scrolls into view (focus, keys) stops below it. Every hero mode is the same height
+   (--hero-h), so nothing moves when the cover turns out to fill it. */
+.view.detail-page {
+  overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scroll-padding-top: var(--detail-bar-h);
+  --detail-pad: clamp(20px, 3vw, 40px); --detail-bar-h: 64px; --hero-h: clamp(300px, 48vh, 440px);
+}
 .view.detail-page > .view-body { flex: 0 0 auto; overflow: visible; padding: 0 var(--detail-pad) 48px; }
-.view.detail-page { --detail-pad: clamp(20px, 3vw, 40px); }
+/* The compact bar: Play and the title on the hero's colour, faded in once the actions are under it.
+   It overlays the hero's top (no space of its own) and stays out of the way until then. */
+.detail-bar {
+  position: sticky; top: 0; z-index: 3; flex: 0 0 auto; box-sizing: border-box;
+  height: var(--detail-bar-h); margin-bottom: calc(-1 * var(--detail-bar-h));
+  display: flex; align-items: center; gap: 14px; padding: 0 var(--detail-pad);
+  background: var(--hero-wash, #1d1a2b); color: #fff;
+  opacity: 0; transition: opacity var(--dur-short) var(--ease-emphasized);
+}
+.detail-bar.bar-none { background: color-mix(in srgb, var(--accent) 30%, #000); }
+.detail-bar.stuck { opacity: 1; }
+.detail-bar .detail-bar-play { flex: 0 0 auto; width: 44px; height: 44px; padding: 0; justify-content: center; border-radius: 50%; }
+.detail-bar-title { min-width: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The hero, edge to edge across the top of the pane. Artwork is never stretched
    past its own pixels (DetailHead): a cover with the pixels fills it and fades
    into the page (Large); a smaller one sits at its size over a blurred wash of
    itself (Small); with none, an accent gradient (None). */
 .detail-head {
   position: relative; isolation: isolate; flex: 0 0 auto; margin: 0; display: flex; align-items: flex-end; gap: 36px;
-  padding: 0 var(--detail-pad) 36px; min-height: 384px; box-sizing: border-box; border-radius: 0 0 36px 36px;
+  padding: 0 var(--detail-pad) 36px; min-height: var(--hero-h); box-sizing: border-box; border-radius: 0 0 36px 36px;
   color: #fff; background: #1d1a2b; overflow: hidden;
+  /* The title's size follows the pane, not the window (the side panels take some of it). */
+  container-type: inline-size;
 }
 .detail-head .hero-backdrop { position: absolute; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
 .detail-head .hero-backdrop img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -172,8 +192,8 @@
 /* Eyebrow ("Public", "Smart playlist"): a chip on the image. */
 .detail-head .meta > .eyebrow { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: var(--shape-full); background: rgba(255, 255, 255, 0.16); color: #fff; font-size: var(--fs-sm); font-weight: 600; }
 .detail-head .meta h1 {
-  margin: 0; font-size: var(--detail-title, clamp(44px, 4.6vw + 8px, 96px)); line-height: 0.96; font-weight: 800; letter-spacing: -0.035em; padding-bottom: 0.06em;
-  white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere;
+  margin: 0; font-size: clamp(32px, 6.5cqi + 8px, 96px); line-height: 0.96; font-weight: 800; letter-spacing: -0.035em; padding-bottom: 0.06em;
+  white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: break-word;
 }
 .detail-head .meta .detail-sub { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin-top: 4px; font-size: 14px; color: rgba(255, 255, 255, 0.84); }
 .detail-head .meta .detail-sub .plain-link { font-size: 18px; font-weight: 700; color: #fff; }
@@ -186,14 +206,15 @@
 .detail-head.hero-none { background-image: linear-gradient(150deg, color-mix(in srgb, var(--accent) 34%, #000) 0%, color-mix(in srgb, var(--accent) 24%, #000) 100%); }
 .detail-head.hero-none .art.placeholder { display: grid; place-items: center; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.24); color: #fff; }
 /* Large: the cover across the top, fading into the page; the title sits on the fade in the page's own colours. */
-.detail-head.hero-large { min-height: 470px; border-radius: 0; background: var(--bg-elev); color: var(--fg); padding-bottom: 0; }
+.detail-head.hero-large { border-radius: 0; background: var(--bg-elev); color: var(--fg); padding-bottom: 0; }
 .detail-head.hero-large .hero-backdrop::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(20, 16, 24, 0.22) 0%, transparent 26%, transparent 42%, color-mix(in srgb, var(--bg-elev) 80%, transparent) 74%, var(--bg-elev) 92%); }
 .detail-head.hero-large .meta > .eyebrow { background: color-mix(in srgb, var(--bg-elev) 70%, transparent); color: var(--fg); }
 .detail-head.hero-large .meta .detail-sub { color: var(--fg-muted); }
 .detail-head.hero-large .meta .detail-sub .plain-link { color: var(--accent-text); }
 .detail-head.hero-large .meta .detail-note { color: var(--fg); }
 /* The actions under the hero, on the page: Play, then round tonal icon buttons (square when on); the rating at the end. */
-.detail-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 20px var(--detail-pad) 0; }
+/* The same padding washed or not, so the wash arriving moves nothing. */
+.detail-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 20px var(--detail-pad); }
 .detail-actions .btn.fab { height: 56px; padding: 0 24px 0 18px; gap: 8px; border-radius: var(--shape-full); font-size: 16px; font-weight: 600; box-shadow: var(--shadow-1); transition: border-radius var(--dur-spring) var(--spring-fast); }
 /* Play and Resume share a width, so the row doesn't shift when an album can be continued. */
 .detail-actions .btn.album-play { min-width: 148px; justify-content: center; }
@@ -208,6 +229,7 @@
 .detail-rating .stars svg { width: 22px; height: 22px; }
 /* Sections below: a title with its summary or View more on the right. */
 .detail-section { padding-top: 28px; }
+.detail-page > .view-body > .detail-section:first-child { padding-top: 12px; }
 .detail-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; }
 .detail-section-head h2 { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.01em; }
 .detail-section-head .muted { font-size: var(--fs-md); }
@@ -215,6 +237,9 @@
 .btn.view-more { height: 40px; padding: 0 12px 0 16px; gap: 2px; border-radius: var(--shape-full); background: var(--state-selected); color: var(--fg); font-weight: 600; }
 .btn.view-more:hover { background: color-mix(in srgb, var(--fg) 8%, var(--state-selected)); }
 .detail-page .table { --table-inset: 0px; }
+/* A table in a page that scrolls as a whole is as tall as its rows; its header sticks under the bar. */
+.table.in-page, .table.in-page > .table-body { flex: 0 0 auto; min-height: 0; overflow: visible; }
+.view.detail-page .table-head { top: var(--detail-bar-h); }
 .detail-page .home-section { padding: 0; }
 
 /* ---- Track tables --------------------------------------------------------- */
@@ -295,12 +320,11 @@
   .genre-grid { --tile-w: 160px; }
 }
 
-/* Short windows (200% zoom): a compact hero, and the page scrolls as a whole
-   so the hero's controls are never cut off; the track list keeps a bounded
-   height of its own for virtualisation. */
+/* Short windows (200% zoom): a compact hero and bar, so the hero's controls
+   and the first rows still fit. */
 @media (max-height: 640px) {
-  .detail-head { min-height: 240px; gap: 20px; padding-bottom: 20px; }
-  .detail-head.hero-large { min-height: 300px; }
+  .view.detail-page { --hero-h: 240px; --detail-bar-h: 56px; }
+  .detail-head { gap: 20px; padding-bottom: 20px; }
   .detail-head .art, .detail-head .art.round { width: 120px; height: 120px; }
   .detail-head .meta h1 { font-size: 36px; }
   /* Songs, likewise: the page scrolls past its groups to a table that keeps a usable height. */

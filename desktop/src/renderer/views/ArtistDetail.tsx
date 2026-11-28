@@ -71,12 +71,12 @@ export function ArtistDetail({ id }: { id: string }) {
   const open = shelves.find((g) => g.kind === grid);
   return (
     <div className="view detail-page" data-testid="view-artist">
-      <DetailHead coverArt={a?.coverArt} round icon="artist" onContextMenu={(e) => a && void openContextMenu(e, { type: "artists", data: { ids: [a.id] } })} actions={
+      <DetailHead coverArt={a?.coverArt} loading={!a && !artist.error} title={a?.name ?? ""} barAction={<button type="button" className="btn primary detail-bar-play" aria-label={t("album.play")} title={t("album.play")} onClick={() => play(false)} data-testid="artist-bar-play"><Icon name="play" size={22} filled /></button>} round icon="artist" onContextMenu={(e) => a && void openContextMenu(e, { type: "artists", data: { ids: [a.id] } })} actions={
         <>
           <button type="button" className="btn primary fab" onClick={() => play(false)} data-testid="artist-play"><Icon name="play" size={24} filled /> {t("album.play")}</button>
           <button type="button" className="btn icon" aria-label={t("album.shuffle")} title={t("album.shuffle")} onClick={() => play(true)} data-testid="artist-shuffle"><Icon name="shuffle" size={24} /></button>
-          {a ? <Heart size={24} on={a.loved} onToggle={() => bridge().dispatch({ type: "setArtistLoved", data: { artist_id: a.id, loved: !a.loved } })} /> : null}
-          {a ? <button type="button" className="btn icon" aria-haspopup="menu" aria-label={t("misc.more")} title={t("misc.more")} onClick={(e) => openMenuFromButton(e, { type: "artists", data: { ids: [a.id] } })} data-testid="artist-more"><Icon name="more" size={24} /></button> : null}
+          <Heart size={24} on={!!a?.loved} onToggle={() => a && bridge().dispatch({ type: "setArtistLoved", data: { artist_id: a.id, loved: !a.loved } })} />
+          <button type="button" className="btn icon" aria-haspopup="menu" aria-label={t("misc.more")} title={t("misc.more")} onClick={(e) => a && openMenuFromButton(e, { type: "artists", data: { ids: [a.id] } })} data-testid="artist-more"><Icon name="more" size={24} /></button>
         </>
       }>
         <h1>{a?.name ?? ""}</h1>
