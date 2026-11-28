@@ -20,6 +20,7 @@ import { DetailHead } from "../components/DetailHead";
 import { TOP_SONGS_COUNT, TOP_SONGS_PREVIEW as TOP_PREVIEW, topSongsSection } from "../lib/top-songs";
 import { byReleaseKind, type ReleaseKind } from "../lib/release-kind";
 import { ratingTarget, refOf } from "../lib/track-ref";
+import { useScrollMemory } from "../lib/scroll-memory";
 
 /** Releases on a shelf before "View more". */
 const SHELF = 8;
@@ -69,8 +70,12 @@ export function ArtistDetail({ id }: { id: string }) {
     <Tile key={al.id} title={al.name} subtitle={al.artistId !== id && al.artist ? [al.artist, al.year].filter(Boolean).join(" · ") : `${al.year ?? ""}${al.year ? " · " : ""}${t("misc.tracks", { count: al.songCount })}`} coverArt={al.coverArt} onOpen={() => navigate({ view: "album", id: al.id })} onContextMenu={(e) => void openContextMenu(e, { type: "albums", data: { ids: [al.id] } })} dragTarget={{ type: "albums", data: { ids: [al.id] } }} testId="artist-album" />
   );
   const open = shelves.find((g) => g.kind === grid);
+  // Back returns to where the page was left, once everything that sets its height is in.
+  const page = useRef<HTMLDivElement>(null);
+  const settled = (q: { data?: unknown; error?: string }) => q.data !== undefined || q.error !== undefined;
+  useScrollMemory(page, "artist", [artist, albums, featured, top, info].every(settled));
   return (
-    <div className="view detail-page" data-testid="view-artist">
+    <div ref={page} className="view detail-page" data-testid="view-artist">
       <DetailHead coverArt={a?.coverArt} loading={!a && !artist.error} title={a?.name ?? ""} barAction={<button type="button" className="btn primary detail-bar-play" aria-label={t("album.play")} title={t("album.play")} onClick={() => play(false)} data-testid="artist-bar-play"><Icon name="play" size={22} filled /></button>} round icon="artist" onContextMenu={(e) => a && void openContextMenu(e, { type: "artists", data: { ids: [a.id] } })} actions={
         <>
           <button type="button" className="btn primary fab" onClick={() => play(false)} data-testid="artist-play"><Icon name="play" size={24} filled /> {t("album.play")}</button>

@@ -2,7 +2,7 @@
 // scrolls on its own, however long), nothing above the songs moving as the page loads, a compact
 // bar (Play and the title) fading in once the hero's actions have scrolled away with the column
 // labels stuck under it, a new page starting at the top, and Back and Forward returning to where
-// the page was left.
+// the page was left. Songs, likewise, scrolls as one page.
 import type { Page } from "@playwright/test";
 import { completeSetup, expect, openPlace, resizeWindow, test } from "./fixtures";
 
@@ -84,7 +84,7 @@ test.describe("detail pages scroll as one page", () => {
     await page.evaluate(async (name) => {
       const servers = (await window.hocket.query({ type: "accounts" })) as { data: { id: string }[] };
       const source = servers.data[0]!.id;
-      const r = (await window.hocket.query({ type: "tracks", data: { server_id: source, filter: undefined, sort: "title", descending: false, page: { offset: 0, limit: 400 } } })) as { data: { items: { id: string; source: string }[] } };
+      const r = (await window.hocket.query({ type: "tracks", data: { server_id: source, filter: undefined, sort: "title", descending: false, page: { offset: 0, limit: 400 } } })) as unknown as { data: { items: { id: string; source: string }[] } };
       await window.hocket.dispatch({ type: "createPlaylist", data: { account_id: source, name, tracks: r.data.items.map((x) => ({ source: x.source, id: x.id })) } });
     }, name);
     await openPlace(page, "playlists");
@@ -101,5 +101,29 @@ test.describe("detail pages scroll as one page", () => {
     // The last row ends where the page does (above its bottom padding), not past it.
     const [rowBottom, end] = await view.evaluate((el) => [el.querySelector("[data-testid=track-row]:last-child")!.getBoundingClientRect().bottom, el.querySelector(".table")!.getBoundingClientRect().bottom]);
     expect(Math.abs(end - rowBottom)).toBeLessThan(2);
+  });
+
+  test("Songs scrolls as one page: its groups scroll away and the column labels stick", async ({ hocket }) => {
+    const { app, page } = hocket;
+    await completeSetup(page);
+    await resizeWindow(app, page, 1280, 800);
+    await openPlace(page, "songs");
+    const view = page.getByTestId("view-songs");
+    await expect(view.getByTestId("track-row").first()).toBeVisible();
+    expect(await scrollers(page)).toEqual(["view-songs"]);
+    const box = (await page.getByTestId("content").boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    for (let i = 0; i < 10; i++) await page.mouse.wheel(0, 200);
+    await expect(async () => {
+      const [viewTop, headTop, scrolled] = await view.evaluate((el) => [el.getBoundingClientRect().top, el.querySelector(".table-head")!.getBoundingClientRect().top, el.scrollTop]);
+      expect(scrolled).toBeGreaterThan(1000);
+      expect(Math.abs(headTop - viewTop)).toBeLessThan(1);
+    }).toPass();
+    const left = await view.evaluate((el) => el.scrollTop);
+    // Back from elsewhere returns to the same place in the list.
+    await page.getByTestId("nav-library").click();
+    await expect(page.getByTestId("view-library")).toBeVisible();
+    await page.getByTestId("topbar").getByRole("button", { name: "Back", exact: true }).click();
+    await expect.poll(() => page.getByTestId("view-songs").evaluate((el) => el.scrollTop)).toBe(left);
   });
 });

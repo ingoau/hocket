@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import { t } from "@shared/strings";
 import { useApp, useSetting } from "../store/app";
 import { SK } from "@shared/settings-keys";
@@ -17,6 +17,7 @@ import { offlineLabel } from "../components/OfflineBadge";
 import { useAlbumDwellPrime, usePlayIntent } from "../lib/use-prime";
 import type { AlbumResumePoint, Track } from "@core/api";
 import { primeKey } from "../lib/track-ref";
+import { useScrollMemory } from "../lib/scroll-memory";
 
 function resumeFraction(list: Track[], resume: AlbumResumePoint): number {
   const duration = list.find((t) => t.id === resume.trackId)?.durationMs || resume.durationMs;
@@ -62,8 +63,12 @@ export function AlbumDetail({ id }: { id: string }) {
   const playOrResume = () => (resume ? bridge().dispatch({ type: "resumeAlbum", data: { album_id: id } }) : play());
   // Until the songs are in, the album's own count holds their place (no "No songs", no jump).
   const loadingTracks = tracks.data === undefined && !tracks.error;
+  // Back returns to where the page was left, once everything that sets its height is in.
+  const page = useRef<HTMLDivElement>(null);
+  const settled = (q: { data?: unknown; error?: string }) => q.data !== undefined || q.error !== undefined;
+  useScrollMemory(page, "album", !!a && !loadingTracks && (!a.artistId || settled(more)));
   return (
-    <div className="view detail-page" data-testid="view-album">
+    <div ref={page} className="view detail-page" data-testid="view-album">
       <DetailHead coverArt={a?.coverArt} loading={!a && !album.error} title={a?.name ?? ""} barAction={<button type="button" className="btn primary detail-bar-play" aria-label={resume ? t("album.resume") : t("album.play")} title={resume ? t("album.resume") : t("album.play")} onClick={playOrResume} data-testid="album-bar-play"><Icon name={resume ? "resume" : "play"} size={22} filled /></button>} icon="album" onContextMenu={(e) => a && void openContextMenu(e, { type: "albums", data: { ids: [a.id] } })} testId="album-head" actions={
         <>
           <button type="button" className="btn primary fab album-play" aria-label={resume ? t("album.resumeMenu") : t("album.play")} onClick={playOrResume} onContextMenu={resume ? (e) => { e.preventDefault(); e.stopPropagation(); openItemsMenu(e, [{ id: "startOver", label: t("album.startOver"), icon: "refresh", enabled: true, run: startOver }]); } : undefined} {...primer.bind(resume ? undefined : primeKey(list[0]))} data-testid="album-play"><Icon name={resume ? "resume" : "play"} size={24} filled /> {resume ? t("album.resume") : t("album.play")}</button>

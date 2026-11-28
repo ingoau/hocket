@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { useQuery } from "../store/queries";
@@ -12,6 +12,7 @@ import { fmtDuration } from "../lib/format";
 import { usePlayIntent } from "../lib/use-prime";
 import { executeAction } from "../store/actions";
 import { primeKey } from "../lib/track-ref";
+import { useScrollMemory } from "../lib/scroll-memory";
 import { dropOnPlaylist, playlistAccepts, playlistDropZone } from "../lib/playlist-drop";
 
 export function PlaylistDetail({ id }: { id: string }) {
@@ -32,9 +33,12 @@ export function PlaylistDetail({ id }: { id: string }) {
   const by = p?.owner ? t("playlist.by", { owner: p.owner }) : "";
   // Downloaded or on its way; fully in the stream cache is not kept, so the button offers to download it.
   const kept = p?.offline === "downloaded" || p?.offline === "downloading";
+  // Back returns to where the page was left, once its songs (which set its height) are in.
+  const page = useRef<HTMLDivElement>(null);
+  useScrollMemory(page, "playlist", !!p && loaded);
   return (
     // Your own playlist takes songs, albums and queue rows dropped anywhere on it (at the end), or between its rows.
-    <div className="view detail-page" data-testid="view-playlist" {...(editable && p ? playlistDropZone(id, p.name) : {})}>
+    <div ref={page} className="view detail-page" data-testid="view-playlist" {...(editable && p ? playlistDropZone(id, p.name) : {})}>
       <DetailHead coverArt={p?.coverArt} loading={!p && !pl.error} title={p?.name ?? ""} barAction={<button type="button" className="btn primary detail-bar-play" aria-label={t("album.play")} title={t("album.play")} onClick={() => play()} data-testid="playlist-bar-play"><Icon name="play" size={22} filled /></button>} icon="playlist" onContextMenu={(e) => p && void openContextMenu(e, { type: "playlists", data: { ids: [p.id] } })} testId="playlist-head" actions={
         <>
           <button type="button" className="btn primary fab" onClick={() => play()} {...primer.bind(primeKey(rows[0]))} data-testid="playlist-play"><Icon name="play" size={24} filled /> {t("album.play")}</button>

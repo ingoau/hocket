@@ -46,7 +46,12 @@
 .list-section-actions { display: flex; align-items: center; gap: 8px; margin-right: var(--page-title-inset); }
 .list-top { padding: 0 var(--page-gutter); flex: 0 0 auto; }
 .list-top .list-all { margin-bottom: 8px; }
-.list-top-groups { max-height: 30vh; overflow: hidden auto; padding-inline: 4px; margin-inline: -4px; }
+.list-top-groups { padding-inline: 4px; margin-inline: -4px; }
+/* Songs scrolls as one page, as a native player's song list does: the title, the groups and the
+   sort scroll away and the column labels stick at the top, over a table that windows its rows
+   against the page (TrackTable's pageScroll). */
+.view.page-songs { overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
+.view.page-songs > .view-body { flex: 0 0 auto; min-height: 0; overflow: visible; padding-bottom: 24px; }
 .grid-header .list-all { margin-top: 4px; }
 :is(.group-row, .genre-row, .group-songs) {
   display: flex; gap: 6px; overflow-x: auto; padding: 6px 4px 10px; margin: -6px -4px 0;
@@ -263,7 +268,7 @@
 }
 /* Where the page scrolls rather than the table, a row brought into view by the
    keyboard stops below the stuck header (its 40px plus 4px gap), not under it. */
-:is(.view.detail-page, .page-search) .tr { scroll-margin-top: 44px; }
+:is(.view.detail-page, .page-search, .page-songs) .tr { scroll-margin-top: 44px; }
 .table-head .th.sortable:hover { background: var(--bg-hover); }
 .table-head .th.sorted { color: var(--fg); }
 .table-head .th.sorted .th-btn { background: var(--state-selected); color: var(--fg); }
@@ -343,10 +348,6 @@
   .detail-head { gap: 20px; padding-bottom: 20px; }
   .detail-head .art, .detail-head .art.round { width: 120px; height: 120px; }
   .detail-head .meta h1 { font-size: 36px; }
-  /* Songs, likewise: the page scrolls past its groups to a table that keeps a usable height. */
-  .view:has(> .list-top) { overflow-y: auto; }
-  .view:has(> .list-top) > .list-top .list-top-groups { max-height: none; overflow: visible; }
-  .view:has(> .list-top) > .view-body { flex: 0 0 auto; height: max(240px, 75vh); }
 }
 
 /* ---- Reduced motion: no lifts, spins or pops (colour changes stay) ------- */
