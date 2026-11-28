@@ -73,6 +73,7 @@ import app.hocket.ui.nav.PageColors
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -164,8 +165,10 @@ fun HomeScreen(nav: NavHostController) {
     val nowPlayingId = playing?.id
     val resumePoints = client.albumResumes.collectAsStateWithLifecycle().value
     // Spotlight's Resume slide: resume points can arrive after Home does; that's worth a reload,
-    // any later change (an album gaining or losing its point as songs skip) isn't.
-    val hasResumes = resumePoints.isNotEmpty()
+    // any later change isn't (playback saves and clears them as songs change). A latch: once seen,
+    // it stays seen for this visit.
+    var resumesSeen by remember { mutableStateOf(resumePoints.isNotEmpty()) }
+    LaunchedEffect(resumePoints.isNotEmpty()) { if (resumePoints.isNotEmpty()) resumesSeen = true }
     // The core's shelves (Continue listening and each account's) are sections too.
     var shelves by rememberCachedState<List<HomeShelf>?>(listOf("home.shelves", serverId)) { null }
     LaunchedEffect(serverId, libraryGen, nowPlayingId) {
@@ -189,14 +192,17 @@ fun HomeScreen(nav: NavHostController) {
         // Merged, not replaced: a reload mid-cold-load (a track change, a sync) keeps what's revealed.
         feed = loadHomeFeed(client, serverId, feedSections) { if (feed == null) partial = partial + it }
     }
-    // Spotlight loads on its own: on arriving at Home and when the library changes, then holds
-    // still: skipping songs or another album starting doesn't reshuffle it under the user. What's
-    // playing as it loads is left out, except from the slide in view: Play on a slide keeps it
-    // under the user's thumb.
+    // Spotlight loads on its own: on arriving at Home, then holds still: skipping songs or another
+    // album starting doesn't reshuffle it under the user. The library generation moves with plays
+    // (scrobbles, cached streams), so it only counts while Spotlight has nothing to show, as a
+    // first sync fills it. What's playing as it loads is left out, except from the slide in view:
+    // Play on a slide keeps it under the user's thumb.
     val spotlightOn = HomeSection.Spotlight in shownSet
     var spotlight by rememberCachedState<List<SpotlightSlide>?>(listOf("home.spotlight", serverId)) { null }
     val shownSlide = remember { mutableStateOf<SpotlightSlide?>(null) }
-    LaunchedEffect(serverId, libraryGen, spotlightOn, hasResumes) {
+    var spotlightGen by remember { mutableIntStateOf(libraryGen) }
+    LaunchedEffect(libraryGen) { if (spotlight?.isEmpty() == true) spotlightGen = libraryGen }
+    LaunchedEffect(serverId, spotlightGen, spotlightOn, resumesSeen) {
         if (libraryGen < 0 || !spotlightOn) return@LaunchedEffect
         val track = client.nowPlaying.value?.track
         val inView = shownSlide.value

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { t } from "@shared/strings";
 import type { ActionTarget, ListeningStats } from "@core/api";
 import { useApp } from "../store/app";
+import { useLibraryVersion } from "../store/queries";
+import { LIBRARY_ITEM_DEPS } from "../store/library-changes";
 import { bridge } from "../core/bridge";
 import { openContextMenu } from "../components/ContextMenu";
 import { resolveArtwork } from "../components/Artwork";
@@ -49,8 +51,8 @@ function useSlideAccents(slides: SpotlightSlide[]): Record<string, string | unde
  * accent, so the rest of Home can wear it; [onEmpty] says when there's nothing to show. With
  * [dynamic] (colour from artwork) off, slides keep the app's accent.
  *
- * It loads once on arriving at Home (and again if the albums to resume turn up after that), then
- * holds still: skipping songs, another album starting, a play landing in the favourites or a resume
+ * It loads once on arriving at Home (again if the albums to resume turn up only after that, and on
+ * library changes while it has nothing to show, as a first sync fills it), then holds still: skipping songs, another album starting, a play landing in the favourites or a resume
  * point moving doesn't reshuffle it under the user. What's playing as it loads is left out, except
  * from the slide in view: pressing Play on a slide keeps it there rather than pulling it out from
  * under the pointer.
@@ -59,12 +61,16 @@ export function HomeSpotlight({ stats, statsReady, dynamic, onAccent, onEmpty }:
   const serverId = useApp((s) => s.accounts[0]?.id ?? "");
   const navigate = useApp((s) => s.navigate);
   const resumes = useApp((s) => s.albumResumes);
-  // Resume points can arrive after Home does; that's worth a reload, any later change isn't.
-  const hasResumes = resumes.length > 0;
+  // Resume points can arrive after Home does; that's worth a reload, any later change isn't (playback
+  // saves and clears them as songs change). A latch: once seen, it stays seen for this visit.
+  const [resumesSeen, setResumesSeen] = useState(resumes.length > 0);
+  if (resumes.length > 0 && !resumesSeen) setResumesSeen(true);
   const statsRef = useRef(stats);
   statsRef.current = stats;
   const theme = useResolvedTheme();
   const [slides, setSlides] = useState<SpotlightSlide[] | undefined>(undefined);
+  // The library only matters while there's nothing to show; once there is, plays and syncs leave it be.
+  const emptyVersion = useLibraryVersion(slides?.length === 0 ? LIBRARY_ITEM_DEPS : null);
   const [index, setIndex] = useState(0);
   const section = useRef<HTMLElement>(null);
   const track = useRef<HTMLDivElement>(null);
@@ -95,7 +101,7 @@ export function HomeSpotlight({ stats, statsReady, dynamic, onAccent, onEmpty }:
         if (live) setSlides((s) => s ?? []);
       });
     return () => { live = false; };
-  }, [serverId, statsReady, hasResumes]);
+  }, [serverId, statsReady, resumesSeen, emptyVersion]);
   const list = slides ?? [];
   const at = Math.min(index, Math.max(0, list.length - 1));
   shownKey.current = list[at] ? slideKey(list[at]) : undefined;
