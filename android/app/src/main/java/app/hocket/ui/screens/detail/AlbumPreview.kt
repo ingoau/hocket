@@ -1004,15 +1004,17 @@ private fun BoxScope.PreviewInfo(
 
 /**
  * Stash and love for the song on the card in the middle, at the end of its title. Stash adds it, or
- * takes it back out once it's in; love loves or unloves it. Both show the tap at once, then follow
- * the core (the stash as it reports, love as the album's songs come back).
+ * takes it back out once it's in, as the stash reports it (local, so at once; a full stash adds
+ * nothing and stays unticked). Love loves or unloves it and shows the tap at once, until the
+ * album's songs come back with it.
  */
 @Composable
 private fun PreviewSongToggles(track: Track) {
     val client = LocalCoreClient.current
     val stash by client.stash.collectAsStateWithLifecycle()
-    val entries = stash.filter { it.track.id == track.id }.map { it.entryId }
-    var stashed by remember(entries.isNotEmpty()) { mutableStateOf(entries.isNotEmpty()) }
+    // By ref: the same id on another account is another song.
+    val entries = stash.filter { it.track.ref == track.ref }.map { it.entryId }
+    val stashed = entries.isNotEmpty()
     var loved by remember(track.loved) { mutableStateOf(track.loved) }
     // Only taps here that love burst the heart, not the album's songs coming back loved.
     var bursts by remember { mutableIntStateOf(0) }
@@ -1022,9 +1024,8 @@ private fun PreviewSongToggles(track: Track) {
     IconToggleButton(
         checked = stashed,
         onCheckedChange = { on ->
-            stashed = on
             if (on) client.dispatch(Commands.runAction(ActionIds.STASH, Commands.tracks(listOf(track.ref))))
-            else if (entries.isNotEmpty()) client.dispatch(Command.StashRemove(CommandStashRemoveInner(entries)))
+            else client.dispatch(Command.StashRemove(CommandStashRemoveInner(entries)))
         },
         modifier = Modifier.semantics { contentDescription = stashLabel }.testTag("albumPreview.stash"),
     ) {
@@ -1040,7 +1041,7 @@ private fun PreviewSongToggles(track: Track) {
         },
         modifier = Modifier.semantics { contentDescription = loveLabel }.testTag("albumPreview.love"),
     ) {
-        LoveBurst(bursts, primary) {
+        LoveBurst(bursts, primary, Modifier.fillMaxSize()) {
             Icon(if (loved) HocketIcons.Filled.Favorite else HocketIcons.Filled.FavoriteBorder, null, tint = if (loved) primary else idle)
         }
     }
