@@ -309,8 +309,6 @@ h3 { font-size: var(--fs-lg); }
 /* The side panel gives way before the content does: it keeps to its own width only while the
    content still has --content-min (NowPlayingSidebar's drag stops there too), never under 300px. */
 .app-body { --content-min: 400px; display: grid; grid-template-columns: var(--sidebar-w, 220px) minmax(0, 1fr) min(var(--right-w, 0px), max(300px, 100% - var(--sidebar-w, 220px) - var(--content-min))); min-height: 0; }
-/* While a pane's edge is dragged the pointer keeps the resize cursor, wherever it wanders. */
-.app:has(.resize-handle.dragging), .app:has(.resize-handle.dragging) * { cursor: col-resize !important; }
 .dev-banner { background: #f0b04a; color: #201400; font-size: var(--fs-xs); padding: 2px 10px; text-align: center; }
 .offline-banner { background: var(--bg-active); color: var(--fg-muted); font-size: var(--fs-xs); padding: 2px 10px; display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; }
 .offline-banner .link-button { display: inline; color: var(--fg); text-decoration: underline; font-size: inherit; }
@@ -1041,6 +1039,5 @@ button.qrow { width: 100%; }
   .shortcut-row > :last-child { grid-column: 2; }
   .filter-builder { grid-template-columns: minmax(0, 1fr); }
   .pin-row .badge { display: none; }
-  .dialog { max-height: calc(100vh - 24px); overflow-y: auto; }
   .overlay { padding-top: 12px; }
 }

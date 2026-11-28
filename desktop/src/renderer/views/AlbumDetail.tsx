@@ -10,7 +10,8 @@ import { Icon } from "../components/Icon";
 import { Heart, Stars } from "../components/Stars";
 import { openContextMenu, openItemsMenu, openMenuFromButton } from "../components/ContextMenu";
 import { fmtDate, fmtDuration, fmtTime } from "../lib/format";
-import { Tile, TileList } from "../components/Tile";
+import { Tile } from "../components/Tile";
+import { Shelf } from "../components/Shelf";
 import { executeAction } from "../store/actions";
 import { releaseKind } from "../lib/release-kind";
 import { offlineLabel } from "../components/OfflineBadge";
@@ -106,9 +107,9 @@ export function AlbumDetail({ id }: { id: string }) {
               <h2 id="album-more-title">{t("album.moreBy", { artist: a.artist ?? "" })}</h2>
               {a.artistId ? <button type="button" className="btn view-more" onClick={() => navigate({ view: "artist", id: a.artistId! })} aria-label={t("album.viewMoreBy", { artist: a.artist ?? "" })}>{t("release.viewMore")}<Icon name="chevronRight" size={18} /></button> : null}
             </div>
-            <TileList label={t("album.moreBy", { artist: a.artist ?? "" })} className="scroller">{others.map((al) => (
+            <Shelf label={t("album.moreBy", { artist: a.artist ?? "" })}>{others.map((al) => (
               <Tile key={al.id} title={al.name} subtitle={[al.year, t(`release.one.${releaseKind(al)}`)].filter(Boolean).join(" · ")} coverArt={al.coverArt} onOpen={() => navigate({ view: "album", id: al.id })} onContextMenu={(e) => void openContextMenu(e, { type: "albums", data: { ids: [al.id] } })} dragTarget={{ type: "albums", data: { ids: [al.id] } }} />
-            ))}</TileList>
+            ))}</Shelf>
           </section>
         ) : null}
       </div>

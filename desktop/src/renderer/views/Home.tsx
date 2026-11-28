@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { t } from "@shared/strings";
 import type { ActionTarget, Album, Artist, Filter, ListeningStats, SavedQueue, TrackSummary } from "@core/api";
 import { useApp, useJsonSetting, useSetting, type MenuItem } from "../store/app";
@@ -18,7 +18,7 @@ import { filterName } from "../lib/filters";
 import { showToast } from "../lib/ui-toast";
 import { filterMenuItems, playFilter } from "../lib/pin-menus";
 import { libraryDragProps } from "../lib/queue-drag";
-import { recallScroll, rememberScroll } from "../lib/scroll-memory";
+import { useScrollMemory } from "../lib/scroll-memory";
 import { HOME_SECTIONS_KEY, isPinned, moveBefore, moveKnown, moveShown, parseSections, resolvedStyle, sectionDef, sectionsValue, updateSection, setShelves, shelfOf, type SectionPref, type SectionStyle } from "../lib/home-sections";
 import { refOf } from "../lib/track-ref";
 
@@ -36,46 +36,6 @@ const REDISCOVER = {
     { type: "rule", data: { field: "lastPlayed", op: "notInTheLast", value: { type: "days", data: 90 } } },
   ],
 } as const;
-
-/**
- * Keeps [main] (Home's scroller) where it was when Home is come back to by Back or Forward, through
- * the shared per-visit memory (lib/scroll-memory.ts). The sections arrive one by one, so rather than
- * waiting for one "ready" moment it keeps trying as the feed grows.
- */
-function useHomeScrollMemory(main: React.RefObject<HTMLDivElement | null>): void {
-  useLayoutEffect(() => {
-    const el = main.current;
-    if (!el) return;
-    const route = useApp.getState().route;
-    const target = recallScroll(route, "home") ?? 0;
-    // The feed may not be tall enough yet: try again as it grows, until it gets there, the user
-    // scrolls, or a moment has passed.
-    let done = target <= 0;
-    const restore = () => {
-      if (done) return;
-      el.scrollTop = target;
-      if (Math.abs(el.scrollTop - target) < 2) done = true;
-    };
-    restore();
-    const stop = () => { done = true; };
-    const ro = new ResizeObserver(restore);
-    for (const child of el.children) ro.observe(child);
-    const timer = setTimeout(stop, 1500);
-    const onScroll = () => { if (done) rememberScroll(route, "home", el.scrollTop); };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    el.addEventListener("wheel", stop, { passive: true });
-    el.addEventListener("pointerdown", stop);
-    el.addEventListener("keydown", stop);
-    return () => {
-      ro.disconnect();
-      clearTimeout(timer);
-      el.removeEventListener("scroll", onScroll);
-      el.removeEventListener("wheel", stop);
-      el.removeEventListener("pointerdown", stop);
-      el.removeEventListener("keydown", stop);
-    };
-  }, [main]);
-}
 
 /** One thing a section shows, ready to draw in any style. */
 interface Item {
@@ -110,8 +70,9 @@ export function Home() {
   const sync = useApp((s) => s.syncProgress);
   const [customising, setCustomising] = useState(false);
   const main = useRef<HTMLDivElement>(null);
-  useHomeScrollMemory(main);
-  const save =(next: SectionPref[]) => setSetting(HOME_SECTIONS_KEY, sectionsValue(next));
+  // Back returns to where the feed was left (its sections arrive one by one: the memory keeps up).
+  useScrollMemory(main, "home", true);
+  const save = (next: SectionPref[]) => setSetting(HOME_SECTIONS_KEY, sectionsValue(next));
   const shown = prefs.filter((p) => p.on && sectionDef(p.id));
   const [empties, setEmpties] = useState<Record<string, boolean>>({});
   const reportEmpty = (id: string, empty: boolean) => setEmpties((m) => (m[id] === empty ? m : { ...m, [id]: empty }));

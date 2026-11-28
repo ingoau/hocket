@@ -639,6 +639,8 @@ export function ContextMenu() {
         tabIndex={-1}
         style={{ left: pos.x, top: pos.y, transformOrigin: pos.up ? "bottom left" : undefined }}
         onKeyDown={onKey}
+        // A submenu hangs off its row: when the (too tall, scrolling) menu moves the row, it goes.
+        onScroll={closeSub}
         onMouseUp={(e) => {
           // The mouse's back button: back out of the submenu, else close the menu.
           if (e.button !== MOUSE_BACK) return;

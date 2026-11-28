@@ -86,7 +86,6 @@ export function fitColumns(columns: readonly ColumnId[], width: number): ColumnI
   return columns.filter((c) => kept.has(c));
 }
 
-/** Whether a track's artist is its album's: the same name, ignoring case and spacing (a track with none counts as the album's). */
 /** A disc's heading over its first song, in an album of several discs. */
 export const DISC_HEAD_H = 44;
 
@@ -107,6 +106,7 @@ export function discStarts(tracks: readonly (Track | undefined)[]): Map<number, 
 
 const NO_DISCS: ReadonlyMap<number, number> = new Map();
 
+/** Whether a track's artist is its album's: the same name, ignoring case and spacing (a track with none counts as the album's). */
 export function sameArtist(track: string | null | undefined, album: string | null | undefined): boolean {
   return !track?.trim() || track.trim().toLowerCase() === (album ?? "").trim().toLowerCase();
 }
@@ -275,9 +275,10 @@ export function TrackTable(props: TrackTableProps) {
   }, []);
   const discs = useMemo(() => (props.discs ? discStarts(tracks) : NO_DISCS), [props.discs, tracks]);
   const headAt = useCallback((i: number) => (discs.has(i) ? DISC_HEAD_H : 0), [discs]);
-  const rowVirtualizer = useVirtualizer({ count: total, getScrollElement: () => (pageScroll ? pageScroller : parentRef.current), estimateSize: (i) => TRACK_ROW_H + headAt(i), overscan: pageScroll ? 10 : 6, rangeExtractor, scrollMargin: pageScroll ? scrollMargin : 0 });
-  // The disc headings change the rows' sizes: lay them out again.
-  useEffect(() => rowVirtualizer.measure(), [headAt, rowVirtualizer]);
+  // A disc's first row keys apart from the same row without a heading, so the virtualiser lays the
+  // rows out again in the very render the headings arrive in (estimateSize alone doesn't).
+  const getItemKey = useCallback((i: number) => (discs.has(i) ? `d${i}` : i), [discs]);
+  const rowVirtualizer = useVirtualizer({ count: total, getScrollElement: () => (pageScroll ? pageScroller : parentRef.current), estimateSize: (i) => TRACK_ROW_H + headAt(i), getItemKey, overscan: pageScroll ? 10 : 6, rangeExtractor, scrollMargin: pageScroll ? scrollMargin : 0 });
   /** Where the virtualiser's offsets (counted from the scroller's top) start in the body. */
   const rowOffset = pageScroll ? scrollMargin : 0;
   const items = rowVirtualizer.getVirtualItems();
@@ -643,6 +644,10 @@ export function usePagedTracks(fetchPage: ((offset: number, limit: number) => Pr
         setTotal(res.total);
         setLoaded(true);
         setRows(materializePages(pages.current, res.total, pageSize));
+      })
+      .catch(() => {
+        // A failed first answer still settles the list (it shows as empty rather than loading forever).
+        if (gen === generation.current) setLoaded(true);
       })
       .finally(() => {
         // A page from before a reload must not mark the reload's request for it done.

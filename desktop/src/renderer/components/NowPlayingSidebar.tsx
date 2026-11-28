@@ -72,11 +72,23 @@ export function NowPlayingSidebar() {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!widthDrag) return;
-    const move = (e: MouseEvent) => setPanels({ rightWidth: Math.max(MIN_W, Math.min(widthDrag.max, widthDrag.w - (e.clientX - widthDrag.x))) });
+    // Pinned at the shown width (a window holding a wider chosen one), the choice stands until moved.
+    let moved = false;
+    const move = (e: MouseEvent) => {
+      const next = Math.max(MIN_W, Math.min(widthDrag.max, widthDrag.w - (e.clientX - widthDrag.x)));
+      moved ||= next !== widthDrag.w;
+      if (moved) setPanels({ rightWidth: next });
+    };
     const up = () => setWidthDrag(undefined);
+    // The resize cursor everywhere, and nothing under the pointer lighting up (as the sidebar's edge).
+    document.documentElement.dataset.resizing = "col";
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
-    return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+    return () => {
+      delete document.documentElement.dataset.resizing;
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    };
   }, [widthDrag, setPanels]);
 
   const narrow = useMediaQuery(NARROW);
@@ -97,7 +109,7 @@ export function NowPlayingSidebar() {
         onMouseDown={(e) => { if (e.button !== 0) return; e.preventDefault(); const shown = shownWidth(); setWidthDrag({ x: e.clientX, w: shown.width, max: shown.max }); }}
         onDoubleClick={() => setPanels({ rightWidth: DEFAULT_W })}
         role="separator" aria-orientation="vertical" aria-label={t("a11y.resizeSidePanel")} aria-valuenow={panels.rightWidth} aria-valuemin={MIN_W} aria-valuemax={MAX_W} tabIndex={0}
-        onKeyDown={(e) => { const d = e.key === "ArrowLeft" ? 16 : e.key === "ArrowRight" ? -16 : 0; if (!d) return; e.preventDefault(); e.stopPropagation(); const shown = shownWidth(); setPanels({ rightWidth: Math.max(MIN_W, Math.min(shown.max, shown.width + d)) }); }} data-testid="side-panel-resize" />
+        onKeyDown={(e) => { const d = e.key === "ArrowLeft" ? 16 : e.key === "ArrowRight" ? -16 : 0; if (!d) return; e.preventDefault(); e.stopPropagation(); const shown = shownWidth(); const next = Math.max(MIN_W, Math.min(shown.max, shown.width + d)); if (next !== shown.width) setPanels({ rightWidth: next }); }} data-testid="side-panel-resize" />
       <div className="side-pane">
         <SideViews view={view} />
       </div>

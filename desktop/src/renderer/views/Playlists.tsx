@@ -20,7 +20,7 @@ export function Playlists() {
   const navigate = useApp((s) => s.navigate);
   const [order, setOrder] = useState<ListSort>(() => loadListSort("playlists"));
   const source = useLibrarySource(true);
-  const { data, loading } = useQuery(() => ({ type: "playlists", data: { server_id: source } }), "playlists", [source]);
+  const { data, error } = useQuery(() => ({ type: "playlists", data: { server_id: source } }), "playlists", [source]);
   const sorted = useMemo(() => sortPlaylists(data ?? [], order.sort, order.descending), [data, order]);
   const items: GridItem[] = sorted.map((p) => ({ id: p.id, title: p.name, subtitle: playlistLine(p), coverArt: p.coverArt, badge: p.offline === "downloaded" ? "download" : undefined }));
   const play = (id: string, label: string) => bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "playlist", data: { id } }, label, sort: "default", tracks: [] }, shuffle: false, saveOutgoing: true } } });
@@ -33,7 +33,7 @@ export function Playlists() {
         {/* The chips with the button, so they stay together at the end (and wrap together). */}
         <div className="actions"><SourceChips mixed /><button type="button" className="btn tonal new-playlist" onClick={() => void executeAction("ui.newPlaylist")}><Icon name="plus" size={18} /> {t("playlists.new")}</button></div>
       </div>
-      <AlbumGrid items={items} total={items.length} scope="playlists" targetKind="playlists" onOpen={(it) => navigate({ view: "playlist", id: it.id })} onPlay={(it) => play(it.id, it.title)} emptyMessage={t("playlists.empty")} loading={loading && !data} testId="playlists-grid" label={t("playlists.title")}
+      <AlbumGrid items={items} total={items.length} scope="playlists" targetKind="playlists" onOpen={(it) => navigate({ view: "playlist", id: it.id })} onPlay={(it) => play(it.id, it.title)} emptyMessage={t("playlists.empty")} loading={data === undefined && !error} testId="playlists-grid" label={t("playlists.title")}
         header={<><PlaylistGroups playlists={data ?? []} play={play} /><ListHeader id="playlists-all" title={t("playlists.all")} actions={sorter} className="list-all" /></>} />
     </div>
   );
