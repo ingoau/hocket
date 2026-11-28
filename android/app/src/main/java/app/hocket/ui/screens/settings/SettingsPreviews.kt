@@ -35,7 +35,12 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.hocket.core.ActionIds
+import app.hocket.ui.components.SwipeLook
 import app.hocket.ui.components.swipeLook
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.drawscope.clipPath
 import app.hocket.ui.icons.HocketIcons
 import kotlin.math.abs
 import kotlin.math.sin
@@ -98,23 +103,27 @@ fun ImmersivePreview(mode: String, selected: Boolean) {
             drawCircle(fg, radius = w * 0.09f, center = Offset(w * 0.5f, h * 0.87f))
         }
         fun immersive() {
-            drawRoundRect(bg, cornerRadius = radius)
-            drawRect(artBrush(a, b), Offset.Zero, Size(w, h * 0.62f))
-            // The reflection carrying the artwork on below it.
-            drawRect(Brush.verticalGradient(listOf(b.copy(alpha = 0.55f), Color.Transparent), startY = h * 0.62f, endY = h), Offset(0f, h * 0.62f), Size(w, h * 0.38f))
+            drawRect(bg)
+            // The artwork from edge to edge, melting into the page below it in its own colour.
+            drawRect(artBrush(a, b), Offset.Zero, Size(w, h * 0.66f))
+            drawRect(Brush.verticalGradient(0.3f to Color.Transparent, 0.66f to b.copy(alpha = 0.35f).compositeOver(bg), 1f to bg, endY = h), Offset.Zero, Size(w, h))
             controls()
         }
         fun card() {
-            drawRoundRect(bg, cornerRadius = radius)
+            drawRect(bg)
             drawRoundRect(artBrush(a, b), Offset(w * 0.16f, h * 0.14f), Size(w * 0.68f, w * 0.68f), CornerRadius(4.dp.toPx()))
             controls()
         }
-        when (mode) {
-            "always" -> immersive()
-            "never" -> card()
-            else -> {
-                clipRect(right = w / 2) { immersive() }
-                clipRect(left = w / 2) { card() }
+        // Everything inside the phone's rounded outline, so the artwork follows its corners.
+        val screen = Path().apply { addRoundRect(RoundRect(0f, 0f, w, h, radius)) }
+        clipPath(screen) {
+            when (mode) {
+                "always" -> immersive()
+                "never" -> card()
+                else -> {
+                    clipRect(right = w / 2) { immersive() }
+                    clipRect(left = w / 2) { card() }
+                }
             }
         }
         drawRoundRect(outline, cornerRadius = radius, style = Stroke(1.5.dp.toPx()))
@@ -182,28 +191,36 @@ fun SaverPreview(leaves: Int, selected: Boolean) {
 @Composable
 fun SwipeRowPreview(startToEnd: String, endToStart: String, modifier: Modifier = Modifier) {
     val scheme = MaterialTheme.colorScheme
-    Row(modifier.fillMaxWidth().height(64.dp).clip(RoundedCornerShape(16.dp)).background(scheme.surfaceContainerHighest).clearAndSetSemantics { }) {
-        SwipeSide(startToEnd)
-        Row(
-            Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(12.dp)).background(scheme.surfaceContainerLow).padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)).background(artBrush(scheme.primary, scheme.tertiary)))
-            Spacer(Modifier.width(12.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Box(Modifier.fillMaxWidth(0.7f).height(8.dp).clip(CircleShape).background(scheme.onSurface.copy(alpha = 0.8f)))
-                Box(Modifier.fillMaxWidth(0.45f).height(6.dp).clip(CircleShape).background(scheme.onSurfaceVariant.copy(alpha = 0.6f)))
-            }
+    val start = swipeLook(startToEnd)
+    val end = swipeLook(endToStart)
+    Box(modifier.fillMaxWidth().height(64.dp).clip(RoundedCornerShape(16.dp)).clearAndSetSemantics { }) {
+        // Each side's colour runs under the row to the middle, filling in round its corners.
+        Row(Modifier.fillMaxSize()) {
+            Box(Modifier.weight(1f).fillMaxHeight().background(start?.container ?: scheme.surfaceContainerHighest))
+            Box(Modifier.weight(1f).fillMaxHeight().background(end?.container ?: scheme.surfaceContainerHighest))
         }
-        SwipeSide(endToStart)
+        Row(Modifier.fillMaxSize()) {
+            SwipeSide(start)
+            Row(
+                Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(12.dp)).background(scheme.surfaceContainerLow).padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)).background(artBrush(scheme.primary, scheme.tertiary)))
+                Spacer(Modifier.width(12.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Box(Modifier.fillMaxWidth(0.7f).height(8.dp).clip(CircleShape).background(scheme.onSurface.copy(alpha = 0.8f)))
+                    Box(Modifier.fillMaxWidth(0.45f).height(6.dp).clip(CircleShape).background(scheme.onSurfaceVariant.copy(alpha = 0.6f)))
+                }
+            }
+            SwipeSide(end)
+        }
     }
 }
 
 @Composable
-private fun SwipeSide(id: String) {
-    val look = swipeLook(id)
+private fun SwipeSide(look: SwipeLook?) {
     Box(
-        Modifier.width(64.dp).fillMaxHeight().background(look?.container ?: Color.Transparent),
+        Modifier.width(64.dp).fillMaxHeight(),
         contentAlignment = Alignment.Center,
     ) { if (look != null) Icon(look.icon, null, tint = look.content) }
 }
