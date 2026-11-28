@@ -3,8 +3,19 @@
 // bar (Play and the title) fading in once the hero's actions have scrolled away with the column
 // labels stuck under it, a new page starting at the top, and Back and Forward returning to where
 // the page was left. Songs, likewise, scrolls as one page.
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { completeSetup, expect, openPlace, resizeWindow, test } from "./fixtures";
+
+/** [el]'s scrollTop once the wheel's scrolls have all landed (it holds still between two reads). */
+async function settledScrollTop(el: Locator): Promise<number> {
+  let top = -1;
+  await expect.poll(async () => {
+    const before = top;
+    top = await el.evaluate((e) => e.scrollTop);
+    return top === before;
+  }, { intervals: [250] }).toBe(true);
+  return top;
+}
 
 /** The elements in the content pane that scroll vertically and have something to scroll. */
 function scrollers(page: Page): Promise<string[]> {
@@ -58,7 +69,7 @@ test.describe("detail pages scroll as one page", () => {
       const [barBottom, headTop] = await view.evaluate((el) => [el.querySelector("[data-testid=detail-bar]")!.getBoundingClientRect().bottom, el.querySelector(".table-head")!.getBoundingClientRect().top]);
       expect(Math.abs(headTop - barBottom)).toBeLessThan(1);
     }).toPass();
-    const left = await view.evaluate((el) => el.scrollTop);
+    const left = await settledScrollTop(view);
     expect(left).toBeGreaterThan(0);
 
     // Another album starts at its top; Back returns to where this one was left.
@@ -119,7 +130,7 @@ test.describe("detail pages scroll as one page", () => {
       expect(scrolled).toBeGreaterThan(1000);
       expect(Math.abs(headTop - viewTop)).toBeLessThan(1);
     }).toPass();
-    const left = await view.evaluate((el) => el.scrollTop);
+    const left = await settledScrollTop(view);
     // Back from elsewhere returns to the same place in the list.
     await page.getByTestId("nav-library").click();
     await expect(page.getByTestId("view-library")).toBeVisible();
