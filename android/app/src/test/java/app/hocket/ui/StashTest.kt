@@ -5,7 +5,6 @@ import app.hocket.core.historyEntries
 import app.hocket.core.restEntries
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.getBoundsInRoot
@@ -135,9 +134,10 @@ class StashTest {
         compose.waitForIdle()
         // Rows have no menu of their own: the menu under them is the one.
         compose.onAllNodesWithContentDescription("More options for", substring = true, useUnmergedTree = true).assertCountEquals(0)
-        // Several songs: no go-to row.
+        // Several songs (their menu loaded): no go-to row.
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("stash.menu.action.play", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
         compose.onAllNodesWithTag("stash.menu.action.goToAlbum", useUnmergedTree = true).assertCountEquals(0)
-        compose.onAllNodesWithTag("stash.row")[0].performClick()
+        compose.onAllNodesWithTag("stash.row")[0].performScrollTo().performClick()
         compose.waitForIdle()
         compose.onNodeWithTag("stash.menu.remove").assertTextEquals("Remove from stash")
         compose.onNodeWithTag("stash.menu.action.goToAlbum", useUnmergedTree = true).performScrollTo().performClick()

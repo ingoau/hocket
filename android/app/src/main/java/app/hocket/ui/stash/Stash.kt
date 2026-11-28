@@ -374,10 +374,11 @@ fun StashSheet(onDismiss: () -> Unit, navigator: DetailNavigator? = LocalDetailN
                     onClick = { client.dispatch(Command.StashRemove(CommandStashRemoveInner(selection.map { it.entryId }))) },
                     destructive = true, testTag = "stash.menu.remove", replaces = ActionIds.STASH,
                 ) else null
-                // A fresh menu for each set of songs it acts on, and as their state changes (its
-                // toggles start from the subject's). Add to stash makes no sense here: an extra
-                // stands in for it (or, for the whole stash, Clear does).
-                key(acting.map { it.entryId }, subject) {
+                // A fresh menu for each set of songs it acts on (not per change in what it shows:
+                // one song's own Download toggle changes the pins, which mustn't reset the menu or
+                // stop a preview). Add to stash makes no sense here: an extra stands in for it (or,
+                // for the whole stash, Clear does).
+                key(acting.map { it.entryId }) {
                     MenuSheet(
                         subject, target, actions.filter { it.id != ActionIds.STASH },
                         onDismiss = {},
