@@ -174,7 +174,10 @@ export async function html5DragEnd(page: Page): Promise<void> {
 /** Pick `value` in one of the app's Select comboboxes (components/controls.tsx) by pointer, like a user. */
 export async function chooseOption(select: Locator, value: string): Promise<void> {
   await select.click();
-  await select.page().locator(`[role="listbox"] [role="option"][data-value="${value}"]`).click();
+  await expect(select).toHaveAttribute("aria-expanded", "true");
+  // This select's own list: another one may still be leaving through its exit animation.
+  const list = await select.getAttribute("aria-controls");
+  await select.page().locator(`[id="${list}"] [role="option"][data-value="${value}"]`).click();
   await expect(select).toHaveAttribute("aria-expanded", "false");
   await expect(select).toHaveAttribute("data-value", value);
 }
