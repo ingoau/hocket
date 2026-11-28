@@ -316,10 +316,20 @@ internal fun nowPlayingScheme(coverArt: String?): ColorScheme? {
 /**
  * The seed colour of what is playing ([coverArt]), or null with no artwork. While a new cover's
  * seed is worked out the last one holds (rather than dipping through the app's own colours and
- * back). The app's theme ([app.hocket.ui.theme.HocketTheme]) takes it too.
+ * back). The app's theme ([app.hocket.ui.theme.HocketTheme]) works it out for the playing track
+ * and shares it ([app.hocket.ui.theme.LocalNowPlayingSeed]), so each cover's palette is read once;
+ * any other cover (the player's, mid-swipe) is worked out here.
  */
 @Composable
-fun nowPlayingSeed(coverArt: String?, client: app.hocket.core.client.CoreClient = app.hocket.ui.LocalCoreClient.current): Color? {
+internal fun nowPlayingSeed(coverArt: String?): Color? {
+    val shared = app.hocket.ui.theme.LocalNowPlayingSeed.current
+    if (shared != null && shared.coverArt == coverArt) return shared.seed
+    return resolveNowPlayingSeed(coverArt, app.hocket.ui.LocalCoreClient.current)
+}
+
+/** [nowPlayingSeed] worked out from [client]'s artwork. */
+@Composable
+fun resolveNowPlayingSeed(coverArt: String?, client: app.hocket.core.client.CoreClient): Color? {
     val worked = artworkSeed(coverArt, client).value
     var last by remember { androidx.compose.runtime.mutableStateOf<Color?>(null) }
     // Nothing playing forgets it, so the next song never starts in a long-gone cover's colours.

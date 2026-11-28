@@ -170,8 +170,10 @@ internal fun rememberDetailLook(coverArt: String?, round: Boolean, width: Dp): D
     // While the page eases from one colour to the next, its text follows the colour on screen
     // (dark text on a page still near black would not read), then the target's own call.
     val shownLight = if (page == target) light else page.luminance() > 0.4f
-    // Nothing of the cover's yet (or ever: no artwork): the app's own colours, accents included.
-    val scheme = if (seed == null && edge == null && page == app.background) app else remember(page, seed, shownLight) { ArtworkColors.pageScheme(seed, page, shownLight) }
+    // Nothing of the cover's yet (or ever: no artwork): the app's own colours, accents included,
+    // straight from the theme (which eases on its own when the playing cover's colours change).
+    if (seed == null && edge == null) return DetailLook(immersive, layout, app, dark = appDark)
+    val scheme = remember(page, seed, shownLight) { ArtworkColors.pageScheme(seed, page, shownLight) }
     return DetailLook(immersive, layout, scheme, dark = !shownLight)
 }
 
