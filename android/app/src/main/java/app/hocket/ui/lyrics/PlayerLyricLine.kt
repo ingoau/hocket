@@ -15,7 +15,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -23,6 +27,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.SemanticsPropertyKey
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.testTag
 import androidx.compose.ui.text.TextStyle
@@ -60,33 +65,57 @@ internal fun PlayerLyricLine(
     val lighter = saver.has(app.hocket.core.api.SaverFeature.LighterLyrics)
     val simple = saver.has(app.hocket.core.api.SaverFeature.SimpleLyrics)
     val reducedMotion = LocalReducedMotion.current || simple
-    val current = rememberCurrentLyrics()
+    // The lyrics only while it shows (not for every song while the player is collapsed).
+    val current = if (visible) rememberCurrentLyrics() else NO_LYRICS
     val doc = current.lyrics?.takeIf { d -> d.tier != LyricsTier.Unsynced && d.lines.any { it.startMs != null } }
-    val positionMs by rememberLyricsPlayhead(visible && doc != null, reducedMotion, lighter, simple, current.trackId)
+    // Every frame for words being swept; line-timed lyrics only change at a line, so less often.
+    val syllables = doc?.tier == LyricsTier.Syllable
+    val playhead = rememberLyricsPlayhead(visible && doc != null, LocalReducedMotion.current, lighter, simple || !syllables, current.trackId)
+    val positionMs by playhead
+    // The playhead for this opening and this song: until it has ticked once it still holds the last
+    // one's position, whose line must not flash up.
+    var fresh by remember(visible, current.trackId) { mutableStateOf(false) }
+    LaunchedEffect(visible, current.trackId) { if (visible) { withFrameNanos { }; fresh = true } }
     val cursor = if (doc != null) LyricsCursor.at(doc, positionMs) else LyricsCursor.EMPTY
     val focus = if (doc != null) focusLine(doc, cursor) else -1
-    val present = visible && doc != null && focus >= 0 && !cursor.inGap && doc.lines[focus].text.isNotBlank()
+    val present = visible && fresh && doc != null && focus >= 0 && !cursor.inGap && doc.lines[focus].text.isNotBlank()
     val fade = animateFloatAsState(if (present) 1f else 0f, if (reducedMotion) tween(150) else tween(if (present) 320 else 500), label = "playerLyricLine")
-    // The line on show: held while it fades out (the cursor has moved past it).
-    val held = remember(doc?.trackId) { intArrayOf(-1) }
-    if (present) held[0] = focus
-    val line = doc?.let { d -> held[0].takeIf { it in d.lines.indices } }
+    // The line on show (and its song's lyrics): held while it fades out, past it, into another song
+    // or out of sight.
+    val held = remember { arrayOfNulls<HeldLine>(1) }
+    if (present && (held[0]?.doc !== doc || held[0]?.index != focus)) held[0] = HeldLine(doc!!, focus)
+    val line = held[0]
     val tone = remember(color) { LyricTone(idle = color.copy(alpha = color.alpha * 0.4f), unsung = color.copy(alpha = color.alpha * 0.4f), sung = color) }
     Layout(
         content = {
-            if (doc != null && line != null) {
-                LineSwap(line, reducedMotion) { i -> FitLine(doc, i, cursor, textStyle, tone, motion = !reducedMotion) }
+            if (line != null) {
+                LineSwap(line, reducedMotion) { l ->
+                    // Another song's (or a replaced copy's) line fading out: lit, as it was sung.
+                    val live = l.doc === doc
+                    FitLine(l.doc, l.index, if (live) cursor else LyricsCursor.EMPTY, textStyle, tone, motion = live && !reducedMotion)
+                }
             }
         },
         modifier = modifier
             .graphicsLayer { this.alpha = (fade.value * alpha()).coerceIn(0f, 1f) }
-            .clearAndSetSemantics { testTag = "player.lyricLine" },
+            .clearAndSetSemantics { testTag = "player.lyricLine"; this[PlayerLyricLineShown] = present },
     ) { measurables, c ->
         val p = measurables.map { it.measure(Constraints(maxWidth = c.maxWidth)) }
         // No room of its own: its bottom where it is placed, zero high.
         layout(c.maxWidth, 0) { p.forEach { it.place(0, -it.height) } }
     }
 }
+
+/** A line of a song's lyrics, by identity (a fresh copy of the lyrics is another line). */
+private class HeldLine(val doc: Lyrics, val index: Int) {
+    override fun equals(other: Any?) = other is HeldLine && other.doc === doc && other.index == index
+    override fun hashCode() = System.identityHashCode(doc) * 31 + index
+}
+
+private val NO_LYRICS = CurrentLyrics(null, null, loaded = false)
+
+/** For tests: whether a line is on show (it is silent for accessibility services). */
+internal val PlayerLyricLineShown = SemanticsPropertyKey<Boolean>("PlayerLyricLineShown")
 
 /** How far a sung word rises, in ems: the room kept above and below a lit line for it. */
 private const val RISE = 0.3f
@@ -99,7 +128,7 @@ private val MIN_SIZE: TextUnit = 17.sp
 
 /** One line to the next: the new one rising in as the old one rises away, or a crossfade with reduced motion. */
 @Composable
-private fun LineSwap(line: Int, reducedMotion: Boolean, content: @Composable (Int) -> Unit) {
+private fun LineSwap(line: HeldLine, reducedMotion: Boolean, content: @Composable (HeldLine) -> Unit) {
     AnimatedContent(
         targetState = line,
         transitionSpec = {
@@ -121,7 +150,7 @@ private fun LineSwap(line: Int, reducedMotion: Boolean, content: @Composable (In
  */
 @Composable
 private fun FitLine(doc: Lyrics, index: Int, cursor: LyricsCursor, style: TextStyle, tone: LyricTone, motion: Boolean) {
-    val line = doc.lines[index]
+    val line = doc.lines.getOrNull(index) ?: return
     val measurer = rememberTextMeasurer()
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val w = constraints.maxWidth

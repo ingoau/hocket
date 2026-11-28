@@ -361,7 +361,7 @@ internal fun FullPlayer(
                 seek = { Box(pickHidden) { PlayerSeek(position, fold, shown) } },
                 above = { if (lyricLine) Box(pickHidden) { AboveTitleLine(lyricLineVisible, modeFraction) } },
                 // Its room whenever the setting is on, with lyrics or not, so the artwork stays put from song to song.
-                aboveRoom = if (lyricLine) LYRIC_LINE_ROOM else 0.dp,
+                aboveRoom = if (lyricLine) with(density) { LYRIC_LINE_ROOM.toDp() } else 0.dp,
                 transport = {
                     val playing by client.isPlaying.collectAsStateWithLifecycle()
                     val buffering by client.buffering.collectAsStateWithLifecycle()
@@ -453,8 +453,8 @@ private val WIDE_GAP = 20.dp
 internal val PAGE_PADDING = 20.dp
 private val MAX_ART = 520.dp
 private val ART_PAD = 8.dp
-/** The band the line being sung takes above the title (`lyrics.playerLine`): the artwork moves up by it. */
-private val LYRIC_LINE_ROOM = 24.dp
+/** The band the line being sung takes above the title (`lyrics.playerLine`): the artwork moves up by it. In sp, as the line grows with the font. */
+private val LYRIC_LINE_ROOM = 24.sp
 /** The least room the mode area gets. */
 private val MIN_AREA = 220.dp
 /** The transport's height (the skip buttons are this square). */
@@ -635,19 +635,20 @@ private fun PlayerLayoutTall(
             hp.forEach { it.place(0, 0) }
             // Lifted, the area goes over the controls it covers (it takes their touches).
             if (l > 0f) {
+                bp.forEach { it.place(x0, titleTop) }
                 tp.forEach { it.place(x0, titleTop) }
                 sp.forEach { it.place(x0, seekTop) }
                 xp.forEach { it.place(x0, transportTop) }
             }
             mp.forEach { it.place(areaX, hh) }
             if (l <= 0f) {
+                bp.forEach { it.place(x0, titleTop) }
                 tp.forEach { it.place(x0, titleTop) }
                 sp.forEach { it.place(x0, seekTop) }
                 xp.forEach { it.place(x0, transportTop) }
             }
             // Folded all the way, the action row is gone (off the page, out of reach).
             if (k < 1f) ap.forEach { it.place(x0, actionsTop) }
-            if (l <= 0f) bp.forEach { it.place(x0, titleTop) }
         }
     }
 }
