@@ -102,6 +102,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.R
+import app.hocket.core.ActionIds
+import app.hocket.core.api.CommandStashRemoveInner
+import app.hocket.ui.components.LoveBurst
+import androidx.compose.material3.IconToggleButton
+import androidx.compose.runtime.mutableIntStateOf
 import app.hocket.core.Commands
 import app.hocket.core.api.Command
 import app.hocket.core.has
@@ -947,11 +952,17 @@ private fun BoxScope.PreviewInfo(
             .graphicsLayer { alpha = ((state.progress - 0.55f) / 0.45f).coerceIn(0f, 1f) * (1f - state.downFraction) * fadeOnDrop(state) }
             .testTag("albumPreview.info"),
     ) {
-        // Start-aligned to the card's edge, as the player's title is to its artwork's.
-        Text(track.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1, modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE).testTag("albumPreview.title"))
-        Text(track.artist ?: albumArtist.orEmpty(), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth())
+        // Start-aligned to the card's edge, as the player's title is to its artwork's; stash and love at its end.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(track.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1, modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE).testTag("albumPreview.title"))
+                Text(track.artist ?: albumArtist.orEmpty(), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth())
+            }
+            // Out by the buttons' own padding, so the heart lines up with the card's edge as the seek bar does.
+            Row(Modifier.offset(x = 12.dp)) { key(track.id) { PreviewSongToggles(track) } }
+        }
         Spacer(Modifier.height(8.dp))
         key(track.id) {
             WavySeekBar(
@@ -987,6 +998,51 @@ private fun BoxScope.PreviewInfo(
             Icon(HocketIcons.Filled.PlaylistPlay, null, Modifier.size(22.dp))
             Spacer(Modifier.size(8.dp))
             Text(stringResource(R.string.album_preview_play_from_here), style = MaterialTheme.typography.titleSmall)
+        }
+    }
+}
+
+/**
+ * Stash and love for the song on the card in the middle, at the end of its title. Stash adds it, or
+ * takes it back out once it's in, as the stash reports it (local, so at once; a full stash adds
+ * nothing and stays unticked). Love loves or unloves it and shows the tap at once, until the
+ * album's songs come back with it.
+ */
+@Composable
+private fun PreviewSongToggles(track: Track) {
+    val client = LocalCoreClient.current
+    val stash by client.stash.collectAsStateWithLifecycle()
+    // By ref: the same id on another account is another song.
+    val entries = stash.filter { it.track.ref == track.ref }.map { it.entryId }
+    val stashed = entries.isNotEmpty()
+    var loved by remember(track.loved) { mutableStateOf(track.loved) }
+    // Only taps here that love burst the heart, not the album's songs coming back loved.
+    var bursts by remember { mutableIntStateOf(0) }
+    val primary = MaterialTheme.colorScheme.primary
+    val idle = MaterialTheme.colorScheme.onSurfaceVariant
+    val stashLabel = stringResource(R.string.action_label_stash)
+    IconToggleButton(
+        checked = stashed,
+        onCheckedChange = { on ->
+            if (on) client.dispatch(Commands.runAction(ActionIds.STASH, Commands.tracks(listOf(track.ref))))
+            else client.dispatch(Command.StashRemove(CommandStashRemoveInner(entries)))
+        },
+        modifier = Modifier.semantics { contentDescription = stashLabel }.testTag("albumPreview.stash"),
+    ) {
+        Icon(if (stashed) HocketIcons.Filled.Inventory2 else HocketIcons.Outlined.Inventory2, null, tint = if (stashed) primary else idle)
+    }
+    val loveLabel = stringResource(R.string.action_love)
+    IconToggleButton(
+        checked = loved,
+        onCheckedChange = { on ->
+            loved = on
+            if (on) bursts++
+            client.dispatch(Commands.runAction(if (on) ActionIds.LOVE else ActionIds.UNLOVE, Commands.tracks(listOf(track.ref))))
+        },
+        modifier = Modifier.semantics { contentDescription = loveLabel }.testTag("albumPreview.love"),
+    ) {
+        LoveBurst(bursts, primary, Modifier.fillMaxSize()) {
+            Icon(if (loved) HocketIcons.Filled.Favorite else HocketIcons.Filled.FavoriteBorder, null, tint = if (loved) primary else idle)
         }
     }
 }

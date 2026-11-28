@@ -10,7 +10,10 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.swipeLeft
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.api.Track
@@ -224,6 +227,34 @@ class AlbumPreviewTest {
         assertTrue(tracks.any { it.id == previewed })
         // On from the preview (which opened 30% in), not from the top.
         assertTrue(core.client.transport.value.position.positionMs > 0u)
+    }
+
+    @Test
+    fun stashAndLoveBesideTheTitleToggleTheSongOnTheCard() {
+        val core = TestCore(startPlaying = false)
+        open(core)
+        pull(200f)
+        compose.waitUntil(5_000) { core.client.preview.value != null }
+        val id = core.client.preview.value!!.trackId
+        val wasLoved = core.fake.library.track(id)!!.loved
+        // Real touches, so a tap that reached the scrim behind would put the preview away.
+        fun tap(tag: String) {
+            compose.onNodeWithTag(tag).performClick()
+            compose.waitForIdle()
+        }
+        compose.onNodeWithTag("albumPreview.stash").assertIsOff()
+        tap("albumPreview.stash")
+        compose.waitUntil(5_000) { core.client.stash.value.any { it.track.id == id } }
+        compose.onNodeWithTag("albumPreview.stash").assertIsOn()
+        tap("albumPreview.stash")
+        compose.waitUntil(5_000) { core.client.stash.value.none { it.track.id == id } }
+        compose.onNodeWithTag("albumPreview.stash").assertIsOff()
+        tap("albumPreview.love")
+        compose.waitUntil(5_000) { core.fake.library.track(id)!!.loved != wasLoved }
+        if (wasLoved) compose.onNodeWithTag("albumPreview.love").assertIsOff() else compose.onNodeWithTag("albumPreview.love").assertIsOn()
+        // Still up: neither puts the preview away.
+        assertTrue(exists("albumPreview.info"))
+        assertEquals(id, core.client.preview.value?.trackId)
     }
 
     @Test
