@@ -757,6 +757,7 @@ fn swipe_actions_are_registry_actions_for_their_rows() {
     for (options, kind) in [
         (registry::SWIPE_QUEUE_ACTIONS, TargetKind::QueueItems),
         (registry::SWIPE_LIST_ACTIONS, TargetKind::Tracks),
+        (registry::SWIPE_STASH_ACTIONS, TargetKind::Tracks),
     ] {
         assert_eq!(options.first(), Some(&"none"));
         for id in options.iter().filter(|id| **id != "none") {
@@ -777,11 +778,23 @@ fn swipe_actions_are_registry_actions_for_their_rows() {
         s.get_string(keys::SWIPE_LIST_START_TO_END).as_deref(),
         Some("playNext")
     );
-    // Removing from the queue is the queue's own; lists never offer it.
-    assert!(matches!(
-        s.set_json(keys::SWIPE_LIST_END_TO_START, "\"removeFromQueue\"", 1.0),
-        Err(SettingsError::Invalid { .. })
-    ));
+    for key in [
+        keys::SWIPE_STASH_START_TO_END,
+        keys::SWIPE_STASH_END_TO_START,
+    ] {
+        assert_eq!(s.get_string(key).as_deref(), Some("removeFromStash"));
+    }
+    // Removing from the queue is the queue's own, and from the stash the stash's.
+    for (key, id) in [
+        (keys::SWIPE_LIST_END_TO_START, "removeFromQueue"),
+        (keys::SWIPE_LIST_START_TO_END, "removeFromStash"),
+        (keys::SWIPE_STASH_START_TO_END, "removeFromQueue"),
+    ] {
+        assert!(matches!(
+            s.set_json(key, &format!("\"{id}\""), 1.0),
+            Err(SettingsError::Invalid { .. })
+        ));
+    }
     assert!(s
         .set_json(keys::SWIPE_QUEUE_START_TO_END, "\"none\"", 1.0)
         .is_ok());

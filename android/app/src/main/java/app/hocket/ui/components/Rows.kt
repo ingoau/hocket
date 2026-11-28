@@ -244,6 +244,8 @@ fun TrackRow(
     extraActions: List<CustomAccessibilityAction> = emptyList(),
     /** Whose swipe settings the row follows; rows with a menu swipe like song lists, read-only rows not at all. */
     swipe: SwipeSurface? = if (onMore != null) SwipeSurface.List else null,
+    /** Swipes still act while [selectionActive]: rows that are always picking (the stash). */
+    swipeWhileSelecting: Boolean = false,
     /** This row's place in a segmented group (index to count); null for a flat row. */
     segment: Pair<Int, Int>? = null,
     /** The trailing time; off where the subtitle already carries it. */
@@ -300,7 +302,7 @@ fun TrackRow(
             startToEnd = trackSwipeAction(startId, track, target, onAddToPlaylist = { playlistPicker = true }),
             endToStart = trackSwipeAction(endId, track, target, onAddToPlaylist = { playlistPicker = true }),
             // Not while selecting: rows toggle then, and a stray swipe must not act on one of them.
-            enabled = swipe != null && !selectionActive,
+            enabled = swipe != null && (!selectionActive || swipeWhileSelecting),
             // The sliding content carries the row's own colour and shape, so the action's background
             // never shows through it.
             swipeSurface = color,

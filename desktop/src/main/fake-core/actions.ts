@@ -31,6 +31,7 @@ export const REGISTRY: RegistryEntry[] = [
   { id: "addToPlaylist", label: "Add to playlist…", icon: "playlistAdd", category: "library", targets: ["tracks", "albums", "queueItems"], surfaces: ["contextMenu"], undoable: true },
   { id: "stash", label: "Stash", icon: "stash", category: "queue", targets: ["none", "tracks", "albums", "artists", "playlists", "queueItems"], surfaces: ["contextMenu", "palette", "mediaSession"], defaultShortcut: "Mod+S" },
   { id: "openStash", label: "Open stash", icon: "stash", category: "view", targets: ["none"], surfaces: ["palette"], defaultShortcut: "Mod+Shift+S" },
+  { id: "removeFromStash", label: "Remove from stash", icon: "remove", category: "queue", targets: ["tracks"], surfaces: ["palette"], undoable: true },
   { id: "clearStash", label: "Clear stash", icon: "clear_all", category: "queue", targets: ["none"], surfaces: ["palette"] },
   { id: "snooze", label: "Snooze", icon: "bedtime", category: "queue", targets: ["tracks", "queueItems"], surfaces: ["contextMenu", "palette"], undoable: true },
   { id: "unsnooze", label: "Unsnooze", icon: "bedtime", category: "queue", targets: ["tracks", "queueItems"], surfaces: ["contextMenu", "palette"], undoable: true },
@@ -129,6 +130,8 @@ export interface ActionContext {
   anyDownloaded?: boolean;
   savedQueuePinned?: boolean;
   inPlaylist?: boolean;
+  /** A song of the target is in the stash (the core's `in_stash`). */
+  inStash?: boolean;
   /** One album, artist, playlist or song: whether it's pinned to the Library (undefined otherwise). */
   libraryPinned?: boolean;
   /** `library.pins` is at its limit (the core's LIBRARY_PINS_MAX). */
@@ -166,6 +169,7 @@ export function describeActions(surface: string, target: ActionTarget, order: st
       if (e.id === "pinSavedQueue" && ctx.savedQueuePinned) return false;
       if (e.id === "unpinSavedQueue" && !ctx.savedQueuePinned) return false;
       if (e.id === "removeFromPlaylist" && !ctx.inPlaylist) return false;
+      if (e.id === "removeFromStash" && !ctx.inStash) return false;
       // Like the core: offered for one album, artist, playlist or song; the one that doesn't apply is disabled.
       if ((e.id === "pinToLibrary" || e.id === "unpinFromLibrary") && ctx.libraryPinned === undefined) return false;
       if (e.id === "resumeHere" && !ctx.hasResumeOffer) return false;

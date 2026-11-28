@@ -16,14 +16,21 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeLeft
+import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.hocket.core.ActionIds
 import app.hocket.core.Commands
 import app.hocket.core.SettingKeys
 import app.hocket.core.api.Command
 import app.hocket.core.api.CommandStashAddInner
+import app.hocket.core.api.CommandStashRestoreInner
+import app.hocket.ui.a11y.performCustomAction
 import app.hocket.ui.nav.AppRoot
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -126,6 +133,42 @@ class StashTest {
         compose.waitUntil(5_000) { core.client.stash.value.isEmpty() }
         compose.waitForIdle()
         compose.onAllNodesWithTag("stash.chip").assertCountEquals(0)
+    }
+
+    @Test
+    fun swipingASongTakesItOutOfTheStashEitherWayUntilSetOtherwise() {
+        val core = start()
+        stashSome(core, 3)
+        compose.onNodeWithTag("stash.chip").performClick()
+        compose.waitForIdle()
+        // Swiped left (starting off the drag handle at the end): out of the stash, whatever is picked.
+        val first = core.client.stash.value.first()
+        compose.onAllNodesWithTag("stash.row")[0].performScrollTo().performTouchInput { swipeLeft(startX = width * 0.75f, endX = 0f) }
+        compose.waitUntil(5_000) { core.client.stash.value.none { it.entryId == first.entryId } }
+        compose.waitForIdle()
+        compose.onAllNodesWithTag("stash.row")[0].performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("stash.summary").assertTextEquals("1 of 2 selected")
+        compose.onAllNodesWithTag("stash.row")[1].performScrollTo().performTouchInput { swipeRight() }
+        compose.waitUntil(5_000) { core.client.stash.value.size == 1 }
+        compose.waitForIdle()
+        compose.onAllNodesWithTag("stash.row").assertCountEquals(1)
+        // TalkBack has the same as a row action.
+        val stays = core.client.stash.value.single()
+        compose.onAllNodesWithTag("stash.row")[0].performCustomAction(compose, "Remove from stash")
+        compose.waitUntil(5_000) { core.client.stash.value.isEmpty() }
+        core.client.dispatch(Command.StashRestore(CommandStashRestoreInner(listOf(stays.entryId))))
+        compose.waitUntil(5_000) { core.client.stash.value.size == 1 }
+        compose.waitForIdle()
+        // The stash's own setting: swiping right now loves (or unloves), and the song stays.
+        core.client.dispatch(Commands.setSetting(SettingKeys.SWIPE_STASH_START_TO_END, "\"${ActionIds.LOVE}\""))
+        compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.SWIPE_STASH_START_TO_END]?.value == "\"${ActionIds.LOVE}\"" }
+        compose.waitForIdle()
+        val last = core.client.stash.value.single()
+        val loved = core.fake.library.track(last.track.id)!!.loved
+        compose.onAllNodesWithTag("stash.row")[0].performScrollTo().performTouchInput { swipeRight() }
+        compose.waitUntil(5_000) { core.fake.library.track(last.track.id)!!.loved != loved }
+        assertEquals(listOf(last.entryId), core.client.stash.value.map { it.entryId })
     }
 
     @Test

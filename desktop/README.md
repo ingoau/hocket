@@ -205,7 +205,8 @@ Optional fields arrive as `null`, never `undefined`. A fresh undoable mutation p
   line, unsynced → a static list. Agents map to duet alignment, background lines to `isBG`.
 - Trackpad swipes (two fingers, sideways; `lib/swipe.ts` is the engine, `lib/swipe-hook.ts`
   drives it from `wheel` events): a song row runs `swipe.list.*`, a queue row `swipe.queue.*`
-  (remove, sliding out, by default; the core's synced settings, the phone's too), the
+  and a stashed song `swipe.stash.*` (remove, sliding out, by default; the core's synced
+  settings, the phone's too), the
   now-playing artwork skips (left next, right previous) and a swipe over the page goes back
   (right) or forward (left) with an arrow at the edge. A row past the threshold shows its
   action's colour and icon; letting go runs it, short of it springs back. Each is a shortcut:

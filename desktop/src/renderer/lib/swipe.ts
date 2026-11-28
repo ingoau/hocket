@@ -488,7 +488,7 @@ export function systemDirection(platform: Platform): DirectionMode {
   return platform === "macOs" ? "auto" : "natural";
 }
 
-export type SwipeSurface = "rows" | "queue" | "cover" | "page";
+export type SwipeSurface = "rows" | "queue" | "stash" | "cover" | "page";
 export type Sensitivity = "low" | "medium" | "high";
 /** The direction setting: "system" follows the platform (`systemDirection`). */
 export type DirectionPref = "system" | "natural" | "reversed";
@@ -497,6 +497,7 @@ export type DirectionPref = "system" | "natural" | "reversed";
 export const SURFACE_TUNING: Record<SwipeSurface, SwipeTuning> = {
   rows: DEFAULT_TUNING,
   queue: DEFAULT_TUNING,
+  stash: DEFAULT_TUNING,
   // Swipe the artwork to skip: further to go, a short leash, and the skip says it all (no commit haptic).
   cover: { ...DEFAULT_TUNING, threshold: 0.4, maxTravel: 0.35, resistance: 0.25, flingVelocity: 1.2, hapticCommit: "none" },
   // Back and forward over the page: a short pull with a lot of resistance.

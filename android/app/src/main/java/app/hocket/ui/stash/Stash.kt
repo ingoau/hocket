@@ -140,6 +140,7 @@ import app.hocket.ui.components.itemMenu
 import app.hocket.ui.components.SongMenuExtra
 import app.hocket.ui.components.songSubject
 import app.hocket.ui.components.TrackRow
+import app.hocket.ui.components.SwipeSurface
 import app.hocket.ui.components.formatClock
 import app.hocket.ui.components.segmentedShape
 import app.hocket.ui.components.songsSubject
@@ -657,6 +658,8 @@ private fun StashList(
     }
     val moveUp = stringResource(R.string.stash_move_up)
     val moveDown = stringResource(R.string.stash_move_down)
+    val removeLabel = stringResource(R.string.stash_remove_one)
+    val client = LocalCoreClient.current
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp).testTag("stash.list"),
@@ -670,6 +673,8 @@ private fun StashList(
                 val moves = buildList {
                     if (index > 0) add(CustomAccessibilityAction(moveUp) { onMove(item.entryId, index - 1); true })
                     if (index < shown.lastIndex) add(CustomAccessibilityAction(moveDown) { onMove(item.entryId, index + 1); true })
+                    // The swipe's default, for TalkBack (the core's toast offers Undo).
+                    add(CustomAccessibilityAction(removeLabel) { client.dispatch(Command.StashRemove(CommandStashRemoveInner(listOf(item.entryId)))); true })
                 }
                 TrackRow(
                     track,
@@ -678,6 +683,9 @@ private fun StashList(
                     selected = item.entryId in picked,
                     selectionActive = true,
                     onToggleSelect = { onToggle(item.entryId) },
+                    // A swipe acts on its own row, whatever is picked; not while a row is being dragged.
+                    swipe = if (dragging == null) SwipeSurface.Stash else null,
+                    swipeWhileSelecting = true,
                     extraActions = moves,
                     segment = index to shown.size,
                     subtitle = listOfNotNull(track.artist, formatClock(track.durationMs.toLong())).joinToString(dot),
@@ -703,7 +711,8 @@ private fun StashList(
                                         if (id != null && at >= 0) {
                                             val others = current.filter { it.entryId != id }
                                             val prev = shown.getOrNull(at - 1)?.entryId
-                                            val to = if (prev == null) 0 else others.indexOfFirst { it.entryId == prev } + 1
+                                            // A row above it that has since left the stash: no place to land.
+                                            val to = if (prev == null) 0 else others.indexOfFirst { it.entryId == prev }.let { if (it < 0) -1 else it + 1 }
                                             if (to >= 0 && current.indexOfFirst { it.entryId == id } != to) onMove(id, to)
                                         }
                                         haptics.performHapticFeedback(HapticFeedbackType.GestureEnd)

@@ -144,6 +144,8 @@ pub struct StateView {
     pub volume_unknown: bool,
     /// What's pinned to the Library (`library.pins`), in order.
     pub library_pins: Vec<LibraryPin>,
+    /// The stash as listed: each song and the entry listing it.
+    pub stash_entries: Vec<(TrackRef, String)>,
     /// Track ids snoozed right now.
     pub snoozed_tracks: Vec<TrackId>,
     /// The Queue section setting (`queue.section`): "Add to queue" and the

@@ -204,5 +204,6 @@ private fun SwipePage(nav: NavHostController) {
     SubScreen(nav, stringResource(R.string.settings_swipe_actions)) {
         SwipeChoices(stringResource(R.string.settings_swipe_queue), SwipeOptions.QUEUE, SwipeSurface.Queue)
         SwipeChoices(stringResource(R.string.settings_swipe_lists), SwipeOptions.LIST, SwipeSurface.List)
+        SwipeChoices(stringResource(R.string.settings_swipe_stash), SwipeOptions.STASH, SwipeSurface.Stash)
     }
 }

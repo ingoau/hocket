@@ -32,6 +32,7 @@ object ActionLabels {
         ActionIds.DOWNLOAD -> R.string.action_label_download
         ActionIds.STASH -> R.string.action_label_stash
         ActionIds.CLEAR_STASH -> R.string.action_label_clear_stash
+        ActionIds.REMOVE_FROM_STASH -> R.string.action_label_remove_from_stash
         ActionIds.SNOOZE -> R.string.action_label_snooze
         ActionIds.UNSNOOZE -> R.string.action_label_unsnooze
         ActionIds.UNPIN -> R.string.action_label_unpin

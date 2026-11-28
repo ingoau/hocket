@@ -2461,6 +2461,8 @@ export class FakeCore implements CoreHandle {
       ["swipe.queue.endToStart", "removeFromQueue", "accountSynced"],
       ["swipe.list.startToEnd", "playNext", "accountSynced"],
       ["swipe.list.endToStart", "playLater", "accountSynced"],
+      ["swipe.stash.startToEnd", "removeFromStash", "accountSynced"],
+      ["swipe.stash.endToStart", "removeFromStash", "accountSynced"],
       ["shortcuts", {}, "deviceLocal"],
       ["developer.mode", false, "deviceLocal"],
       ["connect.headphone_handoff", false, "deviceLocal"],
@@ -2841,6 +2843,13 @@ export class FakeCore implements CoreHandle {
       case "removeFromQueue":
         if (target.type === "queueItems") this.removeItems(target.data.keys);
         return;
+      case "removeFromStash": {
+        // The listed entries of the target's songs, as the core's action finds them.
+        const ids = new Set(trackIds);
+        const entryIds = this.stashItems().filter((x) => ids.has(x.track.id)).map((x) => x.entryId);
+        if (entryIds.length) this.handle({ type: "stashRemove", data: { entry_ids: entryIds } });
+        return;
+      }
       case "restoreSavedQueue":
         if (target.type === "savedQueue") this.restoreSavedQueue(target.data.id);
         return;
@@ -3298,6 +3307,7 @@ export class FakeCore implements CoreHandle {
       anyDownloaded,
       savedQueuePinned: sq?.pinned,
       inPlaylist: true,
+      inStash: target.type === "tracks" && this.stashItems().some((x) => target.data.tracks.some((r) => r.id === x.track.id)),
       libraryPinned: this.libraryPinned(target),
       libraryFull: this.libraryPins().length >= 200,
     });

@@ -23,7 +23,7 @@ import { LYRICS_SIZES, setLyricsAnimated, setLyricsSize, useLyricsAnimated, useL
 import { setIdleHide, useIdleHide } from "../lib/idle-hide";
 import { setGesturePrefs, useGesturePrefs, type GesturePrefs } from "../lib/gesture-prefs";
 import { clearTelemetry, setTelemetryEnabled, summarise, telemetryEvents, useTelemetryEnabled, useTelemetryVersion } from "../lib/palette-telemetry";
-import { SWIPE_DEFAULTS, SWIPE_KEYS, SWIPE_LIST_ACTIONS, SWIPE_QUEUE_ACTIONS, swipeChoiceLabel } from "../lib/swipe-actions";
+import { SWIPE_DEFAULTS, SWIPE_KEYS, SWIPE_LIST_ACTIONS, SWIPE_QUEUE_ACTIONS, SWIPE_STASH_ACTIONS, swipeChoiceLabel } from "../lib/swipe-actions";
 import { Select, Slider, Switch } from "../components/controls";
 import { warnChoices } from "../lib/storage-warn";
 import { isWaiting, jobStateLabel } from "../lib/jobs";
@@ -732,6 +732,9 @@ function Gestures() {
       {surface("queue", "gestureQueue", "settings.gestures.queue", "settings.gestures.queueDesc")}
       <SwipeChoice anchor="swipeQueueRight" settingKey={SWIPE_KEYS.queue.startToEnd} fallback={SWIPE_DEFAULTS.queue.startToEnd} choices={SWIPE_QUEUE_ACTIONS} title={t("settings.gestures.queueRight")} testId="setting-swipe-queue-right" />
       <SwipeChoice anchor="swipeQueueLeft" settingKey={SWIPE_KEYS.queue.endToStart} fallback={SWIPE_DEFAULTS.queue.endToStart} choices={SWIPE_QUEUE_ACTIONS} title={t("settings.gestures.queueLeft")} testId="setting-swipe-queue-left" />
+      {surface("stash", "gestureStash", "settings.gestures.stash", "settings.gestures.stashDesc")}
+      <SwipeChoice anchor="swipeStashRight" settingKey={SWIPE_KEYS.stash.startToEnd} fallback={SWIPE_DEFAULTS.stash.startToEnd} choices={SWIPE_STASH_ACTIONS} title={t("settings.gestures.stashRight")} testId="setting-swipe-stash-right" />
+      <SwipeChoice anchor="swipeStashLeft" settingKey={SWIPE_KEYS.stash.endToStart} fallback={SWIPE_DEFAULTS.stash.endToStart} choices={SWIPE_STASH_ACTIONS} title={t("settings.gestures.stashLeft")} testId="setting-swipe-stash-left" />
       {surface("cover", "gestureCover", "settings.gestures.cover", "settings.gestures.coverDesc")}
       {surface("page", "gesturePage", "settings.gestures.page", "settings.gestures.pageDesc")}
       <Row anchor="swipeDirection" title={t("settings.gestures.direction")} desc={t("settings.gestures.directionDesc")} local>

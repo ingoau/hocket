@@ -1,6 +1,6 @@
-// What a song row's swipe does: the core's synced `swipe.list.*` / `swipe.queue.*` settings (the
-// same as the phone's, `SWIPE_LIST_ACTIONS` / `SWIPE_QUEUE_ACTIONS` in the core's settings
-// registry) turned into the revealed action for one row, and running it through the action
+// What a song row's swipe does: the core's synced `swipe.list.*` / `swipe.queue.*` / `swipe.stash.*`
+// settings (the same as the phone's, `SWIPE_LIST_ACTIONS` / `SWIPE_QUEUE_ACTIONS` /
+// `SWIPE_STASH_ACTIONS` in the core's settings registry) turned into the revealed action for one row, and running it through the action
 // registry like the context menu does. Android's counterpart is ui/components/SwipeActions.kt.
 import type { ActionTarget, TrackRef } from "@core/api";
 import { t, type StringId } from "@shared/strings";
@@ -14,15 +14,18 @@ import type { Side } from "./swipe";
 export const SWIPE_KEYS = {
   list: { startToEnd: "swipe.list.startToEnd", endToStart: "swipe.list.endToStart" },
   queue: { startToEnd: "swipe.queue.startToEnd", endToStart: "swipe.queue.endToStart" },
+  stash: { startToEnd: "swipe.stash.startToEnd", endToStart: "swipe.stash.endToStart" },
 } as const;
 export const SWIPE_DEFAULTS = {
   list: { startToEnd: "playNext", endToStart: "playLater" },
   queue: { startToEnd: "removeFromQueue", endToStart: "removeFromQueue" },
+  stash: { startToEnd: "removeFromStash", endToStart: "removeFromStash" },
 } as const;
 
 /** The choices each list offers, in the core's order. */
 export const SWIPE_LIST_ACTIONS = ["none", "playNext", "addToQueue", "playLater", "love", "addToPlaylist", "download", "stash", "snooze", "unsnooze", "preview"] as const;
 export const SWIPE_QUEUE_ACTIONS = ["none", "removeFromQueue", "playNext", "love", "addToPlaylist", "download", "snooze", "unsnooze", "preview"] as const;
+export const SWIPE_STASH_ACTIONS = ["none", "removeFromStash", "playNext", "addToQueue", "playLater", "love", "addToPlaylist", "download", "snooze", "unsnooze", "preview"] as const;
 
 export type SwipeTone = "primary" | "secondary" | "tertiary" | "danger";
 
@@ -60,6 +63,8 @@ export function rowSwipeAction(id: string, f: RowFacts): RowSwipeAction | null {
   switch (id) {
     case "removeFromQueue":
       return act("removeFromQueue", "swipe.choice.removeFromQueue", "trash", "danger", true);
+    case "removeFromStash":
+      return act("removeFromStash", "swipe.choice.removeFromStash", "trash", "danger", true);
     case "playNext":
       return act("playNext", "swipe.choice.playNext", "playNext", "primary");
     case "addToQueue":

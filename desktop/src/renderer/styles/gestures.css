@@ -38,6 +38,14 @@
 .np .qrow.swiping { backdrop-filter: blur(24px); }
 .qrow-slot.leaving { overflow: hidden; }
 
+/* Stash rows: the reveal fills the row, and its content slides over it on the popover's surface. */
+.stash-row.swiping { overflow: hidden; }
+.stash-row > .swipe-reveal { inset: 0; }
+.stash-row.swiping > .stash-row-body { background-image: linear-gradient(var(--row-tint, transparent), var(--row-tint, transparent)); background-color: var(--swipe-surface); }
+.stash-row.swiping:hover { --row-tint: var(--bg-hover); }
+.stash-row.swiping.selected { --row-tint: var(--bg-active); }
+.stash-list:has(.swiping) { overflow-x: hidden; }
+
 /* The artwork: follows the fingers, then slides out the way it went while the next song comes in. */
 .cover-swipe { touch-action: pan-y; }
 .cover-swipe.armed { filter: brightness(1.06); }

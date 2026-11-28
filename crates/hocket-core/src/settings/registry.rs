@@ -120,6 +120,8 @@ pub mod keys {
     pub const SWIPE_QUEUE_END_TO_START: &str = "swipe.queue.endToStart";
     pub const SWIPE_LIST_START_TO_END: &str = "swipe.list.startToEnd";
     pub const SWIPE_LIST_END_TO_START: &str = "swipe.list.endToStart";
+    pub const SWIPE_STASH_START_TO_END: &str = "swipe.stash.startToEnd";
+    pub const SWIPE_STASH_END_TO_START: &str = "swipe.stash.endToStart";
     /// What swiping up on the phone's full player opens: [`SWIPE_PLAYER_UP_ACTIONS`].
     pub const SWIPE_PLAYER_UP: &str = "swipe.playerUp";
     pub const SHORTCUTS: &str = "shortcuts";
@@ -500,6 +502,22 @@ pub const SWIPE_LIST_ACTIONS: &[&str] = &[
     "preview",
 ];
 
+/// What a swipe on a stashed song can do: an action registry id, or `none`.
+/// `addToQueue` runs as `playLater` while the queue section is off.
+pub const SWIPE_STASH_ACTIONS: &[&str] = &[
+    "none",
+    "removeFromStash",
+    "playNext",
+    "addToQueue",
+    "playLater",
+    "love",
+    "addToPlaylist",
+    "download",
+    "snooze",
+    "unsnooze",
+    "preview",
+];
+
 /// What swiping up on the phone's full player (on its artwork) opens: the
 /// queue or the lyrics in its place, or the device picker ("Play on") or the
 /// song's menu as a sheet that follows the finger.
@@ -700,6 +718,18 @@ pub static REGISTRY: &[SettingDef] = &[
         Synced,
         SettingKind::Enum(SWIPE_LIST_ACTIONS),
         || json!("playLater"),
+    ),
+    def(
+        SWIPE_STASH_START_TO_END,
+        Synced,
+        SettingKind::Enum(SWIPE_STASH_ACTIONS),
+        || json!("removeFromStash"),
+    ),
+    def(
+        SWIPE_STASH_END_TO_START,
+        Synced,
+        SettingKind::Enum(SWIPE_STASH_ACTIONS),
+        || json!("removeFromStash"),
     ),
     def(
         SWIPE_PLAYER_UP,
