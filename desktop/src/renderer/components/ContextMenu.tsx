@@ -1,7 +1,7 @@
-// Native-feeling context menu generated from Query.Actions(surface = contextMenu), laid out per the
-// menu design (lib/menu-model): a header naming the item, the play actions as one icon-only strip,
-// an inline Rating row, Love / Download / Pin as checkboxes, Add to playlist as a submenu
-// (PlaylistSubmenu), then the rest with the destructive item last.
+// Native-feeling context menu generated from the core's item-menu layout (Query.Menu), laid out per
+// the menu design (lib/menu-model): a header naming the item, the play actions as one icon-only
+// strip, then the core's rows section by section: an inline Rating row, Love / Download / Pin as
+// checkboxes, Add to playlist as a submenu (PlaylistSubmenu), the destructive rows last.
 // Keyboard: the context-menu key or Shift+F10 opens it for the focused item (a synthetic
 // `contextmenu` event at the item, so every surface's existing onContextMenu handler serves both),
 // focus moves into the menu with the first item active, ↑↓ move between rows and ←→ along the strip
@@ -19,13 +19,13 @@ import { chordFromEvent, formatChord, parseChord } from "../store/shortcuts";
 import { useKeymap } from "../store/keyboard";
 import { DEFAULT_KEYMAP, canonicalActionId } from "@shared/keymap";
 import { t } from "@shared/strings";
-import { fetchActions } from "../store/queries";
+import { fetchMenu } from "../store/queries";
 import { useApp, type MenuItem } from "../store/app";
 import { executeAction, type ActionContext } from "../store/actions";
 import { Icon } from "./Icon";
 import { Artwork } from "./Artwork";
 import { PlaylistSubmenu } from "./PlaylistSubmenu";
-import { MOUSE_BACK } from "./MenuFlyout";
+import { MenuFlyout, MOUSE_BACK } from "./MenuFlyout";
 import { SnoozeSubmenu } from "./SnoozeSubmenu";
 import { ShareSubmenu } from "./ShareSubmenu";
 import { handOnFocus } from "../lib/focus";
@@ -33,7 +33,7 @@ import { usePresence } from "../lib/presence";
 import { fetchMenuFacts } from "../lib/menu-facts";
 import { toastUndoable } from "../lib/ui-toast";
 import { ratingText } from "../lib/a11y";
-import { buildMenu, loveToast, nextRating, rateToast, removeToast, starLabel, type MenuHeader, type MenuRow } from "../lib/menu-model";
+import { appItemsFor, buildMenu, layoutActions, loveToast, nextRating, rateToast, removeToast, starLabel, type MenuHeader, type MenuRow } from "../lib/menu-model";
 import { openGenius } from "../lib/share";
 import { bridge } from "../core/bridge";
 import { previewPosition, seekFraction } from "../lib/preview-seek";
@@ -55,9 +55,6 @@ const DRAG_SLOP = 8;
 /** How long the pointer can cross other rows on its way to an open submenu before it switches. */
 const SUB_SWITCH_MS = 220;
 
-/** Pin to Library and Unpin from Library: only the one that applies is shown (the other is disabled). */
-const LIBRARY_PIN_IDS = new Set(["pinToLibrary", "unpinFromLibrary"]);
-
 /** Shortcuts the menu's rows share with a keymap action: Delete removes from the list being shown. */
 const CHORD_OF: Record<string, string> = { removeFromPlaylist: "remove", removeFromQueue: "remove" };
 
@@ -70,12 +67,14 @@ export async function openContextMenu(e: MenuOpening, target: ActionTarget, cont
   const active = document.activeElement;
   returnFocus = active instanceof HTMLElement && active !== document.body ? active : null;
   const none = target.type === "none";
-  const [all, facts] = await Promise.all([none ? [] : fetchActions("contextMenu", target), none ? undefined : fetchMenuFacts(target, context)]);
-  const actions = all.filter((a) => !(LIBRARY_PIN_IDS.has(a.id) && !a.enabled));
-  if (!actions.length && !items?.length) return;
-  // Still held once the actions are in (Linux and macOS open on the press; Windows on the release).
+  // The screen's own rows (Start over, a pin's choices) count towards the phone's short list.
+  const extras = items?.filter((i) => !i.heading).length ?? 0;
+  const screen = context?.screen ?? "list";
+  const [layout, facts] = await Promise.all([none ? [] : fetchMenu(target, screen, appItemsFor(target), extras), none ? undefined : fetchMenuFacts(target, context)]);
+  if (!layout.length && !items?.length) return;
+  // Still held once the rows are in (Linux and macOS open on the press; Windows on the release).
   pressedAt = keyboard ? null : rightHeld;
-  useApp.getState().openContextMenu({ x: e.clientX, y: e.clientY, above: e.above, target, actions, items, context, keyboard, facts });
+  useApp.getState().openContextMenu({ x: e.clientX, y: e.clientY, above: e.above, target, layout, items, context, keyboard, facts });
 }
 
 /** Where a menu opens: at the pointer, or under a button (and above it when there's no room under it). */
@@ -193,7 +192,8 @@ export function ContextMenu() {
   useEffect(() => {
     if (!menu) setSub(null);
   }, [menu]);
-  const model = useMemo(() => (menu ? buildMenu(menu.actions, menu.items ?? [], menu.facts, { inPlaylist: !!menu.context?.playlistId }) : []), [menu]);
+  const model = useMemo(() => (menu ? buildMenu(menu.layout, menu.items ?? [], menu.facts) : []), [menu]);
+  const descriptors = useMemo(() => (menu ? layoutActions(menu.layout) : []), [menu]);
 
   useLayoutEffect(() => {
     if (!live || !ref.current) return;
@@ -344,7 +344,7 @@ export function ContextMenu() {
 
   const bound = (id: string): string | undefined => {
     const own = shortcuts.find((s) => canonicalActionId(s.actionId) === id);
-    const s = own ? (own.shortcut ?? undefined) : (menu.actions.find((a) => a.id === id)?.defaultShortcut ?? DEFAULT_KEYMAP.find((d) => d.actionId === id)?.shortcut);
+    const s = own ? (own.shortcut ?? undefined) : (descriptors.find((a) => a.id === id)?.defaultShortcut ?? DEFAULT_KEYMAP.find((d) => d.actionId === id)?.shortcut);
     const c = s ? parseChord(s) : undefined;
     return c ? formatChord(c, platform).replace(/\bDelete$/, "Del") : undefined;
   };
@@ -378,6 +378,8 @@ export function ContextMenu() {
         break;
       case "submenu":
         push({ label: r.label, enabled: r.enabled, submenu: r.id, run: () => undefined });
+        // Go to artist's chord opens the first artist, as it does outside the menu.
+        if (r.id === "goToArtist" && r.enabled) commands.set("goToArtist", () => perform("goToArtist"));
         line++;
         break;
       case "genius":
@@ -661,6 +663,19 @@ export function ContextMenu() {
         ) : null}
         {shownSub?.id === "snooze" && facts?.trackRefs?.length ? (
           <SnoozeSubmenu key={`snooze-${shownSub.n}`} tracks={facts.trackRefs} anchor={shownSub} motion={subMotion} exitProps={subPresence.exitProps} onBack={closeSub} onClose={finish} />
+        ) : null}
+        {shownSub?.id === "goToArtist" && facts?.artists?.length ? (
+          <MenuFlyout
+            key={`goToArtist-${shownSub.n}`}
+            rows={facts.artists.map((a) => ({ id: `artist-${a.id}`, label: a.name, icon: "artist", run: () => useApp.getState().navigate({ view: "artist", id: a.id }) }))}
+            label={t("action.goToArtist")}
+            testId="artist-submenu"
+            anchor={shownSub}
+            motion={subMotion}
+            exitProps={subPresence.exitProps}
+            onBack={closeSub}
+            onClose={finish}
+          />
         ) : null}
         {shownSub?.id === "share" && facts ? (
           <ShareSubmenu key={`share-${shownSub.n}`} facts={facts} target={menu.target} anchor={shownSub} motion={subMotion} exitProps={subPresence.exitProps} onBack={closeSub} onClose={finish} />

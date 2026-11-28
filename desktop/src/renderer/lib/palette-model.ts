@@ -1,7 +1,7 @@
 // The command palette's model, pure: the rows it lists (grouped Suggestions, Songs, Albums,
 // Artists, Playlists, Commands), the recent picks behind Suggestions, and the actions menu for the
 // selected row. The menu is built from the context menu's own layout (lib/menu-model buildMenu over
-// the registry's contextMenu descriptors), so Play next, Play later, Add to playlist, Love and the
+// the core's item-menu layout, Query.Menu), so Play next, Play later, Add to playlist, Love and the
 // rest are the same actions run the same way; only the shape differs (a flat list with a shortcut
 // on each row). The component (components/CommandPalette) fetches, draws and runs.
 import type { ActionDescriptor, ActionTarget, TrackRef } from "@core/api";
@@ -208,15 +208,10 @@ const OPEN = { album: "palette.open.album", artist: "palette.open.artist", playl
 
 const ICONS: Record<string, string> = { addToQueue: "queue", play: "play", playShuffled: "shuffle", playNext: "playNext", playLater: "playLater", addToPlaylist: "playlistAdd", love: "heart", unlove: "heartOff", download: "download", unpin: "downloadOff", "ui.info": "info", goToAlbum: "album", goToArtist: "artist" };
 
-/** Registry descriptors the palette leaves out, as the context menu does (the inapplicable library pin). */
-export function menuActions(registry: readonly ActionDescriptor[]): ActionDescriptor[] {
-  return registry.filter((a) => !((a.id === "pinToLibrary" || a.id === "unpinFromLibrary") && !a.enabled));
-}
-
 /**
  * The actions menu for a row, in groups (drawn with separators between). For a library row, from
- * the context menu's rows: Open (albums, artists, playlists) and the play strip first, then Add to
- * playlist and the toggles, then the rest in the menu's order, the destructive last. The rating row
+ * the context menu's rows: Open (albums, artists, playlists) and the play strip first, then the
+ * rest in the menu's order, a group per section of it, the destructive last. The rating row
  * is left out (its digits are typing here), and so are the menu's nested Share and Snooze menus and
  * Open in Genius. A command has one action, Run.
  */
@@ -253,6 +248,8 @@ export function paletteActions(entry: PaletteEntry, rows: readonly MenuRow[], re
         // Add to playlist opens the playlist picker; Share and Snooze are the context menu's own
         // nested menus, so they stay there.
         if (r.id === "addToPlaylist") push(r.id, t("palette.addToPlaylist"), r.enabled);
+        // Several artists: the menu lets you pick; here it goes to the first, as the shortcut does.
+        if (r.id === "goToArtist") push(r.id, r.label, r.enabled);
         break;
       case "action":
         push(r.action.id, LABELS[r.action.id] ? t(LABELS[r.action.id] as Parameters<typeof t>[0]) : r.label, r.action.enabled, r.destructive);

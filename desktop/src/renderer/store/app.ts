@@ -3,7 +3,7 @@
 // `dispatch`/`query` which go straight to the bridge.
 import { useMemo } from "react";
 import { create } from "zustand";
-import type { ActionDescriptor, ActionTarget, Command, Event, Query, Setting, TrackRef } from "@core/api";
+import type { ActionTarget, Command, Event, MenuItem as LayoutItem, MenuScreen, Query, Setting, TrackRef } from "@core/api";
 import type { AppMeta, AppPrefs, CredentialStorage, WindowState } from "@shared/bridge-types";
 import { expectResult, snapshotOf, type ResultData } from "@shared/core-handle";
 import { bridge } from "../core/bridge";
@@ -65,11 +65,12 @@ export interface ContextMenuState {
   /** Opened from a button: where the menu's bottom goes when there is no room under it (the button's top). */
   above?: number;
   target: ActionTarget;
-  actions: ActionDescriptor[];
-  /** Renderer-run items shown above the registry's actions (or alone). */
+  /** The core's rows for the target (Query.Menu), in display order. */
+  layout: LayoutItem[];
+  /** Renderer-run items shown above the core's rows (or alone). */
   items?: MenuItem[];
-  /** Extra renderer-only context (e.g. playlist id for "remove from playlist"). */
-  context?: { playlistId?: string; indices?: number[]; savedQueueId?: string };
+  /** Extra renderer-only context (e.g. playlist id for "remove from playlist", where it was opened). */
+  context?: { playlistId?: string; indices?: number[]; savedQueueId?: string; screen?: MenuScreen };
   /** Opened with the context-menu key / Shift+F10: the first item starts active. */
   keyboard?: boolean;
   /** The header, the checkboxes' and stars' state and the songs to add (lib/menu-facts). */

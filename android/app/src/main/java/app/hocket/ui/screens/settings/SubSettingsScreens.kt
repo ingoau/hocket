@@ -376,7 +376,7 @@ fun ConnectSettingsScreen(nav: NavHostController) {
 }
 
 /**
- * Customise: one row per editor (bottom bar, context menu, notification buttons, swipe actions),
+ * Customise: one row per editor (bottom bar, item menus, notification buttons, swipe actions),
  * each summing up what is set and opening its own page (SettingsPages.kt); then what swiping up on
  * the player opens, as cards.
  */
@@ -386,8 +386,10 @@ fun CustomiseSettingsScreen(nav: NavHostController) {
         fun open(page: String) = nav.navigate(app.hocket.ui.nav.Route.SettingsPage(page))
         val bar = app.hocket.ui.nav.navItems()
         NavRow(stringResource(R.string.settings_bottom_bar), bar.map { it.label() }.joinToString(", "), tag = "customise.bottomBar") { open(PAGE_BOTTOM_BAR) }
-        val menu = contextMenuIds()
-        NavRow(stringResource(R.string.settings_context_menu), stringResource(R.string.settings_order_summary, menu.size, ActionIds.CONTEXT_MENU.size), scope = setting(SettingKeys.ACTIONS_ORDER_CONTEXT_MENU).scope, tag = "customise.contextMenuSection") { open(PAGE_CONTEXT_MENU) }
+        val menu = setting(SettingKeys.MENU_OVERRIDES)
+        val changed = remember(menu.raw) { menuOverrideCount(menu.raw) }
+        NavRow(stringResource(R.string.settings_item_menus), if (changed == 0) stringResource(R.string.settings_item_menus_default) else pluralStringResource(R.plurals.settings_item_menus_changed, changed, changed),
+            scope = menu.scope, tag = "customise.itemMenuSection") { open(PAGE_ITEM_MENU) }
         val media = mediaSessionIds().filter { it in ActionIds.MEDIA_SESSION_CHOICES }
         NavRow(stringResource(R.string.settings_media_buttons), media.map { actionLabel(it) }.joinToString(", ").ifEmpty { null }, scope = setting(SettingKeys.ACTIONS_ORDER_MEDIA_SESSION).scope, tag = "customise.mediaSessionSection") { open(PAGE_MEDIA_BUTTONS) }
         NavRow(stringResource(R.string.settings_swipe_actions), scope = setting(SettingKeys.SWIPE_LIST_START_TO_END).scope, tag = "customise.swipe") { open(PAGE_SWIPE) }
@@ -409,9 +411,9 @@ fun CustomiseSettingsScreen(nav: NavHostController) {
     }
 }
 
-/** The context menu's actions in order; the registry's default while none are stored. */
-@Composable
-internal fun contextMenuIds(): List<String> = storedIds(setting(SettingKeys.ACTIONS_ORDER_CONTEXT_MENU)) ?: ActionIds.CONTEXT_MENU
+/** How many item menu rows `menu.overrides` (a JSON object) moves from their default place. */
+internal fun menuOverrideCount(raw: String?): Int =
+    runCatching { (app.hocket.core.HocketJson.json.parseToJsonElement(raw ?: "{}") as? kotlinx.serialization.json.JsonObject)?.size ?: 0 }.getOrDefault(0)
 
 /** The notification's buttons in order; the default set while none are stored. */
 @Composable

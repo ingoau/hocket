@@ -319,6 +319,35 @@ impl Actor {
                 };
                 QueryResult::Actions(list)
             }
+            Query::Menu {
+                target,
+                screen,
+                app_items,
+                extras,
+            } => {
+                let state = self.state_view();
+                let overrides = crate::actions::menu::parse_overrides(
+                    &self.settings.get(crate::settings::keys::MENU_OVERRIDES),
+                );
+                let req = crate::actions::menu::MenuRequest {
+                    target: &target,
+                    screen,
+                    app_items: &app_items,
+                    extras,
+                    overrides: &overrides,
+                };
+                QueryResult::Menu(crate::actions::menu::menu_layout(
+                    &self.registry,
+                    &req,
+                    &state,
+                ))
+            }
+            Query::MenuItems => {
+                let overrides = crate::actions::menu::parse_overrides(
+                    &self.settings.get(crate::settings::keys::MENU_OVERRIDES),
+                );
+                QueryResult::MenuItems(crate::actions::menu::items_info(&overrides))
+            }
             Query::Shortcuts => QueryResult::Shortcuts(self.registry.shortcuts()),
             Query::Artwork { id, size, display } => {
                 self.artwork_query(id, size, display, reply);

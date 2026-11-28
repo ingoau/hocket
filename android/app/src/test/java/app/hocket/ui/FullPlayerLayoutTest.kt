@@ -751,6 +751,9 @@ class FullPlayerLayoutTest {
             assertFalse("no timing row under the lyrics", exists("lyrics.offset.later"))
             tap("player.more")
             repeat(60) { compose.mainClock.advanceTimeByFrame() }
+            // The core folds it under More by default.
+            tap("songMenu.more")
+            repeat(60) { compose.mainClock.advanceTimeByFrame() }
             assertTrue(exists("player.lyricsTiming"))
             tap("player.lyricsTiming")
             repeat(90) { compose.mainClock.advanceTimeByFrame() }

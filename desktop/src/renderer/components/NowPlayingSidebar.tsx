@@ -225,7 +225,7 @@ function Overview() {
           <div className="side-artist"><ArtistChooser track={track} className="artist-chooser" onNavigate={navigate} testId="sidebar-artist" /></div>
         </div>
         <button type="button" className="side-icon-btn" aria-label={t("action.addToPlaylist")} title={t("action.addToPlaylist")} onClick={(e) => void executeAction("addToPlaylist", undefined, { anchor: e.currentTarget })} aria-haspopup="menu" data-testid="sidebar-add"><Icon name="playlistAdd" size={22} /></button>
-        <button type="button" className="side-icon-btn" aria-label={t("misc.more")} title={t("misc.more")} aria-haspopup="menu" onClick={(e) => openMenuFromButton(e, { type: "queueItems", data: { keys: [now.item.key] } })} data-testid="sidebar-more"><Icon name="more" size={22} /></button>
+        <button type="button" className="side-icon-btn" aria-label={t("misc.more")} title={t("misc.more")} aria-haspopup="menu" onClick={(e) => openMenuFromButton(e, { type: "queueItems", data: { keys: [now.item.key] } }, { screen: "nowPlaying" })} data-testid="sidebar-more"><Icon name="more" size={22} /></button>
       </div>
       <LyricsCard trackId={track.id} durationMs={track.durationMs} />
       <UpNextCard />

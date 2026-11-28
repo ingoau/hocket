@@ -22,6 +22,9 @@ import app.hocket.core.Commands
 import app.hocket.core.ref
 import app.hocket.core.api.ActionDescriptor
 import app.hocket.core.api.ActionTarget
+import app.hocket.core.api.MenuScreen
+import app.hocket.ui.player.trackArtists
+import kotlinx.coroutines.flow.collectLatest
 import app.hocket.core.api.OfflineState
 import app.hocket.core.api.Pin
 import app.hocket.core.api.TrackSummary
@@ -31,10 +34,12 @@ import app.hocket.ui.LocalDetailNavigator
 
 /**
  * A row a context adds to the song menu (the player's sleep timer, a playlist's remove). Extras
- * always sit in one place: the short list's last rows, or (destructive ones) the menu's last.
- * [replaces] names a registry action the extra stands in for (the playlist's remove, which knows
- * the entry's position), so the menu does not list both. [page] opens a sub-page of the menu in
- * place (the player's sleep timer); the [onClick] then serves no purpose.
+ * sit in one place: the short list's first rows (they count towards it: `Query.Menu`'s `extras`),
+ * or (destructive ones) the menu's last, always in view. [replaces] names a core row (or action)
+ * the extra stands in for (the playlist's remove, which knows the entry's position), so the menu
+ * does not list both. [item] makes it one of the core's app-handled rows instead (the player's
+ * Lyrics timing, `lyricsTiming`): the core places, folds or hides it like its own. [page] opens a
+ * sub-page of the menu in place (the player's sleep timer); the [onClick] then serves no purpose.
  */
 @Immutable
 class SongMenuExtra(
@@ -48,6 +53,8 @@ class SongMenuExtra(
     val replaces: String? = null,
     /** A menu sub-page to open in place (the player's sleep timer); [onClick] is ignored then. */
     val page: MenuPage? = null,
+    /** The core's app-handled menu item this row is ([app.hocket.core.MenuItemIds]). */
+    val item: String? = null,
 )
 
 /**
@@ -55,7 +62,7 @@ class SongMenuExtra(
  * context's extras, and the playlist it was opened from (names the registry's "Remove from …").
  */
 @Immutable
-data class SongMenuRequest(val track: TrackSummary, val target: ActionTarget, val extras: List<SongMenuExtra> = emptyList(), val context: String? = null, val pull: SheetPull? = null)
+data class SongMenuRequest(val track: TrackSummary, val target: ActionTarget, val extras: List<SongMenuExtra> = emptyList(), val context: String? = null, val pull: SheetPull? = null, val screen: MenuScreen = MenuScreen.List)
 
 /**
  * Opens THE song menu. There is one per screen tree, hosted at the app level ([SongMenuHost]) and
@@ -68,15 +75,18 @@ class SongMenuController {
     /** Asked for, actions not loaded yet. */
     internal var pending by mutableStateOf<SongMenuRequest?>(null)
     /** On screen, with the registry's actions it was opened with. */
-    internal var shown by mutableStateOf<Pair<SongMenuRequest, List<ActionDescriptor>>?>(null)
+    internal var shown by mutableStateOf<Pair<SongMenuRequest, CoreMenu>?>(null)
 
-    /** Opens the menu for [track]; with [pull], brought up by a drag that it follows (see [SheetPull]). */
-    fun open(track: TrackSummary, target: ActionTarget = Commands.tracks(listOf(track.ref)), extras: List<SongMenuExtra> = emptyList(), context: String? = null, pull: SheetPull? = null): Boolean {
+    /**
+     * Opens the menu for [track]; with [pull], brought up by a drag that it follows (see [SheetPull]).
+     * [screen] is where it was opened (the player, the song's album or artist page).
+     */
+    fun open(track: TrackSummary, target: ActionTarget = Commands.tracks(listOf(track.ref)), extras: List<SongMenuExtra> = emptyList(), context: String? = null, pull: SheetPull? = null, screen: MenuScreen = MenuScreen.List): Boolean {
         if (shown != null) return false
         pending?.pull?.dismiss()
         // A pull that drops back closes its own menu, never one opened after it.
         pull?.onClosed = { if (pending?.pull === pull || shown?.first?.pull === pull) close() }
-        pending = SongMenuRequest(track, target, extras, context, pull)
+        pending = SongMenuRequest(track, target, extras, context, pull, screen)
         return true
     }
 
@@ -105,7 +115,7 @@ fun rememberSongMenu(): SongMenuController {
 }
 
 /**
- * Hosts [controller]'s sheet ([MenuSheet] for one song). The registry's actions are fetched before
+ * Hosts [controller]'s sheet ([MenuSheet] for one song). The core's menu is fetched before
  * the sheet is shown, so it opens at its final height instead of growing (and re-anchoring) under
  * the finger. [navigator] performs "Go to album / artist" (the shell's collapses the player as it
  * navigates). Song info opens its own sheet here, after the menu has gone.
@@ -117,14 +127,22 @@ fun SongMenuHost(controller: SongMenuController, navigator: DetailNavigator?) {
     val pins by client.pins.collectAsStateWithLifecycleCompat()
     LaunchedEffect(pending) {
         val request = pending ?: return@LaunchedEffect
-        val actions = client.actions("contextMenu", request.target)
+        val menu = client.itemMenu(request.target, MenuKind.Song, screen = request.screen, hasInfo = true, extras = request.extras)
         if (controller.pending == request) {
             controller.pending = null
-            controller.shown = request to actions
+            controller.shown = request to menu
+        }
+    }
+    // The user's menu customisation (or the Queue section) changed: the open menu follows.
+    LaunchedEffect(Unit) {
+        client.actionsChanged.collectLatest {
+            val (request, _) = controller.shown ?: return@collectLatest
+            val menu = client.itemMenu(request.target, MenuKind.Song, screen = request.screen, hasInfo = true, extras = request.extras)
+            if (controller.shown?.first == request) controller.shown = request to menu
         }
     }
     var infoFor by remember { mutableStateOf<TrackSummary?>(null) }
-    controller.shown?.let { (request, actions) ->
+    controller.shown?.let { (request, menu) ->
         val track = request.track
         val dot = stringResource(R.string.dot_separator)
         val unknown = stringResource(R.string.unknown_artist)
@@ -132,11 +150,11 @@ fun SongMenuHost(controller: SongMenuController, navigator: DetailNavigator?) {
         // Keyed on the request: a new opening starts from a fresh sheet state, never a stale one.
         androidx.compose.runtime.key(request) {
             MenuSheet(
-                subject, request.target, actions,
+                subject, request.target, menu,
                 onDismiss = { controller.close() },
                 extras = request.extras,
                 onGoToAlbum = track.albumId?.let { id -> navigator?.let { { it.openAlbum(id) } } },
-                onGoToArtist = track.artistId?.let { id -> navigator?.let { { it.openArtist(id) } } },
+                onGoToArtist = navigator?.let { n -> { id -> n.openArtist(id) } },
                 onInfo = { infoFor = track },
                 pull = request.pull,
             )
@@ -166,5 +184,6 @@ internal fun songSubject(track: TrackSummary, context: String?, pins: List<Pin>,
     trackSource = track.serverId,
     albumId = track.albumId, album = track.album,
     artistId = track.artistId, artist = track.artist,
+    artists = track.trackArtists(),
     context = context,
 )

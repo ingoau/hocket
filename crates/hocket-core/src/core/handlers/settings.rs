@@ -49,8 +49,9 @@ impl Actor {
     /// What a changed key means for the running subsystems.
     pub(crate) fn apply_setting_side_effects(&mut self, key: &str) {
         match key {
-            keys::QUEUE_SECTION => {
-                // "Add to queue" comes and goes with it.
+            keys::QUEUE_SECTION | keys::MENU_OVERRIDES => {
+                // "Add to queue" comes and goes with the Queue section; the
+                // overrides move or hide menu rows.
                 self.emit(Event::ActionsChanged {
                     surface: "contextMenu".into(),
                 });
@@ -478,6 +479,14 @@ impl Actor {
                 self.emit(Event::ShortcutsChanged { shortcuts });
             }
             Err(e) => self.toast(format!("Couldn't bind: {e}"), None),
+        }
+    }
+
+    pub(crate) fn set_menu_item(&mut self, id: &str, tier: crate::api::MenuTier) {
+        let current = self.settings.get(keys::MENU_OVERRIDES);
+        match crate::actions::menu::with_override(&current, id, tier) {
+            Ok(next) => self.set_setting_value(keys::MENU_OVERRIDES, next),
+            Err(e) => self.toast(format!("Couldn't change the menu: {e}"), None),
         }
     }
 

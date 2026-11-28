@@ -101,7 +101,9 @@ pub mod keys {
     /// The phone's navigation bar: a compact pill floating over the content (on), or the standard
     /// full-width bar along the bottom edge (off). Local: a phone's own look.
     pub const DISPLAY_FLOATING_NAV_BAR: &str = "display.floatingNavBar";
-    pub const ACTIONS_ORDER_CONTEXT_MENU: &str = "actions.order.contextMenu";
+    /// Item menus: `{ id: "shown" | "more" | "hidden" }` for rows moved from their default
+    /// ([`crate::actions::menu`]). Synced: one menu on every device.
+    pub const MENU_OVERRIDES: &str = "menu.overrides";
     pub const ACTIONS_ORDER_SIDEBAR: &str = "actions.order.sidebar";
     pub const ACTIONS_ORDER_MEDIA_SESSION: &str = "actions.order.mediaSession";
     /// The phone's bottom bar: ordered place ids (the app's own, not action ids), [] = its default.
@@ -653,10 +655,10 @@ pub static REGISTRY: &[SettingDef] = &[
         json!(true)
     }),
     json_def(
-        ACTIONS_ORDER_CONTEXT_MENU,
+        MENU_OVERRIDES,
         Synced,
-        || json!([]),
-        string_list_valid,
+        || json!({}),
+        crate::actions::menu::overrides_valid,
     ),
     json_def(
         ACTIONS_ORDER_SIDEBAR,

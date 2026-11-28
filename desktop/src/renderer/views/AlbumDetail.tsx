@@ -12,7 +12,7 @@ import { openContextMenu, openItemsMenu, openMenuFromButton } from "../component
 import { fmtDate, fmtDuration, fmtTime } from "../lib/format";
 import { Tile } from "../components/Tile";
 import { Shelf } from "../components/Shelf";
-import { executeAction } from "../store/actions";
+import { executeAction, type ActionContext } from "../store/actions";
 import { releaseKind } from "../lib/release-kind";
 import { offlineLabel } from "../components/OfflineBadge";
 import { useAlbumDwellPrime, usePlayIntent } from "../lib/use-prime";
@@ -24,6 +24,9 @@ function resumeFraction(list: Track[], resume: AlbumResumePoint): number {
   const duration = list.find((t) => t.id === resume.trackId)?.durationMs || resume.durationMs;
   return duration > 0 ? Math.min(1, resume.positionMs / duration) : 0;
 }
+
+/** The album page's song menus: no Go to album (it is this page). */
+const ALBUM_PAGE: ActionContext = { screen: "albumPage" };
 
 export function AlbumDetail({ id }: { id: string }) {
   const serverId = useApp((s) => s.accounts[0]?.id ?? "");
@@ -70,14 +73,14 @@ export function AlbumDetail({ id }: { id: string }) {
   useScrollMemory(page, "album", !!a && !loadingTracks && (!a.artistId || settled(more)));
   return (
     <div ref={page} className="view detail-page" data-testid="view-album">
-      <DetailHead coverArt={a?.coverArt} loading={!a && !album.error} title={a?.name ?? ""} barAction={<button type="button" className="btn primary detail-bar-play" aria-label={resume ? t("album.resume") : t("album.play")} title={resume ? t("album.resume") : t("album.play")} onClick={playOrResume} data-testid="album-bar-play"><Icon name={resume ? "resume" : "play"} size={22} filled /></button>} icon="album" onContextMenu={(e) => a && void openContextMenu(e, { type: "albums", data: { ids: [a.id] } })} testId="album-head" actions={
+      <DetailHead coverArt={a?.coverArt} loading={!a && !album.error} title={a?.name ?? ""} barAction={<button type="button" className="btn primary detail-bar-play" aria-label={resume ? t("album.resume") : t("album.play")} title={resume ? t("album.resume") : t("album.play")} onClick={playOrResume} data-testid="album-bar-play"><Icon name={resume ? "resume" : "play"} size={22} filled /></button>} icon="album" onContextMenu={(e) => a && void openContextMenu(e, { type: "albums", data: { ids: [a.id] } }, { screen: "albumPage" })} testId="album-head" actions={
         <>
           <button type="button" className="btn primary fab album-play" aria-label={resume ? t("album.resumeMenu") : t("album.play")} onClick={playOrResume} onContextMenu={resume ? (e) => { e.preventDefault(); e.stopPropagation(); openItemsMenu(e, [{ id: "startOver", label: t("album.startOver"), icon: "refresh", enabled: true, run: startOver }]); } : undefined} {...primer.bind(resume ? undefined : primeKey(list[0]))} data-testid="album-play"><Icon name={resume ? "resume" : "play"} size={24} filled /> {resume ? t("album.resume") : t("album.play")}</button>
           <button type="button" className="btn icon" aria-label={t("album.shuffle")} title={t("album.shuffle")} onClick={() => play(undefined, true)} data-testid="album-shuffle"><Icon name="shuffle" size={24} /></button>
           {/* Every action is there from the start (inert until the album is in), so the row never reflows as it loads. */}
           <Heart size={24} on={!!a?.loved} onToggle={() => a && bridge().dispatch({ type: "setLoved", data: { targets: [{ type: "album", data: { id: a.id } }], loved: !a.loved } })} />
           <button type="button" className={`btn icon ${kept ? "on" : ""}`} aria-pressed={kept} aria-label={kept ? t("album.downloaded") : t("album.download")} title={kept ? t("album.downloaded") : t("album.download")} onClick={() => a && void executeAction(kept ? "unpin" : "download", { type: "albums", data: { ids: [a.id] } })} data-testid="album-download"><Icon name="download" size={24} filled={kept} /></button>
-          <button type="button" className="btn icon" aria-label={t("misc.more")} aria-haspopup="menu" title={t("misc.more")} onClick={(e) => a && openMenuFromButton(e, { type: "albums", data: { ids: [a.id] } }, undefined, resume ? [{ id: "startOver", label: t("album.startOver"), icon: "refresh", enabled: true, run: startOver }] : undefined)} data-testid="album-more"><Icon name="more" /></button>
+          <button type="button" className="btn icon" aria-label={t("misc.more")} aria-haspopup="menu" title={t("misc.more")} onClick={(e) => a && openMenuFromButton(e, { type: "albums", data: { ids: [a.id] } }, { screen: "albumPage" }, resume ? [{ id: "startOver", label: t("album.startOver"), icon: "refresh", enabled: true, run: startOver }] : undefined)} data-testid="album-more"><Icon name="more" /></button>
           <span className="spacer" />
           <div className="detail-rating" style={a ? undefined : { visibility: "hidden" }}>
             <span className="detail-rating-label" aria-hidden="true">{t("album.yourRating")}</span>
@@ -98,7 +101,7 @@ export function AlbumDetail({ id }: { id: string }) {
             <h2 id="album-tracks-title">{t("album.tracksTitle")}</h2>
             <span className="muted">{t("album.tracks", { count: list.length, duration: fmtTime(list.reduce((n, x) => n + (x.durationMs ?? 0), 0)) })}</span>
           </div>
-          <TrackTable pageScroll discs loading={loadingTracks} tracks={list} total={loadingTracks ? (a?.songCount ?? 0) : list.length} columns={columns} omitArtist={allArtists ? undefined : (a?.artist ?? "")} scope={`album:${id}`} label={a?.name} onPlay={(i) => play(i)} playingTrackId={playing} resumeTrackId={resume && playing !== resume.trackId ? resume.trackId : undefined} resumeFraction={resume ? resumeFraction(list, resume) : undefined} emptyMessage={t("songs.empty")} testId="album-tracks" primer={primer} />
+          <TrackTable context={ALBUM_PAGE} pageScroll discs loading={loadingTracks} tracks={list} total={loadingTracks ? (a?.songCount ?? 0) : list.length} columns={columns} omitArtist={allArtists ? undefined : (a?.artist ?? "")} scope={`album:${id}`} label={a?.name} onPlay={(i) => play(i)} playingTrackId={playing} resumeTrackId={resume && playing !== resume.trackId ? resume.trackId : undefined} resumeFraction={resume ? resumeFraction(list, resume) : undefined} emptyMessage={t("songs.empty")} testId="album-tracks" primer={primer} />
           {footnote ? <div className="detail-footnote">{footnote}</div> : null}
         </section>
         {others.length && a ? (

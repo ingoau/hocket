@@ -66,9 +66,11 @@ export function ArtistDetail({ id }: { id: string }) {
     ...(featuredOn.length ? [{ kind: "featured" as const, title: t("artist.featuredOn"), count: releaseCounts([{ kind: "album", albums: featuredOn }]), albums: featuredOn }] : []),
   ];
   const about = a?.biography || info.data?.text;
+  // Go to artist stays on another artist's album or song (Featured on), and on a song with a guest.
+  const songScreen = (tr: { artistId?: string; artists?: unknown[] }) => (tr.artistId === id && (tr.artists?.length ?? 0) <= 1 ? "artistPage" : "list");
   // Featured on names whose album it is; their own shelves need not.
   const tile = (al: Album) => (
-    <Tile key={al.id} title={al.name} subtitle={al.artistId !== id && al.artist ? [al.artist, al.year].filter(Boolean).join(" · ") : `${al.year ?? ""}${al.year ? " · " : ""}${t("misc.tracks", { count: al.songCount })}`} coverArt={al.coverArt} onOpen={() => navigate({ view: "album", id: al.id })} onContextMenu={(e) => void openContextMenu(e, { type: "albums", data: { ids: [al.id] } })} dragTarget={{ type: "albums", data: { ids: [al.id] } }} testId="artist-album" />
+    <Tile key={al.id} title={al.name} subtitle={al.artistId !== id && al.artist ? [al.artist, al.year].filter(Boolean).join(" · ") : `${al.year ?? ""}${al.year ? " · " : ""}${t("misc.tracks", { count: al.songCount })}`} coverArt={al.coverArt} onOpen={() => navigate({ view: "album", id: al.id })} onContextMenu={(e) => void openContextMenu(e, { type: "albums", data: { ids: [al.id] } }, { screen: al.artistId === id ? "artistPage" : "list" })} dragTarget={{ type: "albums", data: { ids: [al.id] } }} testId="artist-album" />
   );
   const open = shelves.find((g) => g.kind === grid);
   // Back returns to where the page was left, once everything that sets its height is in.
@@ -77,12 +79,12 @@ export function ArtistDetail({ id }: { id: string }) {
   useScrollMemory(page, "artist", [artist, albums, featured, top, info].every(settled));
   return (
     <div ref={page} className="view detail-page" data-testid="view-artist">
-      <DetailHead coverArt={a?.coverArt} loading={!a && !artist.error} title={a?.name ?? ""} barAction={<button type="button" className="btn primary detail-bar-play" aria-label={t("album.play")} title={t("album.play")} onClick={() => play(false)} data-testid="artist-bar-play"><Icon name="play" size={22} filled /></button>} round icon="artist" onContextMenu={(e) => a && void openContextMenu(e, { type: "artists", data: { ids: [a.id] } })} actions={
+      <DetailHead coverArt={a?.coverArt} loading={!a && !artist.error} title={a?.name ?? ""} barAction={<button type="button" className="btn primary detail-bar-play" aria-label={t("album.play")} title={t("album.play")} onClick={() => play(false)} data-testid="artist-bar-play"><Icon name="play" size={22} filled /></button>} round icon="artist" onContextMenu={(e) => a && void openContextMenu(e, { type: "artists", data: { ids: [a.id] } }, { screen: "artistPage" })} actions={
         <>
           <button type="button" className="btn primary fab" onClick={() => play(false)} data-testid="artist-play"><Icon name="play" size={24} filled /> {t("album.play")}</button>
           <button type="button" className="btn icon" aria-label={t("album.shuffle")} title={t("album.shuffle")} onClick={() => play(true)} data-testid="artist-shuffle"><Icon name="shuffle" size={24} /></button>
           <Heart size={24} on={!!a?.loved} onToggle={() => a && bridge().dispatch({ type: "setArtistLoved", data: { artist_id: a.id, loved: !a.loved } })} />
-          <button type="button" className="btn icon" aria-haspopup="menu" aria-label={t("misc.more")} title={t("misc.more")} onClick={(e) => a && openMenuFromButton(e, { type: "artists", data: { ids: [a.id] } })} data-testid="artist-more"><Icon name="more" size={24} /></button>
+          <button type="button" className="btn icon" aria-haspopup="menu" aria-label={t("misc.more")} title={t("misc.more")} onClick={(e) => a && openMenuFromButton(e, { type: "artists", data: { ids: [a.id] } }, { screen: "artistPage" })} data-testid="artist-more"><Icon name="more" size={24} /></button>
         </>
       }>
         <h1>{a?.name ?? ""}</h1>
@@ -118,7 +120,7 @@ export function ArtistDetail({ id }: { id: string }) {
                 ) : (
                   <ol className="plain-list top-songs" aria-labelledby="artist-top-title" data-testid="artist-top">
                     {topList.map((tr, i) => (
-                      <li key={tr.id} className={`top-song ${tr.id === playing ? "playing" : ""}`} onContextMenu={(e) => void openContextMenu(e, { type: "tracks", data: { tracks: [refOf(tr)] } })}>
+                      <li key={tr.id} className={`top-song ${tr.id === playing ? "playing" : ""}`} onContextMenu={(e) => void openContextMenu(e, { type: "tracks", data: { tracks: [refOf(tr)] } }, { screen: songScreen(tr) })}>
                         <button type="button" className="top-song-main" onClick={() => playTop(i)} aria-label={tr.id === playing ? `${t("artist.playTop", { title: tr.title, n: i + 1 })}, ${t("a11y.playingTrack")}` : t("artist.playTop", { title: tr.title, n: i + 1 })} aria-current={tr.id === playing || undefined} data-testid="artist-top-row">
                           <span className="top-song-art"><Artwork id={tr.coverArt} size={96} className="art" /><span className="top-song-n" aria-hidden="true">{tr.id === playing ? <Icon name="equalizer" size={18} /> : i + 1}</span></span>
                           <span className="grow" style={{ minWidth: 0 }}>

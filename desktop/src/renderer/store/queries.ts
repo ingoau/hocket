@@ -1,6 +1,6 @@
 // Query hooks: fetch through the bridge, refetch on the LibraryChanged events that touch them.
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ActionDescriptor, ActionTarget, Query, QueryResult } from "@core/api";
+import type { ActionDescriptor, ActionTarget, MenuItem as LayoutItem, MenuScreen, Query, QueryResult } from "@core/api";
 import { expectResult, type ResultData } from "@shared/core-handle";
 import { bridge } from "../core/bridge";
 import { useApp } from "./app";
@@ -104,4 +104,9 @@ export function useActions(surface: string, target: ActionTarget | null, extraDe
 
 export async function fetchActions(surface: string, target: ActionTarget): Promise<ActionDescriptor[]> {
   return expectResult(await bridge().query({ type: "actions", data: { surface, target } }), "actions");
+}
+
+/** An item menu's rows for a target, laid out by the core (Query.Menu): every row in display order. */
+export async function fetchMenu(target: ActionTarget, screen: MenuScreen, appItems: string[], extras: number): Promise<LayoutItem[]> {
+  return expectResult(await bridge().query({ type: "menu", data: { target, screen, app_items: appItems, extras } }), "menu").items;
 }

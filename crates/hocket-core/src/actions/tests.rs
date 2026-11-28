@@ -261,18 +261,10 @@ fn version_one_orders_gain_the_library() {
             "navigatePlaylists"
         ]
     );
+    // A saved context-menu order is dropped: item menus are laid out by `menu`.
     assert_eq!(
         r.order(Surface::ContextMenu),
-        vec![
-            "playNext",
-            "goToArtist",
-            "pinToLibrary",
-            "unpinFromLibrary",
-            "addToPlaylist",
-            "stash",
-            "snooze",
-            "unsnooze"
-        ]
+        r.default_order(Surface::ContextMenu)
     );
     // Written back as the current version: removing the Library again sticks.
     r.set_order(
@@ -412,18 +404,18 @@ fn surfaces_filter_and_order() {
     );
     assert!(r.all_for(&ActionTarget::None, &s).len() >= 40);
 
-    // Choose-and-order.
+    // Choose-and-order: not for item menus (`menu.overrides` customises them).
     r.set_order(
         Surface::ContextMenu,
         vec!["playLater".into(), "play".into()],
     );
-    let menu = r.actions_for(Surface::ContextMenu, &tracks(&["a"]), &s);
-    assert_eq!(
-        menu.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(),
-        vec!["playLater", "play"]
-    );
+    assert!(r.customisation().orders.is_empty());
+    assert!(r.set_order_str("contextMenu", vec![]).is_err());
     assert!(r.set_order_str("bogus", vec![]).is_err());
-    r.set_order_str("contextMenu", r.default_order(Surface::ContextMenu))
+    r.set_order_str("sidebar", vec!["navigateAlbums".into()])
+        .unwrap();
+    assert_eq!(r.order(Surface::Sidebar), vec!["navigateAlbums"]);
+    r.set_order_str("sidebar", r.default_order(Surface::Sidebar))
         .unwrap();
     assert!(r.customisation().orders.is_empty());
     assert!(r.actions_for_str("nope", &ActionTarget::None, &s).is_err());
@@ -1154,7 +1146,8 @@ fn library_pins_toggle_through_the_setting() {
         .any(|d| d.id == "pinToLibrary"));
 }
 
-/// A version-2 context menu gains Stash after Add to playlist (or at the end without one), once.
+/// A version-2 now-playing order gains Stash after Add to playlist (or at the end without one),
+/// once; a saved context-menu order is dropped.
 #[test]
 fn version_two_orders_gain_the_stash() {
     let mut r = ActionRegistry::new(Platform::Linux);
@@ -1164,20 +1157,13 @@ fn version_two_orders_gain_the_stash() {
     .unwrap();
     assert_eq!(
         r.order(Surface::ContextMenu),
-        vec![
-            "playNext",
-            "addToPlaylist",
-            "stash",
-            "love",
-            "snooze",
-            "unsnooze"
-        ]
+        r.default_order(Surface::ContextMenu)
     );
     assert_eq!(r.order(Surface::NowPlaying), vec!["love", "stash"]);
-    r.set_order(Surface::ContextMenu, vec!["playNext".into()]);
     let mut again = ActionRegistry::new(Platform::Linux);
     again.from_json(&r.to_json()).unwrap();
-    assert_eq!(again.order(Surface::ContextMenu), vec!["playNext"]);
+    assert_eq!(again.order(Surface::NowPlaying), vec!["love", "stash"]);
+    assert!(!again.to_json().contains("contextMenu"));
 }
 
 /// A chord the user had bound before the stash took it by default stays theirs; the stash action

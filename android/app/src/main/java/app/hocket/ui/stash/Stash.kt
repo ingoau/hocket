@@ -134,6 +134,9 @@ import app.hocket.core.toSummary
 import app.hocket.ui.DetailNavigator
 import app.hocket.ui.LocalDetailNavigator
 import app.hocket.ui.components.MenuSheet
+import app.hocket.ui.components.CoreMenu
+import app.hocket.ui.components.MenuKind
+import app.hocket.ui.components.itemMenu
 import app.hocket.ui.components.SongMenuExtra
 import app.hocket.ui.components.songSubject
 import app.hocket.ui.components.TrackRow
@@ -360,17 +363,22 @@ fun StashSheet(onDismiss: () -> Unit, modifier: Modifier = Modifier, navigator: 
     val target = remember(refs) { Commands.tracks(refs) }
     val title = stringResource(R.string.stash_title)
     val dot = stringResource(R.string.dot_separator)
-    // The registry's actions for what the menu acts on, again as that (or the registry) changes.
-    var actions by remember { mutableStateOf<List<ActionDescriptor>>(emptyList()) }
+    // The core's menu for what the menu acts on (one song's own, or the songs'), again as that (or
+    // the menu's customisation) changes.
+    var menu by remember { mutableStateOf(CoreMenu(emptyList())) }
     val currentTarget by rememberUpdatedState(target)
-    LaunchedEffect(target) { if (refs.isNotEmpty()) actions = client.actions("contextMenu", target) }
+    suspend fun fetchMenu(t: app.hocket.core.api.ActionTarget): CoreMenu {
+        val one = (t as? app.hocket.core.api.ActionTarget.Tracks)?.data?.tracks?.size == 1
+        return client.itemMenu(t, if (one) MenuKind.Song else MenuKind.Songs, (t as? app.hocket.core.api.ActionTarget.Tracks)?.data?.tracks?.size ?: 0, hasInfo = one)
+    }
+    LaunchedEffect(target) { if (refs.isNotEmpty()) menu = fetchMenu(target) }
     LaunchedEffect(Unit) {
         client.actionsChanged.collectLatest {
             val t = currentTarget
             if (t !is app.hocket.core.api.ActionTarget.Tracks || t.data.tracks.isEmpty()) return@collectLatest
-            val fresh = client.actions("contextMenu", t)
+            val fresh = fetchMenu(t)
             // Picked songs changed meanwhile: that set's own fetch has (or will have) the answer.
-            if (t == currentTarget) actions = fresh
+            if (t == currentTarget) menu = fresh
         }
     }
     // One song (picked, or all the stash holds): its own menu, as its three dots would open it (and a
@@ -570,11 +578,11 @@ fun StashSheet(onDismiss: () -> Unit, modifier: Modifier = Modifier, navigator: 
                 DisposableEffect(Unit) { onDispose { playFoot = 0 } }
                 key(acting.map { it.entryId }) {
                     MenuSheet(
-                        subject, target, actions.filter { it.id != ActionIds.STASH },
+                        subject, target, remember(menu) { menu.copy(items = menu.items.filter { it.id != ActionIds.STASH }) },
                         onDismiss = {},
                         extras = listOfNotNull(removePicked),
                         onGoToAlbum = single?.albumId?.let { id -> songNavigator?.let { n -> { n.openAlbum(id) } } },
-                        onGoToArtist = single?.artistId?.let { id -> songNavigator?.let { n -> { n.openArtist(id) } } },
+                        onGoToArtist = single?.let { songNavigator?.let { n -> { id -> n.openArtist(id) } } },
                         onInfo = single?.let { t -> { songInfo = t } },
                         onRan = { picked = emptySet() },
                         tag = "stash.menu",

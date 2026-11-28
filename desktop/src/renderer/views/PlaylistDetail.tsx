@@ -56,7 +56,7 @@ export function PlaylistDetail({ id }: { id: string }) {
       <div className="view-body">
         <section className="detail-section" aria-labelledby="playlist-tracks-title">
           <div className="detail-section-head"><h2 id="playlist-tracks-title">{t("album.tracksTitle")}</h2></div>
-          <TrackTable pageScroll loading={!loaded} tracks={rows} total={loaded ? total : (p?.songCount ?? 0)} columns={["position", "art", "title", "artist", "album", "love", "duration", "offline"]} scope={`playlist:${id}`} label={p?.name} onNeedRange={onNeedRange} onPlay={(i) => play(i)} playingTrackId={playing} context={{ playlistId: id }}
+          <TrackTable pageScroll loading={!loaded} tracks={rows} total={loaded ? total : (p?.songCount ?? 0)} columns={["position", "art", "title", "artist", "album", "love", "duration", "offline"]} scope={`playlist:${id}`} label={p?.name} onNeedRange={onNeedRange} onPlay={(i) => play(i)} playingTrackId={playing} context={{ playlistId: id, screen: editable ? "playlist" : "list" }}
               onReorder={editable ? (from, to) => bridge().dispatch({ type: "playlistMove", data: { playlist_id: id, from_index: from, to_index: to } }) : undefined}
               onDropItems={editable && p ? (d, at) => void dropOnPlaylist(d, id, p.name, at) : undefined} acceptsDrop={(d) => playlistAccepts(d, id)}
               onDelete={editable ? (indices) => bridge().dispatch({ type: "playlistRemove", data: { playlist_id: id, indices } }) : undefined}

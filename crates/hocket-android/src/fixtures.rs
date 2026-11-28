@@ -336,8 +336,58 @@ mod tests {
             }),
         );
 
+        push(
+            "query.menu",
+            json!(Query::Menu {
+                target: ActionTarget::Albums {
+                    ids: vec!["al1".into()]
+                },
+                screen: MenuScreen::NowPlaying,
+                app_items: vec!["share".into()],
+                extras: 1,
+            }),
+        );
+        push(
+            "command.setMenuItem",
+            json!(Command::SetMenuItem {
+                id: "genius".into(),
+                tier: MenuTier::Shown,
+            }),
+        );
+
         // -- results -------------------------------------------------------
         push("result.count", json!(QueryResult::Count(42)));
+        push(
+            "result.menu",
+            json!(QueryResult::Menu(MenuLayout {
+                items: vec![MenuItem {
+                    id: "love".into(),
+                    section: MenuSection::Rate,
+                    folded: false,
+                    actions: vec![ActionDescriptor {
+                        id: "love".into(),
+                        label: "Love".into(),
+                        icon: "favorite".into(),
+                        category: "library".into(),
+                        enabled: true,
+                        default_shortcut: None,
+                        undoable: true,
+                        destructive: false,
+                    }],
+                }],
+            })),
+        );
+        push(
+            "result.menuItems",
+            json!(QueryResult::MenuItems(vec![MenuItemInfo {
+                id: "genius".into(),
+                section: MenuSection::About,
+                default_tier: MenuTier::More,
+                tier: MenuTier::Hidden,
+                choices: vec![MenuTier::Shown, MenuTier::More, MenuTier::Hidden],
+                app_handled: true,
+            }])),
+        );
         push("result.path.none", json!(QueryResult::Path(None)));
         push(
             "result.path.some",

@@ -197,7 +197,7 @@ private fun AboutHeader(summary: TrackSummary, title: String, onClose: (() -> Un
 }
 
 /** One of a song's artists: its library id (when the server gave one) and its name. */
-internal data class TrackArtist(val id: String?, val name: String)
+data class TrackArtist(val id: String?, val name: String)
 
 /**
  * The song's artists, in the order the server lists them (the core's `artists`), or without that

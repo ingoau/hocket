@@ -1296,7 +1296,12 @@ static ALL: &[ActionDef] = &[
         "Go to artist",
         "artist",
         Library,
-        TRACKISH,
+        &[
+            TargetKind::Global,
+            TargetKind::Tracks,
+            TargetKind::QueueItems,
+            TargetKind::Albums
+        ],
         go_to_artist,
         none,
         ui_handled = true
@@ -1625,43 +1630,6 @@ pub fn all() -> &'static [ActionDef] {
     ALL
 }
 
-const CONTEXT_MENU: &[&str] = &[
-    "play",
-    "playShuffled",
-    "playNext",
-    "addToQueue",
-    "playLater",
-    "preview",
-    "addToPlaylist",
-    "stash",
-    "love",
-    "unlove",
-    "addToLibrary",
-    "removeFromLibrary",
-    "rate5",
-    "rate4",
-    "rate3",
-    "rate2",
-    "rate1",
-    "rate0",
-    "download",
-    "unpin",
-    "goToAlbum",
-    "goToArtist",
-    "snooze",
-    "unsnooze",
-    "pinToLibrary",
-    "unpinFromLibrary",
-    "removeFromQueue",
-    "removeFromPlaylist",
-    "restoreSavedQueue",
-    "pinSavedQueue",
-    "unpinSavedQueue",
-    "saveQueueAsPlaylist",
-    "deleteSavedQueue",
-    "deletePlaylist",
-];
-
 // The Library's own lists (albums, artists, ...) open from its page; the sidebar lists the pins.
 const SIDEBAR: &[&str] = &["navigateHome", "navigateLibrary"];
 
@@ -1697,7 +1665,7 @@ const NOW_PLAYING: &[&str] = &[
 /// Default choose-and-order list per surface. The palette lists everything.
 pub fn default_order(surface: Surface) -> Vec<&'static str> {
     match surface {
-        Surface::ContextMenu => CONTEXT_MENU.to_vec(),
+        Surface::ContextMenu => super::menu::registry_ids(),
         Surface::Sidebar => SIDEBAR.to_vec(),
         Surface::MediaSession => MEDIA_SESSION.to_vec(),
         Surface::NowPlaying => NOW_PLAYING.to_vec(),

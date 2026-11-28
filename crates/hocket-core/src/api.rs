@@ -2380,6 +2380,106 @@ pub enum ActionTarget {
     SavedQueue { id: String },
 }
 
+// ---------------------------------------------------------------------------
+// Item menus (the song / album / artist / playlist menu)
+// ---------------------------------------------------------------------------
+
+/// Where an item menu was opened. It changes what the menu offers: a song's own
+/// page drops the row that goes there, the player drops Preview, and only a
+/// playlist you can edit offers removing a song from it.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum MenuScreen {
+    /// Anywhere else: a list, a grid, search, the queue, a selection.
+    #[default]
+    List,
+    /// The player's menu for the song that is playing.
+    NowPlaying,
+    /// A song listed in a playlist you can edit.
+    Playlist,
+    /// On an album's own page (its songs, or the album's menu there).
+    AlbumPage,
+    /// On an artist's own page.
+    ArtistPage,
+}
+
+/// The menu's sections, in display order. Desktop draws a separator between
+/// sections; the phone draws the unfolded rows as one list.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "camelCase")]
+pub enum MenuSection {
+    /// The play strip: Play, Shuffle, Play next, Add to queue, Play later.
+    Play,
+    /// Rating (a star row) and Love (the phone's header heart).
+    Rate,
+    /// Add to playlist, Stash, Pin to Library, Add to library, saved-queue actions.
+    Organise,
+    /// Go to album, Go to artist.
+    GoTo,
+    /// Download, Share.
+    Keep,
+    /// Preview, info, Open in Genius, Lyrics timing.
+    About,
+    /// Snooze.
+    Tune,
+    /// Removing and deleting: always last, never folded.
+    Danger,
+}
+
+/// Where a menu item goes: in the menu, under the phone's More, or nowhere.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum MenuTier {
+    Shown,
+    More,
+    Hidden,
+}
+
+/// One row (or strip button) of an item menu, in display order.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MenuItem {
+    /// The menu item's id. For a registry item it is the action id of its "on"
+    /// half (`love`, `download`, `pinToLibrary`, `addToLibrary`, `snooze`,
+    /// `pinSavedQueue`), or `rating` for the stars; app-handled items are
+    /// `share`, `info`, `genius` and `lyricsTiming`.
+    pub id: String,
+    pub section: MenuSection,
+    /// Under the phone's More. Desktop ignores it.
+    pub folded: bool,
+    /// The registry actions behind the row that apply here (both halves of a
+    /// pair, the six rate actions). Empty for an app-handled item.
+    pub actions: Vec<ActionDescriptor>,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MenuLayout {
+    pub items: Vec<MenuItem>,
+}
+
+/// A customisable menu item, for the settings editor.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MenuItemInfo {
+    pub id: String,
+    pub section: MenuSection,
+    /// The tier with no customisation.
+    pub default_tier: MenuTier,
+    /// The tier in effect.
+    pub tier: MenuTier,
+    /// The tiers it may take (Rating, Love and removing take no `more`).
+    pub choices: Vec<MenuTier>,
+    /// Performed by the app, not the core (Share, info, Genius, Lyrics timing).
+    pub app_handled: bool,
+}
+
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -3342,10 +3442,15 @@ pub enum Command {
         action_id: String,
         shortcut: Option<String>,
     },
-    /// Choose-and-order customisation for a surface (`contextMenu`, `sidebar`, `mediaSession`).
+    /// Choose-and-order customisation for a surface (`sidebar`, `mediaSession`).
     SetActionOrder {
         surface: String,
         action_ids: Vec<String>,
+    },
+    /// Where an item menu row goes (`menu.overrides`); its default tier clears the customisation.
+    SetMenuItem {
+        id: String,
+        tier: MenuTier,
     },
     /// The UI's current multi-selection, so commands can snapshot it.
     SetSelection {
@@ -3573,6 +3678,22 @@ pub enum Query {
         surface: String,
         target: ActionTarget,
     },
+    /// An item menu for a target: `QueryResult::Menu`. `app_items` are the
+    /// app-handled rows the app can offer here (`share`, `info`, `genius`,
+    /// `lyricsTiming`); `extras` is how many rows of its own the app puts at
+    /// the top of the list (Sleep timer, Start over, Select songs), which count
+    /// towards the phone's short list.
+    Menu {
+        target: ActionTarget,
+        #[serde(default)]
+        screen: MenuScreen,
+        #[serde(default)]
+        app_items: Vec<String>,
+        #[serde(default)]
+        extras: u32,
+    },
+    /// Every customisable item menu row with its tier: `QueryResult::MenuItems`.
+    MenuItems,
     Shortcuts,
     /// Resolve artwork to a local file path at one of the fixed cache sizes (fetching if needed).
     Artwork {
@@ -3886,6 +4007,8 @@ pub enum QueryResult {
     Devices(Vec<DeviceInfo>),
     Undo(UndoState),
     Actions(Vec<ActionDescriptor>),
+    Menu(MenuLayout),
+    MenuItems(Vec<MenuItemInfo>),
     Shortcuts(Vec<Shortcut>),
     /// Local file path.
     Path(Option<String>),

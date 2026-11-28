@@ -20,7 +20,7 @@ import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
 import { type Ranked } from "../store/palette-rank";
 import { executeAction, resolveTrackRefs } from "../store/actions";
-import { fetchActions } from "../store/queries";
+import { fetchMenu } from "../store/queries";
 import { useKeymap } from "../store/keyboard";
 import { chordFromEvent, parseChord, type Chord } from "../store/shortcuts";
 import { Artwork } from "./Artwork";
@@ -32,12 +32,12 @@ import { trapTab, useReturnFocus } from "../lib/focus";
 import { usePresence } from "../lib/presence";
 import { loadLocal, saveLocal } from "../lib/local-settings";
 import { fetchMenuFacts } from "../lib/menu-facts";
-import { buildMenu } from "../lib/menu-model";
+import { appItemsFor, buildMenu, layoutActions } from "../lib/menu-model";
 import { libraryDragProps } from "../lib/queue-drag";
 import { PlaylistSubmenu } from "./PlaylistSubmenu";
 import { SLOW_SEARCH_MS, recordPaletteEvent, telemetryEnabled, type PickVia } from "../lib/palette-telemetry";
 import {
-  actionForChord, ariaShortcut, entryId, filterActions, flatRows, groupLabel, isPaletteChord, keycaps, menuActions, paletteActions,
+  actionForChord, ariaShortcut, entryId, filterActions, flatRows, groupLabel, isPaletteChord, keycaps, paletteActions,
   paletteGroups, pushRecent, rawId, sanitizeRecents, targetOf, typeLabel, type PaletteAction, type PaletteEntry,
 } from "../lib/palette-model";
 
@@ -228,9 +228,8 @@ export function CommandPalette() {
     if (!p) {
       const target = targetOf(entry);
       p = target
-        ? Promise.all([fetchActions("contextMenu", target), fetchMenuFacts(target)]).then(([all, facts]) => {
-            const registry = menuActions(all);
-            return paletteActions(entry, buildMenu(registry, [], facts), registry, platform);
+        ? Promise.all([fetchMenu(target, "list", appItemsFor(target), 0), fetchMenuFacts(target)]).then(([layout, facts]) => {
+            return paletteActions(entry, buildMenu(layout, [], facts), layoutActions(layout), platform);
           })
         : Promise.resolve(paletteActions(entry, [], []));
       p = p.then((g) => {

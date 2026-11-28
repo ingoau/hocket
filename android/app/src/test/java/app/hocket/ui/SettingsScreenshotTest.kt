@@ -231,7 +231,7 @@ class SettingsScreenshotTest {
         }
         category("customise")
         page("customise.bottomBar", "bottom-bar")
-        page("customise.contextMenuSection", "context-menu")
+        page("customise.itemMenuSection", "item-menus")
         page("customise.mediaSessionSection", "media-buttons")
         compose.onNodeWithTag("setting.customise.swipe").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
         awaitTag("setting.customise.${app.hocket.core.SettingKeys.SWIPE_QUEUE_START_TO_END}")

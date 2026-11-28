@@ -10,6 +10,7 @@ import { useApp } from "../store/app";
 import { resolveTrackRefs, type ActionContext } from "../store/actions";
 import { fmtDuration } from "./format";
 import type { MenuFacts } from "./menu-model";
+import { trackArtists } from "../components/ArtistChooser";
 
 /** Beyond this many items the menu shows no per-item state (a whole library selected). */
 const MAX_DETAIL = 2000;
@@ -75,6 +76,8 @@ async function factsFor(target: ActionTarget): Promise<MenuFacts | undefined> {
         trackIds: ids,
         trackRefs: refs,
         ...snoozeFacts,
+        // Go to artist picks among them, as the player's artist line does (ArtistChooser).
+        artists: tracks.length === 1 ? trackArtists(first).flatMap((a) => (a.id ? [{ id: a.id, name: a.name }] : [])) : undefined,
       };
     }
     case "albums": {

@@ -623,6 +623,13 @@ class CoreClient(
     suspend fun actions(surface: String, target: ActionTarget): List<ActionDescriptor> =
         (query(Queries.actions(surface, target)) as? QueryResult.Actions)?.data ?: emptyList()
 
+    /** An item menu's rows in display order ([Queries.menu]); empty when the core can't answer. */
+    suspend fun menu(target: ActionTarget, screen: MenuScreen = MenuScreen.List, appItems: List<String> = emptyList(), extras: Int = 0): MenuLayout =
+        (query(Queries.menu(target, screen, appItems, extras)) as? QueryResult.Menu)?.data ?: MenuLayout(emptyList())
+
+    /** Every customisable item menu row with its tier ([Queries.menuItems]). */
+    suspend fun menuItems(): List<MenuItemInfo> = (query(Queries.menuItems()) as? QueryResult.MenuItems)?.data ?: emptyList()
+
     fun applySnapshot(s: Snapshot) {
         _servers.value = s.accounts
         _identity.value = s.identity

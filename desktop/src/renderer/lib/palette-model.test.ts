@@ -1,21 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { ActionDescriptor } from "@core/api";
 import { parseChord, type Chord } from "../store/shortcuts";
-import { buildMenu, type MenuFacts } from "./menu-model";
+import { buildMenu, layoutActions, type MenuFacts } from "./menu-model";
+import { songLayout } from "./menu-model.fixture";
 import {
-  actionForChord, ariaShortcut, entryId, filterActions, flatRows, isPaletteChord, keycaps, menuActions, paletteActions, paletteGroups,
+  actionForChord, ariaShortcut, entryId, filterActions, flatRows, isPaletteChord, keycaps, paletteActions, paletteGroups,
   pushRecent, rawId, sanitizeRecents, targetOf, type PaletteAction, type PaletteEntry, type PaletteSources,
 } from "./palette-model";
 
-const d = (id: string, category: string, extra: Partial<ActionDescriptor> = {}): ActionDescriptor => ({ id, label: id, icon: "", category, enabled: true, undoable: false, destructive: false, ...extra });
-// The registry's context menu for one song, in its order (as in menu-model.test).
-const songActions = [
-  d("play", "playback"), d("playShuffled", "playback"), d("playNext", "queue"), d("playLater", "queue"), d("addToPlaylist", "library", { label: "Add to playlist…" }),
-  d("love", "library", { label: "Love" }), d("unlove", "library", { label: "Unlove" }), d("rate5", "library"), d("rate4", "library"), d("rate3", "library"), d("rate2", "library"), d("rate1", "library"), d("rate0", "library"),
-  d("download", "library", { label: "Download" }), d("unpin", "library", { label: "Remove download", destructive: true }), d("goToAlbum", "navigate", { label: "Go to album" }), d("goToArtist", "navigate", { label: "Go to artist" }),
-  d("pinToLibrary", "library", { label: "Pin to Library", enabled: false }), d("unpinFromLibrary", "library", { label: "Unpin from Library", enabled: false }),
-  d("removeFromPlaylist", "library"), d("ui.newPlaylist", "library"),
-];
+// The core's layout for one song (as in menu-model.test), with the registry's labels.
+const songItems = songLayout({ labels: true });
 const songFacts: MenuFacts = { kind: "song", count: 1, loved: 0, downloaded: 0, ratings: [0] };
 const e = (kind: PaletteEntry["kind"], id: string, label: string, extra: Partial<PaletteEntry> = {}): PaletteEntry => ({ id: entryId(kind, id), label, kind, ...extra });
 const chord = (s: string): Chord => parseChord(s) as Chord;
@@ -99,16 +92,17 @@ describe("palette targets", () => {
 
 describe("palette actions menu", () => {
   const song = e("track", "t1", "Sunrise", { ref: { source: "nd1", id: "t1" } });
-  const songMenu = () => {
-    const registry = menuActions(songActions);
-    return paletteActions(song, buildMenu(registry, [], songFacts), registry);
-  };
+  const menuOf = (layout: ReturnType<typeof songLayout>, facts: MenuFacts, entry = song) => paletteActions(entry, buildMenu(layout, [], facts), layoutActions(layout));
+  const songMenu = () => menuOf(songItems, songFacts);
 
-  it("follows the context menu: play group, then the toggles and Add to playlist, then navigation; no rating, no inapplicable pin", () => {
+  it("follows the context menu's sections: play group, Love, organising, navigation, keeping, about; no rating, no inapplicable pin", () => {
     expect(keysOf(songMenu())).toEqual([
-      ["play", "playShuffled", "playNext", "playLater"],
-      ["love", "download", "addToPlaylist"],
-      ["goToAlbum", "goToArtist", "ui.info"],
+      ["play", "playNext", "playLater"],
+      ["love"],
+      ["addToPlaylist", "stash"],
+      ["goToAlbum", "goToArtist"],
+      ["download"],
+      ["preview", "ui.info"],
     ]);
   });
 
@@ -124,16 +118,14 @@ describe("palette actions menu", () => {
   });
 
   it("runs the half of a toggle that applies: a loved, downloaded song offers Unlove and Remove download", () => {
-    const registry = menuActions(songActions);
-    const flat = paletteActions(song, buildMenu(registry, [], { ...songFacts, loved: 1, downloaded: 1 }), registry).flat();
+    const flat = menuOf(songItems, { ...songFacts, loved: 1, downloaded: 1 }).flat();
     expect(flat.find((a) => a.key === "unlove")).toMatchObject({ label: "Unlove", shortcut: "Mod+L", run: { type: "action", id: "unlove" } });
     expect(flat.find((a) => a.key === "unpin")).toMatchObject({ label: "Remove download", destructive: true });
   });
 
   it("opens an album on Enter; Play moves to Shift+Enter", () => {
     const album = e("album", "a1", "Sunny Days");
-    const registry = menuActions(songActions.filter((a) => a.id !== "goToAlbum"));
-    const groups = paletteActions(album, buildMenu(registry, [], { kind: "album", count: 1 }), registry);
+    const groups = menuOf(songItems.filter((i) => i.id !== "goToAlbum"), { kind: "album", count: 1 }, album);
     expect(groups[0]?.[0]).toMatchObject({ key: "open", label: "Open album", shortcut: "Enter", run: { type: "open" } });
     expect(groups[0]?.find((a) => a.key === "play")?.shortcut).toBe("Shift+Enter");
   });
@@ -143,15 +135,14 @@ describe("palette actions menu", () => {
   });
 
   it("with the core's own Add to queue, Play later keeps its name and gives up the chord", () => {
-    const registry = menuActions([...songActions.slice(0, 3), d("addToQueue", "queue", { label: "Add to queue" }), ...songActions.slice(3)]);
-    const flat = paletteActions(song, buildMenu(registry, [], songFacts), registry).flat();
+    const flat = menuOf(songLayout({ labels: true, addToQueue: true }), songFacts).flat();
     expect(flat.find((a) => a.key === "addToQueue")).toMatchObject({ shortcut: "Mod+Shift+Enter" });
     expect(flat.find((a) => a.key === "playLater")).toMatchObject({ label: "Play later", shortcut: undefined });
   });
 
   it("leaves disabled actions out and keeps one row per chord", () => {
-    const registry = menuActions(songActions.map((a) => (a.id === "playNext" ? { ...a, enabled: false } : a)));
-    const flat = paletteActions(song, buildMenu(registry, [], songFacts), registry).flat();
+    const layout = songItems.map((i) => (i.id === "playNext" ? { ...i, actions: i.actions.map((a) => ({ ...a, enabled: false })) } : i));
+    const flat = menuOf(layout, songFacts).flat();
     expect(flat.some((a) => a.key === "playNext")).toBe(false);
     const chords = flat.flatMap((a) => (a.shortcut ? [a.shortcut] : []));
     expect(new Set(chords).size).toBe(chords.length);

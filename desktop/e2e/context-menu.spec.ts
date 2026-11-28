@@ -246,6 +246,42 @@ test.describe("context menu", () => {
     await page.keyboard.press("Escape");
   });
 
+  test("the player's menu has no Preview and picks among a song's artists; the album page's has no Go to album", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    // tr-1 has a guest (fake core): two artists.
+    await page.evaluate(async () => {
+      const s = (await window.hocket.query({ type: "accounts" })) as { data: { id: string }[] };
+      window.hocket.dispatch({ type: "playTracks", data: { tracks: [{ source: s.data[0]!.id, id: "tr-1" }], start_index: 0, label: "e2e", shuffle: false } });
+    });
+    await expect.poll(async () => ((await page.evaluate(() => window.hocket.query({ type: "snapshot" }))) as { data: { queue: { current?: { track: { id: string } } } } }).data.queue.current?.track.id).toBe("tr-1");
+    const artists = ((await page.evaluate(() => window.hocket.query({ type: "snapshot" }))) as { data: { queue: { current?: { track: { artists?: { name: string }[] } } } } }).data.queue.current!.track.artists!;
+    const menu = page.getByTestId("context-menu");
+    await page.getByTestId("bar-more").click();
+    await expect(menu).toBeVisible();
+    await expect(menu.locator('[data-action="preview"]')).toHaveCount(0);
+    await expect(menu.locator('[data-action="goToAlbum"]')).toBeVisible();
+    // Go to artist opens a submenu of the song's artists.
+    const goToArtist = menu.locator('[data-action="goToArtist"]');
+    await expect(goToArtist).toHaveAttribute("aria-haspopup", "menu");
+    await goToArtist.hover();
+    const sub = page.getByTestId("artist-submenu");
+    await expect(sub.getByRole("menuitem")).toHaveText(artists.map((a) => a.name));
+    await sub.getByRole("menuitem").nth(1).click();
+    await expect(menu).toHaveCount(0);
+    await expect(page.getByTestId("view-artist").locator("h1").first()).toHaveText(artists[1]!.name);
+    // From the player's menu to the album: its songs' menus don't go to it again.
+    await page.getByTestId("bar-more").click();
+    await menu.locator('[data-action="goToAlbum"]').click();
+    await expect(page.getByTestId("view-album")).toBeVisible();
+    await page.getByTestId("track-row").first().click({ position: onTitle, button: "right" });
+    await expect(menu).toBeVisible();
+    await expect(menu.locator('[data-action="goToAlbum"]')).toHaveCount(0);
+    await expect(menu.locator('[data-action="goToArtist"]')).toBeVisible();
+    await expect(menu.locator('[data-action="preview"]')).toBeVisible();
+    await page.keyboard.press("Escape");
+  });
+
   test("the player's + buttons open the same picker beside them", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);

@@ -40,7 +40,7 @@ pub const TEXTS: &[SettingText] = &[
     t("display.floatingNavBar", "Floating navigation bar", "Show the navigation bar as a compact pill floating over the page. Off uses the standard bar along the bottom of the screen."),
     t("display.immersiveArtwork", "Immersive artwork", "Run the artwork edge to edge, carried on below it by a reflection or by its own colours, except close-up photos of people and busy covers, which sit as a card on their own colours."),
     t("display.queuePanelSplit", "Queue / lyrics split", "Position of the divider between the queue and lyrics panels."),
-    t("actions.order.contextMenu", "Context menu items", "Which actions appear in context menus, and in what order."),
+    t("menu.overrides", "Item menus", "Which rows the song, album and playlist menus show, and which go under More."),
     t("actions.order.sidebar", "Sidebar items", "Which sections appear in the sidebar, and in what order."),
     t("actions.order.mediaSession", "Media session buttons", "Which actions appear as OS media controls, and in what order."),
     t("nav.mobileBar", "Bottom bar", "Which places appear in the phone's bottom bar, and in what order."),

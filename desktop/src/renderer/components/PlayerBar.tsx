@@ -78,7 +78,7 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
     <div ref={bar} className="player" role="region" aria-label={t("misc.nowPlaying")} inert={inert} data-testid="player-bar">
       {notice ? <div className="notice"><Icon name="warn" size={12} /> {notice}</div> : null}
 
-      <div className="now" onContextMenu={track ? (e) => void openContextMenu(e, { type: "queueItems", data: { keys: [now.item.key] } }) : undefined}
+      <div className="now" onContextMenu={track ? (e) => void openContextMenu(e, { type: "queueItems", data: { keys: [now.item.key] } }, { screen: "nowPlaying" }) : undefined}
         // The song playing drags (art or title) to a playlist, or onto the queue to hear it again.
         {...dragSource(track ? { target: { type: "tracks", data: { tracks: [now.item.track] } }, label: track.title } : undefined, { allowControls: true })} data-testid="bar-now">
         {track ? <Artwork id={track.coverArt} size={128} className="art" /> : <div className="art placeholder"><Icon name="music" /></div>}
@@ -99,7 +99,7 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
         {track ? (
           <div className="now-actions">
             <button type="button" className="btn icon" aria-label={t("action.addToPlaylist")} title={t("action.addToPlaylist")} onClick={(e) => void executeAction("addToPlaylist", undefined, { anchor: e.currentTarget })} aria-haspopup="menu" data-testid="bar-add"><Icon name="playlistAdd" size={20} /></button>
-            <button type="button" className="btn icon" aria-label={t("misc.more")} title={t("misc.more")} aria-haspopup="menu" onClick={(e) => openMenuFromButton(e, { type: "queueItems", data: { keys: [now.item.key] } })} data-testid="bar-more"><Icon name="more" size={20} /></button>
+            <button type="button" className="btn icon" aria-label={t("misc.more")} title={t("misc.more")} aria-haspopup="menu" onClick={(e) => openMenuFromButton(e, { type: "queueItems", data: { keys: [now.item.key] } }, { screen: "nowPlaying" })} data-testid="bar-more"><Icon name="more" size={20} /></button>
           </div>
         ) : null}
       </div>

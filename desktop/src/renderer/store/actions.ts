@@ -2,7 +2,7 @@
 // ids (aliases are normalised first). Actions that need UI — a dialog, a
 // navigation, a window — run here; everything else goes to the core through
 // Command.RunAction so the registry stays the single source of truth.
-import type { ActionTarget } from "@core/api";
+import type { ActionTarget, MenuScreen } from "@core/api";
 import { NAV_VIEWS, canonicalActionId } from "@shared/keymap";
 import { SK } from "@shared/settings-keys";
 import { t } from "@shared/strings";
@@ -15,6 +15,8 @@ import { refOf } from "../lib/track-ref";
 import type { TrackRef } from "@core/api";
 
 export interface ActionContext {
+  /** Where an item menu opens (the player, an album or artist page, an editable playlist); a list otherwise. */
+  screen?: MenuScreen;
   playlistId?: string;
   /** Row indices for PlaylistRemove. */
   indices?: number[];
@@ -27,7 +29,7 @@ export interface ActionContext {
 const RENDERER_HANDLED = new Set([
   "openCommandPalette", "findInList", "toggleQueuePanel", "toggleLyrics", "toggleFullscreen", "toggleMiniPlayer",
   "navigateRecent", "ui.back", "ui.forward", "ui.toggleSidebar", "ui.escape", "selectAll", "remove", "handoff", "sleepTimer", "copyDiagnostics",
-  "goToAlbum", "goToArtist", "ui.info", "addToPlaylist", "ui.newPlaylist", "removeFromPlaylist", "ui.renamePlaylist",
+  "goToAlbum", "goToArtist", "ui.info", "addToPlaylist", "ui.newPlaylist", "removeFromPlaylist",
   "deletePlaylist", "unpin", "saveQueueAsPlaylist", "ui.developerDiagnostics", "openStash",
 ]);
 
@@ -169,14 +171,6 @@ export async function executeAction(rawId: string, target: ActionTarget = { type
     case "removeFromPlaylist": {
       if (!ctx.playlistId || !ctx.indices?.length) return;
       b.dispatch({ type: "playlistRemove", data: { playlist_id: ctx.playlistId, indices: ctx.indices } });
-      return;
-    }
-    case "ui.renamePlaylist": {
-      if (target.type !== "playlists" || !target.data.ids[0]) return;
-      const id = target.data.ids[0];
-      const r = await b.query({ type: "playlist", data: { id } });
-      const current = r.type === "playlistDetail" ? r.data?.name : undefined;
-      app.openDialog({ kind: "prompt", title: t("dialog.renamePlaylist"), label: t("dialog.playlistName"), initial: current, onConfirm: (name) => b.dispatch({ type: "renamePlaylist", data: { playlist_id: id, name, comment: undefined, public: undefined } }) });
       return;
     }
     case "deletePlaylist": {

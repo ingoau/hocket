@@ -20,6 +20,7 @@ import app.hocket.ui.screens.settings.SETTINGS_INDEX
 import app.hocket.ui.screens.settings.SettingsCategory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import androidx.compose.ui.test.onAllNodesWithTag
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -217,15 +218,15 @@ class SettingsCategoriesTest {
             compose.onAllNodes(hasTestTag("settings.back")).onLast().performClick()
             compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag("setting.customise.bottomBar").assertExists() }.isSuccess }
         }
-        page("customise.contextMenuSection", "customise.contextMenu")
-        assertEquals("Shuffle play", textOf("customise.contextMenu.playShuffled"))
-        assertEquals("Rate 5 stars", textOf("customise.contextMenu.rate5"))
-        assertEquals("Go to album", textOf("customise.contextMenu.goToAlbum"))
-        // Hiding moves an action under Hidden (it stays listed, with a button to show it again) and saves the order without it.
-        compose.onNodeWithTag("customise.contextMenu.hide.playShuffled").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
-        compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.ACTIONS_ORDER_CONTEXT_MENU]?.value?.let { "\"play\"" in it && "playShuffled" !in it } == true }
-        compose.onNodeWithTag("customise.contextMenu.playShuffled").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
-        compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.ACTIONS_ORDER_CONTEXT_MENU]?.value?.contains("playShuffled") == true }
+        page("customise.itemMenuSection", "customise.itemMenu")
+        // Each row takes only its own tiers: Rating is shown or hidden, never under More.
+        compose.onNodeWithTag("customise.itemMenu.rating.hidden").performScrollTo().assertExists()
+        assertTrue(compose.onAllNodesWithTag("customise.itemMenu.rating.more").fetchSemanticsNodes().isEmpty())
+        // Choosing a tier saves it; Reset clears every choice.
+        compose.onNodeWithTag("customise.itemMenu.genius.shown").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.MENU_OVERRIDES]?.value?.contains("\"genius\":\"shown\"") == true }
+        compose.onNodeWithTag("customise.itemMenu.reset").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.MENU_OVERRIDES]?.value?.trim() == "{}" }
         pageBack()
         page("customise.mediaSessionSection", "customise.mediaSession")
         assertEquals("Shuffle", textOf("customise.mediaSession.shuffle"))

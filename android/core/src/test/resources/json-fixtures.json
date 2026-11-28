@@ -364,9 +364,75 @@
       }
     }
   },
+  "query.menu": {
+    "type": "menu",
+    "data": {
+      "target": {
+        "type": "albums",
+        "data": {
+          "ids": [
+            "al1"
+          ]
+        }
+      },
+      "screen": "nowPlaying",
+      "app_items": [
+        "share"
+      ],
+      "extras": 1
+    }
+  },
+  "command.setMenuItem": {
+    "type": "setMenuItem",
+    "data": {
+      "id": "genius",
+      "tier": "shown"
+    }
+  },
   "result.count": {
     "type": "count",
     "data": 42
+  },
+  "result.menu": {
+    "type": "menu",
+    "data": {
+      "items": [
+        {
+          "id": "love",
+          "section": "rate",
+          "folded": false,
+          "actions": [
+            {
+              "id": "love",
+              "label": "Love",
+              "icon": "favorite",
+              "category": "library",
+              "enabled": true,
+              "defaultShortcut": null,
+              "undoable": true,
+              "destructive": false
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "result.menuItems": {
+    "type": "menuItems",
+    "data": [
+      {
+        "id": "genius",
+        "section": "about",
+        "defaultTier": "more",
+        "tier": "hidden",
+        "choices": [
+          "shown",
+          "more",
+          "hidden"
+        ],
+        "appHandled": true
+      }
+    ]
   },
   "result.path.none": {
     "type": "path",
