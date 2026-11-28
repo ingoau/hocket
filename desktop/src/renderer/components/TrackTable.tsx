@@ -87,6 +87,26 @@ export function fitColumns(columns: readonly ColumnId[], width: number): ColumnI
 }
 
 /** Whether a track's artist is its album's: the same name, ignoring case and spacing (a track with none counts as the album's). */
+/** A disc's heading over its first song, in an album of several discs. */
+export const DISC_HEAD_H = 44;
+
+/**
+ * Where each disc starts (row index → disc number) when the songs span more than one disc; empty
+ * otherwise (a single disc needs no heading).
+ */
+export function discStarts(tracks: readonly (Track | undefined)[]): Map<number, number> {
+  const starts = new Map<number, number>();
+  let last: number | undefined;
+  tracks.forEach((tr, i) => {
+    const disc = tr?.discNumber;
+    if (disc !== undefined && disc !== last) starts.set(i, disc);
+    if (disc !== undefined) last = disc;
+  });
+  return starts.size > 1 ? starts : new Map();
+}
+
+const NO_DISCS: ReadonlyMap<number, number> = new Map();
+
 export function sameArtist(track: string | null | undefined, album: string | null | undefined): boolean {
   return !track?.trim() || track.trim().toLowerCase() === (album ?? "").trim().toLowerCase();
 }
@@ -134,6 +154,8 @@ export interface TrackTableProps {
   pageScroll?: boolean;
   /** The rows are still loading: no empty message yet (`total` may already hold placeholders). */
   loading?: boolean;
+  /** Head each disc of a several-disc album with its number. */
+  discs?: boolean;
 }
 
 /**
@@ -251,7 +273,11 @@ export function TrackTable(props: TrackTableProps) {
     const f = focusRef.current;
     return f < range.count && !base.includes(f) ? [...base, f].sort((a, b) => a - b) : base;
   }, []);
-  const rowVirtualizer = useVirtualizer({ count: total, getScrollElement: () => (pageScroll ? pageScroller : parentRef.current), estimateSize: () => TRACK_ROW_H, overscan: pageScroll ? 10 : 6, rangeExtractor, scrollMargin: pageScroll ? scrollMargin : 0 });
+  const discs = useMemo(() => (props.discs ? discStarts(tracks) : NO_DISCS), [props.discs, tracks]);
+  const headAt = useCallback((i: number) => (discs.has(i) ? DISC_HEAD_H : 0), [discs]);
+  const rowVirtualizer = useVirtualizer({ count: total, getScrollElement: () => (pageScroll ? pageScroller : parentRef.current), estimateSize: (i) => TRACK_ROW_H + headAt(i), overscan: pageScroll ? 10 : 6, rangeExtractor, scrollMargin: pageScroll ? scrollMargin : 0 });
+  // The disc headings change the rows' sizes: lay them out again.
+  useEffect(() => rowVirtualizer.measure(), [headAt, rowVirtualizer]);
   /** Where the virtualiser's offsets (counted from the scroller's top) start in the body. */
   const rowOffset = pageScroll ? scrollMargin : 0;
   const items = rowVirtualizer.getVirtualItems();
@@ -480,20 +506,25 @@ export function TrackTable(props: TrackTableProps) {
             const swiped = !!tr && swipe.key?.i === vi.index && swipe.key.id === tr.id && (swipe.stage === "tracking" || swipe.settling);
             const tracking = swiped && swipe.stage === "tracking";
             const reveal = swiped && swipe.side !== 0 ? (swipe.side > 0 ? swipeActions(tr).right : swipeActions(tr).left) : null;
+            // A disc's heading takes the top of its first song's slot.
+            const disc = discs.get(vi.index);
+            const head = disc === undefined ? 0 : DISC_HEAD_H;
+            const top = vi.start - rowOffset + head;
             return (
               <Fragment key={vi.key}>
-              {reveal && swipe.side !== 0 ? <SwipeReveal action={reveal} side={swipe.side} armed={swipe.armed !== 0} style={{ top: 0, left: "var(--table-inset)", right: "var(--table-inset)", height: vi.size, transform: `translateY(${vi.start - rowOffset}px)` }} /> : null}
+              {disc !== undefined ? <div className="disc-head" aria-hidden="true" style={{ height: head, transform: `translateY(${vi.start - rowOffset}px)` }} data-testid="disc-head"><Icon name="album" size={18} />{t("album.disc", { disc })}</div> : null}
+              {reveal && swipe.side !== 0 ? <SwipeReveal action={reveal} side={swipe.side} armed={swipe.armed !== 0} style={{ top: 0, left: "var(--table-inset)", right: "var(--table-inset)", height: vi.size - head, transform: `translateY(${top}px)` }} /> : null}
               <div
                 className={`tr ${selected ? "selected" : ""} ${focused ? "focused" : ""} ${playing ? "playing" : ""} ${faded ? "snoozed" : ""}${away ? " offline-unavailable" : ""}${swiped ? " swiping" : ""}${flash && flash.i === vi.index && flash.id === tr?.id ? " swipe-flash" : ""}${dropGap === vi.index ? " drop-before" : ""}${dropGap === vi.index + 1 && vi.index === total - 1 ? " drop-after" : ""}`}
                 role="row"
                 aria-selected={selected}
                 aria-rowindex={vi.index + 2}
                 aria-current={playing ? "true" : undefined}
-                aria-description={away ? t("misc.notAvailableOffline") : undefined}
+                aria-description={[disc !== undefined ? t("album.disc", { disc }) : "", away ? t("misc.notAvailableOffline") : ""].filter(Boolean).join(", ") || undefined}
                 title={away ? t("misc.notAvailableOffline") : undefined}
                 tabIndex={focused ? 0 : -1}
                 data-index={vi.index}
-                style={{ gridTemplateColumns: template, transform: `translateY(${vi.start - rowOffset}px)`, height: vi.size, ...(swiped ? { translate: `${tracking ? swipe.offset : 0}px 0`, transition: tracking ? "none" : settle } : null) }}
+                style={{ gridTemplateColumns: template, transform: `translateY(${top}px)`, height: vi.size - head, ...(swiped ? { translate: `${tracking ? swipe.offset : 0}px 0`, transition: tracking ? "none" : settle } : null) }}
                 onFocus={(e) => { if (e.target !== e.currentTarget) return; if (vi.index !== focusIdx) setFocusIdx(vi.index); primer?.enter(primeKey(tr)); }}
                 onBlur={(e) => { if (e.target === e.currentTarget) primer?.leave(primeKey(tr)); }}
                 onClick={(e) => click(e, vi.index)}

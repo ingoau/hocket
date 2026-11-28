@@ -270,6 +270,8 @@
 .tr.playing .td.title { color: var(--fg); font-weight: 700; }
 .tr.playing .td.index .icon { color: var(--accent-text); }
 .tr .art { width: 32px; height: 32px; border-radius: var(--shape-sm); }
+/* A disc's heading over its first song, in an album of several discs. */
+.disc-head { position: absolute; top: 0; left: var(--table-inset); right: var(--table-inset); display: flex; align-items: flex-end; gap: 10px; padding: 0 14px 8px; color: var(--fg-muted); font-size: var(--fs-md); font-weight: 700; pointer-events: none; }
 .tr .row-play { background: var(--accent); color: var(--accent-fg); width: 30px; inset: 5px 0 5px auto; border-radius: 10px; transition: border-radius var(--dur-spring) var(--spring-fast), opacity var(--dur-short) var(--ease-emphasized); }
 .tr .row-play:hover { background: var(--accent); border-radius: 50%; }
 .table .empty .empty-cell { display: flex; flex-direction: column; align-items: center; gap: 12px; }

@@ -92,7 +92,7 @@ export function AlbumDetail({ id }: { id: string }) {
             <h2 id="album-tracks-title">{t("album.tracksTitle")}</h2>
             <span className="muted">{t("album.tracks", { count: list.length, duration: fmtTime(list.reduce((n, x) => n + (x.durationMs ?? 0), 0)) })}</span>
           </div>
-          <TrackTable pageScroll loading={loadingTracks} tracks={list} total={loadingTracks ? (a?.songCount ?? 0) : list.length} columns={columns} omitArtist={allArtists ? undefined : (a?.artist ?? "")} scope={`album:${id}`} label={a?.name} onPlay={(i) => play(i)} playingTrackId={playing} resumeTrackId={resume && playing !== resume.trackId ? resume.trackId : undefined} resumeFraction={resume ? resumeFraction(list, resume) : undefined} emptyMessage={t("songs.empty")} testId="album-tracks" primer={primer} />
+          <TrackTable pageScroll discs loading={loadingTracks} tracks={list} total={loadingTracks ? (a?.songCount ?? 0) : list.length} columns={columns} omitArtist={allArtists ? undefined : (a?.artist ?? "")} scope={`album:${id}`} label={a?.name} onPlay={(i) => play(i)} playingTrackId={playing} resumeTrackId={resume && playing !== resume.trackId ? resume.trackId : undefined} resumeFraction={resume ? resumeFraction(list, resume) : undefined} emptyMessage={t("songs.empty")} testId="album-tracks" primer={primer} />
           {footnote ? <div className="detail-footnote">{footnote}</div> : null}
         </section>
         {others.length && a ? (

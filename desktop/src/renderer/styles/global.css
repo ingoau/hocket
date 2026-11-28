@@ -455,8 +455,8 @@ h3 { font-size: var(--fs-lg); }
 .tr { display: grid; height: var(--row-h); align-items: center; padding: 0 8px; border-radius: var(--shape-sm); position: absolute; left: var(--table-inset); right: var(--table-inset); transition: background-color var(--dur-short) var(--ease-emphasized); }
 .tr:hover { background: var(--bg-hover); }
 .tr.selected { background: var(--selection); }
-/* The keyboard cursor shows only while the table has focus. */
-.table:focus-within .tr.focused { box-shadow: inset 0 0 0 2px var(--accent-ring); }
+/* The keyboard cursor shows only while the table has keyboard focus (not after a click on a row). */
+.table:has(:focus-visible) .tr.focused { box-shadow: inset 0 0 0 2px var(--accent-ring); }
 .tr.playing .td.title { color: var(--accent-text); font-weight: 500; }
 .tr.snoozed { opacity: 0.45; }
 /* Offline and not on this device: muted text (still AA, the row stays usable) and faded artwork. */
@@ -960,7 +960,7 @@ button.qrow { width: 100%; }
     forced-color-adjust: none; color: HighlightText !important; background: transparent; border-color: HighlightText;
   }
   /* The cursor while focus is elsewhere in the list (e.g. on a rating inside a row). */
-  .table:focus-within .tr.focused:not(:focus), [role="grid"]:focus-within .tile.focused:not(:focus) { outline: 2px dashed CanvasText; outline-offset: -2px; }
+  .table:has(:focus-visible) .tr.focused:not(:focus), [role="grid"]:focus-within .tile.focused:not(:focus) { outline: 2px dashed CanvasText; outline-offset: -2px; }
   .menu, .dialog, .palette, .popover, .search-popover, .toast, .card, .rule-group, .right-panel.drawer { border: 1px solid CanvasText; }
   .seek .bar .track, .progress { border: 1px solid CanvasText; }
   .seek .bar .fill, .progress > div, .bars div:not(:has(> span)), .bars span { forced-color-adjust: none; background: Highlight; }
