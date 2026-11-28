@@ -119,6 +119,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -126,6 +127,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.hocket.R
 import app.hocket.playback.AudioOutputs
@@ -151,6 +153,7 @@ import app.hocket.ui.components.RatingStars
 import app.hocket.ui.components.formatClock
 import app.hocket.ui.icons.HocketIcons
 import app.hocket.ui.lyrics.LyricsPage
+import app.hocket.ui.lyrics.PlayerLyricLine
 import app.hocket.ui.queue.QueueList
 import app.hocket.ui.queue.mostRecentOtherQueue
 import app.hocket.ui.components.rememberHoldModifier
@@ -200,6 +203,8 @@ internal fun FullPlayer(
     artworkScale: () -> Float,
     lyricsVisible: Boolean,
     onPreviewToggle: (Color) -> Unit,
+    /** The player is open and settled in artwork mode: the line being sung (`lyrics.playerLine`) ticks. */
+    lyricLineVisible: Boolean = false,
     immersive: ArtworkLayout? = null,
     carousel: SkipCarousel = remember { SkipCarousel() },
     neighbours: Neighbours = Neighbours.None,
@@ -218,6 +223,7 @@ internal fun FullPlayer(
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val settings by client.settings.collectAsStateWithLifecycle()
     val showRating = settings[SettingKeys.DISPLAY_PLAYER_RATING]?.value?.trim() != "false"
+    val lyricLine = settings[SettingKeys.LYRICS_PLAYER_LINE]?.value?.trim() == "true"
     val track = entry?.track
     val density = LocalDensity.current
     var handoff by remember { mutableStateOf(false) }
@@ -353,6 +359,9 @@ internal fun FullPlayer(
                 area = { ModeArea(mode, hero, lyricsVisible, queueModifier = if (folding) Modifier.nestedScroll(collapse.connection) else Modifier, queueDrawer = wide) },
                 title = { Box(pickHidden) { PlayerTitle(mode, hero, showRating, carousel, neighbours, thumbInRow = !artAbove, onInfo = { info = true }, onAddTo = { addTo = true }, shown = shown) } },
                 seek = { Box(pickHidden) { PlayerSeek(position, fold, shown) } },
+                above = { if (lyricLine) Box(pickHidden) { AboveTitleLine(lyricLineVisible, modeFraction) } },
+                // Its room whenever the setting is on, with lyrics or not, so the artwork stays put from song to song.
+                aboveRoom = if (lyricLine) with(density) { LYRIC_LINE_ROOM.toDp() } else 0.dp,
                 transport = {
                     val playing by client.isPlaying.collectAsStateWithLifecycle()
                     val buffering by client.buffering.collectAsStateWithLifecycle()
@@ -444,6 +453,8 @@ private val WIDE_GAP = 20.dp
 internal val PAGE_PADDING = 20.dp
 private val MAX_ART = 520.dp
 private val ART_PAD = 8.dp
+/** The band the line being sung takes above the title (`lyrics.playerLine`): the artwork moves up by it. In sp, as the line grows with the font. */
+private val LYRIC_LINE_ROOM = 24.sp
 /** The least room the mode area gets. */
 private val MIN_AREA = 220.dp
 /** The transport's height (the skip buttons are this square). */
@@ -503,9 +514,11 @@ private fun PlayerLayout(
     actions: @Composable () -> Unit,
     lift: () -> Float = { 0f },
     liftTo: () -> Int = { 0 },
+    above: @Composable () -> Unit = {},
+    aboveRoom: Dp = 0.dp,
 ) {
     if (wide) PlayerLayoutWide(minHeight, hero, artAbove, header, area, title, seek, transport, actions)
-    else PlayerLayoutTall(minHeight, hero, fold, foldedBottom, transportHeight, header, area, title, seek, transport, actions, lift, liftTo)
+    else PlayerLayoutTall(minHeight, hero, fold, foldedBottom, transportHeight, header, area, title, seek, transport, actions, lift, liftTo, above, aboveRoom)
 }
 
 @Composable
@@ -523,8 +536,10 @@ private fun PlayerLayoutTall(
     actions: @Composable () -> Unit,
     lift: () -> Float,
     liftTo: () -> Int,
+    above: @Composable () -> Unit,
+    aboveRoom: Dp,
 ) {
-    Layout(contents = listOf(header, area, title, seek, transport, actions)) { slots, constraints ->
+    Layout(contents = listOf(header, area, title, seek, transport, actions, above)) { slots, constraints ->
         val k = fold().coerceIn(0f, 1f)
         val full = constraints.maxWidth
         // On a wide page (a tablet held upright) the controls (and a card's area) keep to a centred
@@ -541,6 +556,10 @@ private fun PlayerLayoutTall(
         val sp = measure(3)
         val xp = measure(4)
         val ap = measure(5)
+        // Zero high, its bottom on the title row's top, in [aboveRoom]: a band between the artwork and
+        // the title row, out of the artwork's share of the page (lyrics and the queue keep it).
+        val bp = measure(6)
+        val band = aboveRoom.roundToPx()
         fun height(p: List<Placeable>) = p.maxOfOrNull { it.height } ?: 0
         val hh = height(hp)
         // The title row less what its folding stars have taken off: the area gets that back.
@@ -572,19 +591,24 @@ private fun PlayerLayoutTall(
         val minArea = MIN_AREA.roundToPx()
         val maxSide = minOf(w - 2 * PAGE_PADDING.roundToPx(), MAX_ART.roundToPx())
         // The same for a card and an immersive artwork: the controls never move between the two.
-        val side = (view - hh - th - rest - maxOf(c, 0) - 2 * pad).coerceIn(minOf(minArea - 2 * pad, maxSide), maxSide).coerceAtLeast(0)
-        hero.artSide = side.toFloat()
+        val fullSide = (view - hh - th - rest - maxOf(c, 0) - 2 * pad).coerceIn(minOf(minArea - 2 * pad, maxSide), maxSide).coerceAtLeast(0)
         hero.headerHeight = hh.toFloat()
-        val baseArea = side + 2 * pad
-        val spare = (view - hh - baseArea - th - rest).coerceAtLeast(0).toFloat()
+        val spare = (view - hh - (fullSide + 2 * pad) - th - rest).coerceAtLeast(0).toFloat()
         // Three shares, plus the seek bar's gap once it is above nothing (c + s > 0).
         val most = (MAX_GAP.toPx() - (sh - times) - gapX).coerceAtLeast(0f)
         val share = (if (c + spare / 3f > 0f) (spare - c) / 4f else spare / 3f).coerceIn(0f, most).roundToInt()
         val seekGap = maxOf(c + share, 0)
         // What the gaps leave goes to the mode area, above the controls.
-        val extra = (spare.roundToInt() - 3 * share - seekGap).coerceAtLeast(0)
-        val areaH = baseArea + extra
-        hero.artTop = (pad + extra / 2).toFloat()
+        val fullExtra = (spare.roundToInt() - 3 * share - seekGap).coerceAtLeast(0)
+        // The band comes out of the area alone, so the controls stay put: its spare room first, then
+        // the artwork's size.
+        val extra = (fullExtra - band).coerceAtLeast(0)
+        val side = (fullSide - (band - (fullExtra - extra))).coerceAtLeast(0)
+        hero.artSide = side.toFloat()
+        val areaH = side + 2 * pad + extra
+        // Centred in the area; with the band, as high as it was less all of the band (as far as the
+        // top margin allows), not half of it.
+        hero.artTop = (pad + (if (band > 0) (fullExtra / 2 - band).coerceIn(0, extra) else extra / 2)).toFloat()
         // An immersive artwork from the top of the area (under the status bar and the handle: the
         // room there is its top strip), raised only as far as it must be to end above the title.
         hero.immersiveTop = minOf(0, areaH - areaW).toFloat()
@@ -601,22 +625,24 @@ private fun PlayerLayoutTall(
         // the area runs on over the (faded) controls to the drawer's top; they stay where they are, under it.
         val l = lift().coerceIn(0f, 1f)
         val peek = liftTo()
-        val areaL = if (l > 0f && peek > 0) androidx.compose.ui.util.lerp(areaK, maxOf(areaK, view - peek - hh - titleFold), l) else areaK
-        val mp = slots[1].map { it.measure(Constraints.fixed(areaW, areaL + titleFold)) }
-        val titleTop = hh + areaK + titleFold
-        val seekTop = hh + areaK + th + seekGapK
+        val areaL = if (l > 0f && peek > 0) androidx.compose.ui.util.lerp(areaK, maxOf(areaK, view - peek - hh - band - titleFold), l) else areaK
+        val mp = slots[1].map { it.measure(Constraints.fixed(areaW, areaL + band + titleFold)) }
+        val titleTop = hh + areaK + band + titleFold
+        val seekTop = hh + areaK + band + th + seekGapK
         val transportTop = seekTop + shNow + gapX + shareK
         val actionsTop = transportTop + xhNow + gapAK + shareK
         layout(full, maxOf(actionsTop + ahK + shareK, view)) {
             hp.forEach { it.place(0, 0) }
             // Lifted, the area goes over the controls it covers (it takes their touches).
             if (l > 0f) {
+                bp.forEach { it.place(x0, titleTop) }
                 tp.forEach { it.place(x0, titleTop) }
                 sp.forEach { it.place(x0, seekTop) }
                 xp.forEach { it.place(x0, transportTop) }
             }
             mp.forEach { it.place(areaX, hh) }
             if (l <= 0f) {
+                bp.forEach { it.place(x0, titleTop) }
                 tp.forEach { it.place(x0, titleTop) }
                 sp.forEach { it.place(x0, seekTop) }
                 xp.forEach { it.place(x0, transportTop) }
@@ -887,6 +913,22 @@ private fun PlayerSeek(position: () -> Long, fold: () -> Float = { 0f }, shown: 
         WavySeekBar(position = position, durationMs = track.durationMs.toLong(), playing = playing && !reducedMotion, onSeek = { client.dispatch(Commands.seekTo(it)) },
             stillWave = saver.has(app.hocket.core.api.SaverFeature.StillSeekWave), advancing = playing, centre = { SeekStatus() }, timesFold = fold, shown = shown())
     }
+}
+
+/**
+ * The line being sung (`lyrics.playerLine`), centred just above the title in the band the layout
+ * keeps for it; zero high, so nothing moves as lines come and go. Gone as the mode leaves the artwork.
+ */
+@Composable
+private fun AboveTitleLine(visible: Boolean, modeFraction: () -> Float) {
+    PlayerLyricLine(
+        visible = visible,
+        textStyle = TextStyle(fontSize = 20.sp, lineHeight = 25.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center),
+        color = LocalContentColor.current,
+        // A little into the title row's top margin: midway between a card's bottom edge and the title.
+        modifier = Modifier.fillMaxWidth().padding(horizontal = PAGE_PADDING).offset { IntOffset(0, 8.dp.roundToPx()) },
+        alpha = { (1f - 2f * modeFraction()).coerceIn(0f, 1f) },
+    )
 }
 
 /**
