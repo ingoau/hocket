@@ -18,6 +18,7 @@ import { filterName } from "../lib/filters";
 import { showToast } from "../lib/ui-toast";
 import { filterMenuItems, playFilter } from "../lib/pin-menus";
 import { libraryDragProps } from "../lib/queue-drag";
+import { recallScroll, rememberScroll } from "../lib/scroll-memory";
 import { HOME_SECTIONS_KEY, isPinned, moveBefore, moveKnown, moveShown, parseSections, resolvedStyle, sectionDef, sectionsValue, updateSection, setShelves, shelfOf, type SectionPref, type SectionStyle } from "../lib/home-sections";
 import { refOf } from "../lib/track-ref";
 
@@ -37,24 +38,18 @@ const REDISCOVER = {
 } as const;
 
 /**
- * Where Home was scrolled, and whether the next visit came by Back or Forward: those return to
- * the same place in the feed, as a browser does; going to Home afresh starts at the top.
+ * Keeps [main] (Home's scroller) where it was when Home is come back to by Back or Forward, through
+ * the shared per-visit memory (lib/scroll-memory.ts). The sections arrive one by one, so rather than
+ * waiting for one "ready" moment it keeps trying as the feed grows.
  */
-let homeScrollTop = 0;
-let homeByHistory = false;
-useApp.subscribe((s, prev) => {
-  if (s.route !== prev.route) homeByHistory = s.history.length < prev.history.length || s.future.length < prev.future.length;
-});
-
-/** Keeps [main] (Home's scroller) where it was when Home is come back to by Back or Forward. */
 function useHomeScrollMemory(main: React.RefObject<HTMLDivElement | null>): void {
   useLayoutEffect(() => {
     const el = main.current;
     if (!el) return;
-    const target = homeByHistory ? homeScrollTop : 0;
-    homeScrollTop = target;
-    // The sections arrive one by one, so the feed may not be tall enough yet: try again as it
-    // grows, until it gets there, the user scrolls, or a moment has passed.
+    const route = useApp.getState().route;
+    const target = recallScroll(route, "home") ?? 0;
+    // The feed may not be tall enough yet: try again as it grows, until it gets there, the user
+    // scrolls, or a moment has passed.
     let done = target <= 0;
     const restore = () => {
       if (done) return;
@@ -66,7 +61,7 @@ function useHomeScrollMemory(main: React.RefObject<HTMLDivElement | null>): void
     const ro = new ResizeObserver(restore);
     for (const child of el.children) ro.observe(child);
     const timer = setTimeout(stop, 1500);
-    const onScroll = () => { if (done) homeScrollTop = el.scrollTop; };
+    const onScroll = () => { if (done) rememberScroll(route, "home", el.scrollTop); };
     el.addEventListener("scroll", onScroll, { passive: true });
     el.addEventListener("wheel", stop, { passive: true });
     el.addEventListener("pointerdown", stop);
