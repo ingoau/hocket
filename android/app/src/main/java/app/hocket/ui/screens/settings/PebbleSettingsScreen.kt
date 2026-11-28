@@ -149,6 +149,9 @@ private fun itemIcon(id: String): ImageVector = when (id) {
     "downloads" -> HocketIcons.Filled.Download
     "search" -> HocketIcons.Filled.Search
     "lyrics" -> HocketIcons.Filled.Lyrics
+    "queues" -> HocketIcons.Filled.PushPin
+    "snooze" -> HocketIcons.Filled.Snooze
+    "offline" -> HocketIcons.Outlined.OfflineBolt
     else -> HocketIcons.Filled.MusicNote
 }
 
@@ -185,6 +188,9 @@ private fun itemLabel(id: String): String = stringResource(
         "downloads" -> R.string.pebble_item_downloads
         "search" -> R.string.pebble_item_search
         "lyrics" -> R.string.pebble_item_lyrics
+        "queues" -> R.string.pebble_item_queues
+        "snooze" -> R.string.pebble_item_snooze
+        "offline" -> R.string.pebble_item_offline
         else -> R.string.pebble_item_now_playing
     },
 )

@@ -27,6 +27,9 @@ def build(ctx):
         if os.environ.get('HOCKET_DEMO'):
             # Sample now-playing state for emulator screenshots, no phone needed.
             ctx.env.append_value('DEFINES', 'HOCKET_DEMO=1')
+            if os.environ.get('HOCKET_DEMO_BUTTONS'):
+                # Buttons-only on a touch watch too, so emu-button reaches every screen.
+                ctx.env.append_value('DEFINES', 'HOCKET_DEMO_BUTTONS=1')
         ctx.set_group(ctx.env.PLATFORM_NAME)
         app_elf = '{}/pebble-app.elf'.format(ctx.env.BUILD_DIR)
         ctx.pbl_build(source=ctx.path.ant_glob('src/c/**/*.c'), target=app_elf, bin_type='app')

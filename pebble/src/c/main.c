@@ -202,7 +202,7 @@ static void prv_send_hello(void) {
 
 static const uint8_t DEFAULT_MENU[] = {ItemNowPlaying, ItemQueue, ItemLibrary, ItemLove, ItemStash, ItemRating,
                                        ItemShuffle, ItemRepeat, ItemGoAlbum, ItemGoArtist, ItemPlayOn};
-static const uint8_t DEFAULT_ACTIONS[] = {ItemRating, ItemLove, ItemStash, ItemShuffle, ItemRepeat,
+static const uint8_t DEFAULT_ACTIONS[] = {ItemRating, ItemLove, ItemStash, ItemSnooze, ItemShuffle, ItemRepeat,
                                           ItemGoAlbum, ItemGoArtist, ItemPlayOn};
 
 static void prv_default_settings(Settings *s) {
@@ -602,6 +602,16 @@ void open_menu_item(MenuItemId id, bool from_menu) {
     case ItemGoAlbum: list_push_remote("goAlbum", g_now.album[0] ? g_now.album : "Album"); break;
     case ItemGoArtist: list_push_remote("goArtist", g_now.artist[0] ? g_now.artist : "Artist"); break;
     case ItemPlayOn: list_push_remote("devices", "Play on"); break;
+    case ItemQueues: list_push_remote("queues", "Queues"); break;
+    case ItemOffline: list_push_remote("offline", "Available offline"); break;
+    case ItemSnooze:
+      if (g_now.flags & NowHasTrack) {
+        list_push_remote("snooze", "Snooze for");
+      } else {
+        pop_to_now_playing();
+        show_notice("Nothing playing");
+      }
+      break;
     case ItemLove:
       send_cmd(CmdToggleLove, 0, NULL, NULL);
       g_now.flags ^= NowLoved;  // optimistic; the phone's next state confirms
@@ -657,6 +667,9 @@ const char *menu_item_label(MenuItemId id, char *buf, size_t n) {
     case ItemDownloads: return "Downloads";
     case ItemSearch: return "Search";
     case ItemLyrics: return "Lyrics";
+    case ItemQueues: return "Queues";
+    case ItemSnooze: return "Snooze";
+    case ItemOffline: return "Available offline";
     case ItemCount: break;
   }
   return "";
@@ -717,6 +730,13 @@ static void prv_demo(void) {
   g_now.flags = NowPlaying | NowHasTrack | NowReportsPosition | NowLoved;
   g_now.rating = 4;
   g_phone_seen = true;
+#ifdef HOCKET_DEMO_BUTTONS
+  // Emulator screenshots on a touch watch: Back opens the menu, so the buttons reach every screen.
+  g_settings.buttons_only = true;
+  static const uint8_t MORE[] = {ItemSnooze, ItemQueues, ItemOffline};
+  for (size_t i = 0; i < sizeof(MORE) && g_settings.menu_count < MAX_MENU_ITEMS; i++) g_settings.menu[g_settings.menu_count++] = MORE[i];
+  prv_apply_settings();
+#endif
   now_playing_update(true);
 }
 #endif

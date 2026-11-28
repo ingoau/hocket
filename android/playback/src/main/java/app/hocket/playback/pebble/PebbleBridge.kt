@@ -3,35 +3,53 @@ package app.hocket.playback.pebble
 import android.content.Context
 import android.os.SystemClock
 import app.hocket.core.Commands
-import app.hocket.core.historyEntries
-import app.hocket.core.upcomingEntries
 import app.hocket.core.CoreHandle
+import app.hocket.core.entryAt
 import app.hocket.core.HocketJson
 import app.hocket.core.Queries
 import app.hocket.core.SettingKeys
-import app.hocket.core.api.TrackRef
+import app.hocket.core.api.AccountInfo
 import app.hocket.core.api.Command
+import app.hocket.core.api.CommandAddToQueueInner
+import app.hocket.core.api.CommandPlayLaterInner
+import app.hocket.core.api.CommandPlayNextInner
+import app.hocket.core.api.CommandRestoreSavedQueueInner
+import app.hocket.core.api.CommandSnoozeInner
 import app.hocket.core.api.CommandStashAddInner
 import app.hocket.core.api.DeviceInfo
 import app.hocket.core.api.Event
+import app.hocket.core.api.FilterField
+import app.hocket.core.api.FilterNode
+import app.hocket.core.api.FilterOp
+import app.hocket.core.api.FilterRule
+import app.hocket.core.api.FilterValue
 import app.hocket.core.api.LyricsTier
 import app.hocket.core.api.MediaSessionAction
 import app.hocket.core.api.MediaSessionState
+import app.hocket.core.api.NetworkKind
+import app.hocket.core.api.NetworkState
+import app.hocket.core.api.OfflineState
 import app.hocket.core.api.Page
 import app.hocket.core.api.PinTarget
 import app.hocket.core.api.QueryResult
+import app.hocket.core.api.QueueEntry
 import app.hocket.core.api.QueueView
 import app.hocket.core.api.RepeatMode
 import app.hocket.core.api.ResumeOffer
 import app.hocket.core.api.SearchResults
 import app.hocket.core.api.Snapshot
+import app.hocket.core.api.SnoozeFor
+import app.hocket.core.api.SortOrder
+import app.hocket.core.api.TrackRef
 import app.hocket.core.api.TrackSummary
 import app.hocket.core.client.PositionClock
+import app.hocket.playback.CastDevices
 import app.hocket.playback.isPositionTick
 import app.hocket.playback.pebble.PebbleProtocol.Cmd
 import app.hocket.playback.pebble.PebbleProtocol.Flag
 import app.hocket.playback.pebble.PebbleProtocol.Key
 import app.hocket.playback.pebble.PebbleProtocol.PAGE
+import app.hocket.playback.pebble.PebbleProtocol.QueueSlot
 import app.hocket.playback.pebble.PebbleProtocol.Row
 import app.hocket.playback.pebble.PebbleProtocol.RowFlag
 import app.hocket.playback.pebble.PebbleProtocol.Type
@@ -44,9 +62,11 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 
@@ -91,10 +111,22 @@ class PebbleBridge(
         private const val TEXT_MAX = 95
         /** One volume button press, as the core's volume up/down. */
         private const val VOLUME_STEP = 0.05
-        /** Played tracks before the current one: fewer than a page, so the first page holds it. */
-        private const val QUEUE_HISTORY = 8
         /** Page size when a held playlist row asks for all of its tracks. */
         private const val PLAYLIST_PAGE = 500u
+        /** Queue rows the watch can act on after scrolling past the core's window ([servedQueue]). */
+        private const val SERVED_QUEUE_MAX = 256
+        /** How long Play on waits for a first Cast receiver when the scan has only just started. */
+        private const val CAST_WAIT_MS = 2_000L
+        /** How long Play on keeps an active Cast scan up after the watch asked for the list. */
+        private const val CAST_SCAN_MS = 15_000L
+        /** Snooze rows, as the phone's song menu offers them. */
+        internal val SNOOZE = listOf(
+            "day" to SnoozeFor.Day, "threeDays" to SnoozeFor.ThreeDays, "week" to SnoozeFor.Week,
+            "month" to SnoozeFor.Month, "indefinite" to SnoozeFor.Indefinite,
+        )
+        /** The core's built-in "Available offline" rule (the app's `availableOfflineFilter`). */
+        private val AVAILABLE_OFFLINE = FilterNode.All(listOf(FilterNode.Rule(FilterRule(FilterField.AvailableOffline, FilterOp.IsTrue, FilterValue.Bool(true)))))
+        private val SNOOZE_LABEL = mapOf("day" to "1 day", "threeDays" to "3 days", "week" to "1 week", "month" to "1 month", "indefinite" to "Indefinitely")
     }
 
     private val senderLazy = lazy { DefaultPebbleSender(context) }
@@ -112,6 +144,22 @@ class PebbleBridge(
     private var clockOffsetMs = 0.0
     private var queue: QueueView? = null
     private var devices: List<DeviceInfo> = emptyList()
+    private var accounts: List<AccountInfo> = emptyList()
+    private var network: NetworkState? = null
+    /** The device holding the transport lease, and this one: offline, only songs played here are refused. */
+    private var leaseOwner: String? = null
+    private var selfDeviceId = ""
+    /** Queue entries sent to the watch by row id, so a row past the core's window still acts. */
+    private val servedQueue = object : LinkedHashMap<String, QueueEntry>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, QueueEntry>?) = size > SERVED_QUEUE_MAX
+    }
+    /** Track rows whose id was too long for `track:<tag>:<id>` ([PebbleProtocol.longTrackRowId]). */
+    private val longTrackRows = object : LinkedHashMap<String, TrackRef>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, TrackRef>?) = size > SERVED_QUEUE_MAX
+    }
+    /** Sources seen in rows sent to the watch, besides the accounts': a track row's tag maps back to one. */
+    private val seenSources = HashSet<String>()
+    private var castScanJob: Job? = null
     private var resumeOffer: ResumeOffer? = null
     private val settings = HashMap<String, String>()
     /** [settings] holds the core's values (a snapshot arrived); until then the watch keeps its own. */
@@ -134,7 +182,10 @@ class PebbleBridge(
             is Event.MediaSession -> onSession(event.data.state)
             is Event.QueueChanged -> { queue = event.data.queue; nowDirty = true; pushNowSoon() }
             is Event.DevicesChanged -> devices = event.data.devices
-            is Event.TransportChanged -> volumeKnown = event.data.transport.volumeDevice != null
+            is Event.TransportChanged -> { volumeKnown = event.data.transport.volumeDevice != null; leaseOwner = event.data.transport.lease.owner }
+            is Event.AccountsChanged -> accounts = event.data.accounts
+            is Event.NetworkChanged -> network = event.data.network
+            is Event.IdentityChanged -> selfDeviceId = event.data.identity.deviceId
             is Event.ResumeOfferChanged -> { resumeOffer = event.data.offer; nowDirty = true; pushNowSoon() }
             is Event.ConnectionChanged -> clockOffsetMs = event.data.state.clockOffsetMs
             is Event.SettingChanged -> {
@@ -154,6 +205,10 @@ class PebbleBridge(
         devices = snapshot.devices
         resumeOffer = snapshot.resumeOffer
         volumeKnown = snapshot.transport.volumeDevice != null
+        leaseOwner = snapshot.transport.lease.owner
+        accounts = snapshot.accounts
+        network = snapshot.network
+        selfDeviceId = snapshot.identity.deviceId
         snapshot.settings.forEach { settings[it.key] = it.value }
         settingsLoaded = true
         if (open) scope.launch { sendSettings() }
@@ -196,6 +251,7 @@ class PebbleBridge(
         lastSettings = null
         nowJob?.cancel()
         artJob?.cancel()
+        stopCastScan()
     }
 
     fun release() {
@@ -368,17 +424,29 @@ class PebbleBridge(
             Cmd.STASH -> playingRef?.let { dispatch(Command.StashAdd(CommandStashAddInner(listOf(it)))) }
             Cmd.ACTIVATE -> activate(path, item)
             Cmd.PLAY_NEXT, Cmd.PLAY_LATER -> {
-                val server = serverId() ?: return
                 // A whole playlist can take a few queries: off the watch's message.
-                scope.launch {
-                    val ids = trackIds(path, item)
-                    val refs = ids.map { TrackRef(server, it) }
-                    if (refs.isNotEmpty()) dispatch(if (cmd == Cmd.PLAY_NEXT) Commands.playNext(refs) else Commands.playLater(refs))
-                }
+                scope.launch { queueCommand(cmd == Cmd.PLAY_NEXT, path, item)?.let(::dispatch) }
             }
         }
         // The watch already changed its own state optimistically; this confirms it.
         pushNowSoon()
+    }
+
+    /**
+     * Play next, or the watch's "Add to queue": the end of the "Next in queue" group like the phone's
+     * Add to queue, or the end of the list when the Queue section setting is off (no group then). A
+     * queue row moves (or copies, when played) its entry by key instead of adding the song again.
+     */
+    internal suspend fun queueCommand(next: Boolean, rawPath: String, item: String): Command? {
+        val keys = if (split(resolve(rawPath) ?: rawPath).first == "queue") listOfNotNull(queueEntry(item)?.item?.key) else emptyList()
+        val tracks = if (keys.isEmpty()) trackRefs(rawPath, item) else emptyList()
+        if (keys.isEmpty() && tracks.isEmpty()) return null
+        val k = keys.ifEmpty { null }
+        return when {
+            next -> Command.PlayNext(CommandPlayNextInner(tracks, k))
+            bool(SettingKeys.QUEUE_SECTION, true) -> Command.AddToQueue(CommandAddToQueueInner(tracks, k))
+            else -> Command.PlayLater(CommandPlayLaterInner(tracks, k))
+        }
     }
 
     /**
@@ -403,17 +471,20 @@ class PebbleBridge(
 
     /** Selecting a row that is not browsable: play it, jump to it, or hand off to it. */
     private suspend fun activate(rawPath: String, item: String) {
-        val server = serverId() ?: return
+        serverId() ?: return
         val path = resolve(rawPath) ?: return
         val (kind, id) = split(path)
         when (kind) {
             "queue" -> queueEntry(item)?.let { dispatch(Commands.jumpToQueueItem(it.item.key)) }
-            "devices" -> dispatch(Commands.handoffTo(item))
-            "album" -> albumName(id)?.let { name -> playIn(Commands.albumContext(server, id, name), item) }
-            "playlist" -> playlistName(id)?.let { name -> playIn(Commands.playlistContext(server, id, name), item) }
-            "artist" -> artistName(id)?.let { name -> playIn(Commands.artistContext(server, id, name), item) }
-            "search" -> if (item == "top") playTopResult(server, id) else playRow(server, item)
-            else -> playRow(server, item)
+            "devices" -> playOn(item)
+            "queues" -> savedQueueId(item)?.let { dispatch(Command.RestoreSavedQueue(CommandRestoreSavedQueueInner(it))) }
+            "snooze" -> snooze(item)
+            // Each list names its own account: an album, playlist or artist is played from the one it is in.
+            "album" -> album(id)?.let { a -> playIn(Commands.albumContext(a.serverId, a.id, a.name), item) }
+            "playlist" -> playlist(id)?.let { p -> playIn(Commands.playlistContext(p.serverId, p.id, p.name), item) }
+            "artist" -> artist(id)?.let { a -> playIn(Commands.artistContext(a.serverId, a.id, a.name), item) }
+            "search" -> if (item == "top") playTopResult(id) else playRow(item)
+            else -> playRow(item)
         }
     }
 
@@ -426,47 +497,94 @@ class PebbleBridge(
         }
     }
 
-    private suspend fun playRow(server: String, item: String) {
-        if (item.startsWith("track:")) {
-            val id = item.removePrefix("track:")
-            dispatch(Commands.playTracks(listOf(TrackRef(server, id)), 0, trackTitle(TrackRef(server, id)) ?: ""))
-        }
+    private suspend fun playRow(item: String) {
+        val ref = trackRef(item) ?: return
+        dispatch(Commands.playTracks(listOf(ref), 0, trackTitle(ref) ?: ""))
     }
 
-    private suspend fun playTopResult(server: String, text: String) {
-        val r = search(server, text) ?: return
+    private suspend fun playTopResult(text: String) {
+        val r = search(text) ?: return
         r.tracks.firstOrNull()?.let { dispatch(Commands.playTracks(listOf(TrackRef(it.serverId, it.id)), 0, it.title)); return }
-        r.albums.firstOrNull()?.let { dispatch(Commands.playContext(Commands.albumContext(server, it.id, it.name))); return }
-        r.artists.firstOrNull()?.let { dispatch(Commands.playContext(Commands.artistContext(server, it.id, it.name))); return }
-        r.playlists.firstOrNull()?.let { dispatch(Commands.playContext(Commands.playlistContext(server, it.id, it.name))) }
+        r.albums.firstOrNull()?.let { dispatch(Commands.playContext(Commands.albumContext(it.serverId, it.id, it.name))); return }
+        r.artists.firstOrNull()?.let { dispatch(Commands.playContext(Commands.artistContext(it.serverId, it.id, it.name))); return }
+        r.playlists.firstOrNull()?.let { dispatch(Commands.playContext(Commands.playlistContext(it.serverId, it.id, it.name))) }
     }
 
-    /** The tracks a held row stands for (Play next / Add to queue). */
-    private suspend fun trackIds(rawPath: String, item: String): List<String> {
-        if (item.startsWith("track:")) return listOf(item.removePrefix("track:"))
-        if (item.startsWith("album:")) return albumTracks(item.removePrefix("album:")).map { it.id }
-        if (item.startsWith("playlist:")) return playlistTrackIds(item.removePrefix("playlist:"))
+    /** The song a `track:` row names, in the account it came from. */
+    internal fun trackRef(item: String): TrackRef? {
+        if (!item.startsWith("track:")) return null
+        longTrackRows[item]?.let { return it }
+        val (tag, id) = PebbleProtocol.parseTrackRow(item) ?: return null
+        val source = PebbleProtocol.trackRowSource(tag, accounts.map { it.source } + seenSources) ?: return null
+        return TrackRef(source, id)
+    }
+
+    /** A pinned download's song: pins name the id only, so the first account's, as the phone's pins do. */
+    private fun defaultSource(): String = accounts.firstOrNull()?.source ?: serverId().orEmpty()
+
+    /** The songs a held row stands for (Play next / Add to queue), each in its own account. */
+    private suspend fun trackRefs(rawPath: String, item: String): List<TrackRef> {
+        if (item.startsWith("track:")) return listOfNotNull(trackRef(item))
+        if (item.startsWith("album:")) return albumTracks(item.removePrefix("album:")).map { TrackRef(it.serverId, it.id) }
+        if (item.startsWith("playlist:")) return playlistTrackRefs(item.removePrefix("playlist:"))
         val path = resolve(rawPath) ?: return emptyList()
         val (kind, id) = split(path)
         val index = item.removePrefix("t:").toIntOrNull()
         return when {
-            kind == "queue" -> listOfNotNull(queueEntry(item)?.track?.id)
-            kind == "album" && index != null -> listOfNotNull(albumTracks(id).getOrNull(index)?.id)
-            kind == "playlist" && index != null -> (query(Queries.playlistTracks(id, Page(index.toUInt(), 1u))) as? QueryResult.Tracks)?.data?.items?.map { it.id }.orEmpty()
+            kind == "album" && index != null -> listOfNotNull(albumTracks(id).getOrNull(index)?.let { TrackRef(it.serverId, it.id) })
+            kind == "playlist" && index != null -> (query(Queries.playlistTracks(id, Page(index.toUInt(), 1u))) as? QueryResult.Tracks)?.data?.items?.map { TrackRef(it.serverId, it.id) }.orEmpty()
             else -> emptyList()
         }
     }
 
-    /** Every track of a playlist, page by page. */
-    private suspend fun playlistTrackIds(id: String): List<String> {
-        val ids = mutableListOf<String>()
+    /** Every track of a playlist, page by page (a Mixed playlist's come from several accounts). */
+    private suspend fun playlistTrackRefs(id: String): List<TrackRef> {
+        val refs = mutableListOf<TrackRef>()
         while (true) {
-            val page = (query(Queries.playlistTracks(id, Page(ids.size.toUInt(), PLAYLIST_PAGE))) as? QueryResult.Tracks)?.data ?: break
+            val page = (query(Queries.playlistTracks(id, Page(refs.size.toUInt(), PLAYLIST_PAGE))) as? QueryResult.Tracks)?.data ?: break
             if (page.items.isEmpty()) break
-            ids += page.items.map { it.id }
-            if (ids.size.toUInt() >= page.total) break
+            refs += page.items.map { TrackRef(it.serverId, it.id) }
+            if (refs.size.toUInt() >= page.total) break
         }
-        return ids
+        return refs
+    }
+
+    /** Snooze the playing song for one of [SNOOZE]'s spans, as the phone's song menu does. */
+    private suspend fun snooze(item: String) {
+        val m = session?.metadata
+        val ref = m?.trackId?.let { TrackRef(m.source.orEmpty(), it) } ?: return notice("Nothing playing")
+        val span = SNOOZE.firstOrNull { "snooze:${it.first}" == item } ?: return
+        dispatch(Command.Snooze(CommandSnoozeInner(listOf(ref), span.second)))
+        notice(if (span.second == SnoozeFor.Indefinite) "Snoozed" else "Snoozed for ${SNOOZE_LABEL[span.first]}")
+    }
+
+    /**
+     * Play on a Connect device (a handoff), a Cast receiver, or back on this phone, as the phone's
+     * device sheet does: a receiver picked while another device plays pulls playback here once the
+     * session is up, so it lands on the receiver.
+     */
+    private fun playOn(item: String) {
+        when {
+            item == "self" -> CastDevices.stop()
+            item.startsWith("cast:") -> {
+                val id = item.removePrefix("cast:")
+                val cast = CastDevices.state.value
+                val self = devices.firstOrNull { it.isSelf }
+                if (cast.active?.id == id && self?.playing != false) return CastDevices.stop()
+                val elsewhere = self != null && !self.playing && devices.any { it.playing && !it.isSelf }
+                CastDevices.select(id, if (elsewhere) ({ dispatch(Commands.handoffTo(self!!.id)) }) else null)
+            }
+            else -> dispatch(Commands.handoffTo(item))
+        }
+    }
+
+    private suspend fun savedQueueId(item: String): String? {
+        val queues = (query(app.hocket.core.api.Query.SavedQueues) as? QueryResult.SavedQueues)?.data.orEmpty()
+        return queues.firstOrNull { PebbleProtocol.fitRowId("sq:", it.id) == item }?.id
+    }
+
+    private suspend fun notice(text: String) {
+        send(mapOf(Key.TYPE to u8(Type.NOTICE), Key.NOTICE to str(text)))
     }
 
     // -- lists ---------------------------------------------------------------------------------------
@@ -491,16 +609,17 @@ class PebbleBridge(
     }
 
     /** One page of [rawPath] from [offset]: the total, the rows and (sometimes) a title for the watch. */
-    private suspend fun list(rawPath: String, offset: Int): Triple<Int, List<Row>, String?> {
+    internal suspend fun list(rawPath: String, offset: Int): Triple<Int, List<Row>, String?> {
         val server = serverId()
         val path = resolve(rawPath) ?: return Triple(0, emptyList(), null)
         val (kind, id) = split(path)
         val title = if (rawPath == "goAlbum" || rawPath == "goArtist") session?.metadata?.let { if (rawPath == "goAlbum") it.album else it.artist } else null
         fun whole(rows: List<Row>) = Triple(rows.size, rows.drop(offset).take(PAGE), title)
         return when (kind) {
-            "queue" -> whole(queueRows())
+            "queue" -> queuePage(offset)
             "lyrics" -> whole(lyricsRows())
-            "devices" -> whole(devices.filter { !it.isSelf }.map { Row(it.id, it.name, if (it.playing) "Playing" else "") })
+            "devices" -> whole(deviceRows())
+            "snooze" -> whole(SNOOZE.map { (key, _) -> Row("snooze:$key", SNOOZE_LABEL.getValue(key)) })
             "library" -> whole(librarySections().map { section ->
                 if (section == "search") Row("search", "Search", flags = RowFlag.SEARCH) else Row(section, sectionTitle(section), flags = RowFlag.BROWSABLE)
             })
@@ -518,22 +637,28 @@ class PebbleBridge(
                         Triple(page?.total?.toInt() ?: 0, page?.items.orEmpty().map { Row("artist:${it.id}", it.name, "${it.albumCount} albums", RowFlag.BROWSABLE) }, title)
                     }
                     "recent" -> whole((query(Queries.recentlyPlayed(RECENT_LIMIT)) as? QueryResult.History)?.data.orEmpty()
-                        .map { it.track }.distinctBy { it.id }.map(::trackRow))
+                        .map { it.track }.distinctBy { it.serverId to it.id }.map(::trackRow))
+                    // Downloaded or complete in the stream cache: the songs that play with no network.
+                    "offline" -> {
+                        val page = (query(Queries.tracks("", Page(offset.toUInt(), PAGE.toUInt()), SortOrder.Artist, filter = AVAILABLE_OFFLINE)) as? QueryResult.Tracks)?.data
+                        Triple(page?.total?.toInt() ?: 0, page?.items.orEmpty().map { trackRow(it) }, title)
+                    }
+                    "queues" -> whole(savedQueueRows())
                     "downloads" -> whole((query(app.hocket.core.api.Query.Pins) as? QueryResult.Pins)?.data.orEmpty().map { pin ->
                         when (val t = pin.target) {
                             is PinTarget.Album -> Row("album:${t.data.id}", pin.label, "Album", RowFlag.BROWSABLE)
                             is PinTarget.Playlist -> Row("playlist:${t.data.id}", pin.label, "Playlist", RowFlag.BROWSABLE)
-                            is PinTarget.Track -> Row("track:${t.data.id}", pin.label, "", RowFlag.TRACK)
+                            is PinTarget.Track -> Row(trackRowId(TrackRef(defaultSource(), t.data.id)), pin.label, "", RowFlag.TRACK)
                         }
                     })
                     "album" -> whole(playShuffle() + albumTracks(id).mapIndexed { i, t ->
-                        Row("t:$i", t.title, PebbleProtocol.duration(t.durationMs.toLong()), RowFlag.TRACK)
+                        Row("t:$i", t.title, PebbleProtocol.duration(t.durationMs.toLong()), RowFlag.TRACK or unavailable(t.offline))
                     })
                     "playlist" -> {
                         // Paged: the play / shuffle rows are 0 and 1, track i is row i + 2.
                         val from = (offset - 2).coerceAtLeast(0)
                         val page = (query(Queries.playlistTracks(id, Page(from.toUInt(), PAGE.toUInt()))) as? QueryResult.Tracks)?.data
-                        val tracks = page?.items.orEmpty().mapIndexed { i, t -> Row("t:${from + i}", t.title, t.artist ?: "", RowFlag.TRACK) }
+                        val tracks = page?.items.orEmpty().mapIndexed { i, t -> Row("t:${from + i}", t.title, t.artist ?: "", RowFlag.TRACK or unavailable(t.offline)) }
                         val rows = (if (offset < 2) playShuffle().drop(offset) else emptyList()) + tracks
                         Triple(2 + (page?.total?.toInt() ?: 0), rows, title)
                     }
@@ -545,7 +670,7 @@ class PebbleBridge(
                         Triple(2 + (page?.total?.toInt() ?: 0), rows, title)
                     }
                     "search" -> {
-                        val r = search(server, id) ?: return Triple(0, emptyList(), title)
+                        val r = search(id) ?: return Triple(0, emptyList(), title)
                         val rows = buildList {
                             if (r.tracks.isNotEmpty() || r.albums.isNotEmpty() || r.artists.isNotEmpty() || r.playlists.isNotEmpty()) add(Row("top", "Play top result"))
                             r.tracks.forEach { add(trackRow(it)) }
@@ -563,22 +688,96 @@ class PebbleBridge(
 
     private fun playShuffle() = listOf(Row("play", "Play"), Row("shuffle", "Shuffle"))
 
-    private fun trackRow(t: TrackSummary) = Row("track:${t.id}", t.title, t.artist ?: "", RowFlag.TRACK)
+    private fun trackRow(t: TrackSummary) = Row(trackRowId(TrackRef(t.serverId, t.id)), t.title, t.artist ?: "", RowFlag.TRACK or unavailable(t.offline))
+    private fun trackRow(t: app.hocket.core.api.Track) = Row(trackRowId(TrackRef(t.serverId, t.id)), t.title, t.artist ?: "", RowFlag.TRACK or unavailable(t.offline))
 
-    /** Recent history (enough to scroll back a little), the current track and what follows it. */
-    private fun queueEntries() = queue?.let { it.historyEntries.takeLast(QUEUE_HISTORY) + listOfNotNull(it.current) + it.upcomingEntries }.orEmpty()
+    /** A `track:` row id for [ref], remembering its source (and a hashed id) so the row maps back. */
+    private fun trackRowId(ref: TrackRef): String {
+        if (ref.source.isNotEmpty()) seenSources += ref.source
+        val id = PebbleProtocol.trackRowId(ref.source, ref.id)
+        if (id.startsWith("track:#")) longTrackRows[id] = ref
+        return id
+    }
+
+    /**
+     * [RowFlag.UNAVAILABLE] for a song that can't play while offline, as the phone's rows dim it
+     * (`unavailableOffline` in the app): offline, not downloaded or cached, and it would play on this
+     * device (another device playing gets the tap over the LAN and may well have it).
+     */
+    private fun unavailable(state: OfflineState): Int {
+        if (network?.kind != NetworkKind.Offline || state != OfflineState.None) return 0
+        val owner = leaseOwner
+        return if (owner != null && selfDeviceId.isNotEmpty() && owner != selfDeviceId) 0 else RowFlag.UNAVAILABLE
+    }
+
+    /**
+     * One page of the queue as [PebbleProtocol.queueSlots] lays it out, the whole of it: rows past
+     * the core's window come from `Query.QueueRange`, as the phone and desktop page them in.
+     */
+    private suspend fun queuePage(offset: Int): Triple<Int, List<Row>, String?> {
+        val q = queue ?: return Triple(0, emptyList(), null)
+        val slots = PebbleProtocol.queueSlots(q.historyCount.toInt(), q.currentIndex?.toInt(), q.groupCount.toInt(), q.totalUpcoming.toInt(), q.contextLabel)
+        val page = slots.drop(offset).take(PAGE)
+        val wanted = page.filterIsInstance<QueueSlot.Entry>().map { it.index }
+        val missing = wanted.filter { q.entryAt(it) == null }
+        val extra = if (missing.isEmpty()) null else (query(Commands.queueRange(missing.min(), missing.max() - missing.min() + 1)) as? QueryResult.Queue)?.data
+        val rows = page.mapNotNull { slot ->
+            when (slot) {
+                is QueueSlot.Header -> Row("", slot.title, flags = RowFlag.HEADER)
+                is QueueSlot.Entry -> (q.entryAt(slot.index) ?: extra?.entryAt(slot.index))?.let { queueRow(it, it.item.key == q.current?.item?.key) }
+            }
+        }
+        return Triple(slots.size, rows, null)
+    }
+
+    private fun queueRow(e: QueueEntry, current: Boolean): Row {
+        val id = PebbleProtocol.queueRowId(e.item.key)
+        servedQueue[id] = e
+        val off = if (e.item.unavailable == true) RowFlag.UNAVAILABLE else unavailable(e.track.offline)
+        return Row(id, e.track.title, e.track.artist ?: "", RowFlag.TRACK or off or if (current) RowFlag.CURRENT else 0)
+    }
 
     /** The queue entry a row id the watch sent back stands for ([PebbleProtocol.queueRowId]). */
-    private fun queueEntry(rowId: String) = queueEntries().firstOrNull { PebbleProtocol.queueRowId(it.item.key) == rowId }
+    private fun queueEntry(rowId: String): QueueEntry? =
+        queue?.entries?.firstOrNull { PebbleProtocol.queueRowId(it.item.key) == rowId } ?: servedQueue[rowId]
 
-    /** [queueEntries] as rows; the current one is in the first page, where the watch selects it. */
-    private fun queueRows(): List<Row> {
-        val q = queue ?: return emptyList()
-        val current = q.current?.item?.key
-        return queueEntries().map { e ->
-            val id = PebbleProtocol.queueRowId(e.item.key)
-            if (e.item.key == current) Row(id, e.track.title, "Now playing", RowFlag.CURRENT or RowFlag.TRACK)
-            else Row(id, e.track.title, e.track.artist ?: "", RowFlag.TRACK)
+    /** Hocket Connect devices, then this phone's Cast receivers (and this phone, while casting). */
+    private suspend fun deviceRows(): List<Row> {
+        val connect = devices.filter { !it.isSelf }.map { Row(it.id, it.name, if (it.playing) "Playing" else "") }
+        if (!CastDevices.state.value.available) return connect
+        startCastScan()
+        if (CastDevices.state.value.devices.isEmpty()) withTimeoutOrNull(CAST_WAIT_MS) { CastDevices.state.first { it.devices.isNotEmpty() } }
+        val cast = CastDevices.state.value
+        val selfPlaying = devices.firstOrNull { it.isSelf }?.playing != false
+        val casting = cast.active?.takeIf { selfPlaying }
+        return buildList {
+            addAll(connect)
+            if (casting != null) add(Row("self", "This phone", "Stop casting"))
+            cast.devices.forEach { d ->
+                add(Row("cast:${d.id}", d.name, when { casting?.id == d.id -> "Casting"; cast.connecting == d.id -> "Connecting…"; else -> d.description ?: "Cast" }))
+            }
+        }
+    }
+
+    /** An active Cast scan while the watch's Play on list may be open, as the phone's sheet runs one. */
+    private fun startCastScan() {
+        castScanJob?.cancel()
+        CastDevices.scan(true)
+        castScanJob = scope.launch { delay(CAST_SCAN_MS); CastDevices.scan(false) }
+    }
+
+    private fun stopCastScan() {
+        if (castScanJob?.isActive == true) CastDevices.scan(false)
+        castScanJob?.cancel()
+        castScanJob = null
+    }
+
+    /** Saved queues, as the phone's queue switcher lists them; the playing one is marked. */
+    private suspend fun savedQueueRows(): List<Row> {
+        val playing = queue?.savedQueueId
+        return (query(app.hocket.core.api.Query.SavedQueues) as? QueryResult.SavedQueues)?.data.orEmpty().map {
+            val sub = when { it.id == playing -> "Playing"; it.pinned -> "Pinned · ${it.trackCount} songs"; else -> "${it.trackCount} songs" }
+            Row(PebbleProtocol.fitRowId("sq:", it.id), it.label, sub, if (it.id == playing) RowFlag.CURRENT else 0)
         }
     }
 
@@ -601,6 +800,7 @@ class PebbleBridge(
         "albums" -> "Albums"
         "artists" -> "Artists"
         "recent" -> "Recently played"
+        "offline" -> "Available offline"
         "downloads" -> "Downloads"
         else -> section
     }
@@ -618,7 +818,7 @@ class PebbleBridge(
     private fun split(path: String): Pair<String, String> =
         path.indexOf(':').let { if (it < 0) path to "" else path.substring(0, it) to path.substring(it + 1) }
 
-    private suspend fun search(server: String, text: String): SearchResults? {
+    private suspend fun search(text: String): SearchResults? {
         lastSearch?.takeIf { it.first == text }?.let { return it.second }
         val r = (query(Queries.search("", text.trim(), SEARCH_LIMIT, includeServer = false, requestId = "pebble-" + UUID.randomUUID())) as? QueryResult.Search)?.data
         if (r != null) lastSearch = text to r
@@ -707,9 +907,9 @@ class PebbleBridge(
         runCatching { core().query(q) }.onFailure { PebbleLog.w("query ${q::class.simpleName} failed: ${it.message}") }.getOrNull()
 
     private suspend fun albumTracks(id: String) = (query(Queries.albumTracks(id)) as? QueryResult.TrackList)?.data.orEmpty()
-    private suspend fun albumName(id: String) = (query(Queries.album(id)) as? QueryResult.AlbumDetail)?.data?.name
-    private suspend fun playlistName(id: String) = (query(Queries.playlist(id)) as? QueryResult.PlaylistDetail)?.data?.name
-    private suspend fun artistName(id: String) = (query(Queries.artist(id)) as? QueryResult.ArtistDetail)?.data?.name
+    private suspend fun album(id: String) = (query(Queries.album(id)) as? QueryResult.AlbumDetail)?.data
+    private suspend fun playlist(id: String) = (query(Queries.playlist(id)) as? QueryResult.PlaylistDetail)?.data
+    private suspend fun artist(id: String) = (query(Queries.artist(id)) as? QueryResult.ArtistDetail)?.data
     private suspend fun trackTitle(track: TrackRef) = (query(Queries.track(track)) as? QueryResult.TrackDetail)?.data?.title
 
     private fun num(data: PebbleDictionary, key: UInt): Int = when (val v = data[key]) {

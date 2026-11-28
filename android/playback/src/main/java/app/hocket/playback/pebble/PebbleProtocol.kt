@@ -10,13 +10,13 @@ import java.util.UUID
  */
 object PebbleProtocol {
     val APP_UUID: UUID = UUID.fromString("2447e130-2efa-41b2-a729-e57ee2f531b2")
-    const val PROTO = 1
+    const val PROTO = 2
 
     /** Rows per list page; the watch caches two pages. */
     const val PAGE = 12
 
     /** `MAX_MENU_ITEMS` in hocket.h: how many menu or action ids one settings blob carries. */
-    const val MAX_MENU_ITEMS = 17
+    const val MAX_MENU_ITEMS = 20
 
     /** Album-art bytes per message (the watch's inbox is 4 KiB). */
     const val ART_CHUNK = 1800
@@ -114,6 +114,8 @@ object PebbleProtocol {
         const val SEARCH = 4
         const val TRACK = 8
         const val HEADER = 16
+        /** A song that can't play here while offline (not downloaded or cached): dimmed, and refused. */
+        const val UNAVAILABLE = 32
     }
 
     /** One list row as the watch shows it. [id] is a path when [RowFlag.BROWSABLE] is set. */
@@ -197,6 +199,101 @@ object PebbleProtocol {
         return "q:" + java.lang.Long.toHexString(h)
     }
 
+    private fun fnv64(text: String): Long {
+        var h = 0xcbf29ce484222325uL.toLong()
+        for (b in text.toByteArray(Charsets.UTF_8)) {
+            h = h xor (b.toLong() and 0xff)
+            h *= 0x100000001b3L
+        }
+        return h
+    }
+
+    /**
+     * A short tag for a source (the account a track id is valid in), so a track row names its song
+     * within [ID_MAX]: 4 hex digits of its SHA-256 (well mixed, so ids that differ in one character
+     * don't share a tag), which [trackRowSource] maps back against the sources the phone knows.
+     */
+    fun sourceTag(source: String): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest(source.toByteArray(Charsets.UTF_8)).take(2).joinToString("") { "%02x".format(it) }
+
+    /**
+     * A track row's id: `track:<sourceTag>:<id>`, so playing it or holding it reaches the right
+     * account (#multi-account: the first account's id named another account's song). An id too long
+     * for that goes as `track:#<hash of source and id>`, which the bridge remembers.
+     */
+    fun trackRowId(source: String, id: String): String {
+        val plain = "track:${sourceTag(source)}:$id"
+        return if (plain.toByteArray(Charsets.UTF_8).size <= ID_MAX) plain else longTrackRowId(source, id)
+    }
+
+    internal fun longTrackRowId(source: String, id: String): String = "track:#" + java.lang.Long.toHexString(fnv64("$source\u0000$id"))
+
+    /** [prefix] + [id] when it fits the watch's [ID_MAX], else [prefix] + `#` + a hash the phone matches against the list again. */
+    fun fitRowId(prefix: String, id: String): String {
+        val plain = prefix + id
+        return if (plain.toByteArray(Charsets.UTF_8).size <= ID_MAX) plain else prefix + "#" + java.lang.Long.toHexString(fnv64(id))
+    }
+
+    /** The tag and id of a `track:<tag>:<id>` row; null for any other id (a hashed one included). */
+    fun parseTrackRow(rowId: String): Pair<String, String>? {
+        if (!rowId.startsWith("track:") || rowId.startsWith("track:#")) return null
+        val rest = rowId.removePrefix("track:")
+        val at = rest.indexOf(':')
+        if (at != 4) return null
+        return rest.substring(0, at) to rest.substring(at + 1)
+    }
+
+    /** The source among [sources] whose tag [tag] is. */
+    fun trackRowSource(tag: String, sources: Collection<String>): String? = sources.firstOrNull { sourceTag(it) == tag }
+
+    // -- Queue -------------------------------------------------------------------------------------
+
+    /** One row of the watch's queue list: a section heading, or the queue entry at list index [index]. */
+    sealed interface QueueSlot {
+        data class Header(val title: String) : QueueSlot
+        data class Entry(val index: Int) : QueueSlot
+    }
+
+    /** Played tracks the watch's queue shows before the current one: fewer than a page with the headings, so the first page holds the current row. */
+    const val QUEUE_HISTORY = 8
+
+    /**
+     * The watch's queue as the phone and desktop lay it out (`queueSections` in the desktop): the last
+     * [history] played under "History", the current entry under "Now playing", then "Next in queue"
+     * (the group) and "Next from: <context>" (or "Later") for the rest. Indices are list indices of
+     * the core's queue (`history ++ [current] ++ upcoming`), every upcoming entry included, not just
+     * the core's window.
+     */
+    fun queueSlots(
+        historyCount: Int,
+        currentIndex: Int?,
+        groupCount: Int,
+        totalUpcoming: Int,
+        contextLabel: String?,
+        history: Int = QUEUE_HISTORY,
+    ): List<QueueSlot> = buildList {
+        val shown = minOf(history, historyCount).coerceAtLeast(0)
+        if (shown > 0) {
+            add(QueueSlot.Header("History"))
+            for (i in historyCount - shown until historyCount) add(QueueSlot.Entry(i))
+        }
+        if (currentIndex != null) {
+            add(QueueSlot.Header("Now playing"))
+            add(QueueSlot.Entry(currentIndex))
+        }
+        val upStart = currentIndex?.plus(1) ?: historyCount
+        val group = groupCount.coerceIn(0, totalUpcoming.coerceAtLeast(0))
+        if (group > 0) {
+            add(QueueSlot.Header("Next in queue"))
+            for (i in upStart until upStart + group) add(QueueSlot.Entry(i))
+        }
+        val rest = totalUpcoming - group
+        if (rest > 0) {
+            add(QueueSlot.Header(contextLabel?.takeIf { it.isNotBlank() }?.let { "Next from: $it" } ?: "Later"))
+            for (i in upStart + group until upStart + group + rest) add(QueueSlot.Entry(i))
+        }
+    }
+
     // -- Settings ----------------------------------------------------------------------------------
 
     val GESTURES = listOf("none", "queue", "library", "actions", "back", "lyrics")
@@ -205,11 +302,12 @@ object PebbleProtocol {
     val MENU_ITEMS = listOf(
         "nowPlaying", "queue", "library", "love", "rating", "shuffle", "repeat", "goAlbum",
         "goArtist", "playOn", "playlists", "albums", "artists", "downloads", "search", "lyrics", "stash",
+        "queues", "snooze", "offline",
     )
     val DEFAULT_MENU = listOf("nowPlaying", "queue", "library", "love", "stash", "rating", "shuffle", "repeat", "goAlbum", "goArtist", "playOn")
-    val DEFAULT_ACTIONS = listOf("rating", "love", "stash", "shuffle", "repeat", "goAlbum", "goArtist", "playOn")
-    val ACTION_ITEMS = DEFAULT_ACTIONS + "lyrics"
-    val LIBRARY_SECTIONS = listOf("playlists", "albums", "artists", "recent", "downloads", "search")
+    val DEFAULT_ACTIONS = listOf("rating", "love", "stash", "snooze", "shuffle", "repeat", "goAlbum", "goArtist", "playOn")
+    val ACTION_ITEMS = DEFAULT_ACTIONS + listOf("lyrics", "queues")
+    val LIBRARY_SECTIONS = listOf("playlists", "albums", "artists", "recent", "offline", "downloads", "search")
 
     data class WatchSettings(
         val touchNavigation: Boolean = false,

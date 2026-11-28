@@ -85,4 +85,56 @@ class PebbleProtocolTest {
         assertEquals(true, id.startsWith("q:") && id.length <= 47)
         assertEquals(false, id == PebbleProtocol.queueRowId(long.dropLast(1) + "8"))
     }
+
+    @Test
+    fun newItemsHaveTheWatchsIds() {
+        // MenuItemId in hocket.h.
+        assertEquals(17, PebbleProtocol.MENU_ITEMS.indexOf("queues"))
+        assertEquals(18, PebbleProtocol.MENU_ITEMS.indexOf("snooze"))
+        assertEquals(19, PebbleProtocol.MENU_ITEMS.indexOf("offline"))
+        assertEquals(PebbleProtocol.MAX_MENU_ITEMS, PebbleProtocol.MENU_ITEMS.size)
+        assertEquals(true, "snooze" in PebbleProtocol.DEFAULT_ACTIONS)
+        assertEquals(true, "offline" in PebbleProtocol.LIBRARY_SECTIONS)
+        // Every item fits one settings blob.
+        val blob = PebbleProtocol.encodeSettings(PebbleProtocol.WatchSettings(menu = PebbleProtocol.MENU_ITEMS))
+        assertEquals(PebbleProtocol.MENU_ITEMS.size, blob[8].toInt())
+    }
+
+    @Test
+    fun aTrackRowNamesItsAccount() {
+        val id = PebbleProtocol.trackRowId("acct-2", "0123456789abcdef0123456789abcdef")
+        assertEquals(true, id.toByteArray().size <= 47)
+        val (tag, track) = PebbleProtocol.parseTrackRow(id)!!
+        assertEquals("0123456789abcdef0123456789abcdef", track)
+        assertEquals("acct-2", PebbleProtocol.trackRowSource(tag, listOf("acct-1", "acct-2")))
+        // Too long for the tag form: a hashed id instead, which only the bridge's memory maps back.
+        val long = PebbleProtocol.trackRowId("acct-2", "x".repeat(60))
+        assertEquals(true, long.startsWith("track:#"))
+        assertEquals(null, PebbleProtocol.parseTrackRow(long))
+    }
+
+    @Test
+    fun theQueueIsLaidOutInTheAppsSections() {
+        // 20 played, the current one at 20, a group of 2, 5 more from the album.
+        val slots = PebbleProtocol.queueSlots(historyCount = 20, currentIndex = 20, groupCount = 2, totalUpcoming = 7, contextLabel = "Night Drives")
+        val h = PebbleProtocol.QueueSlot::Header
+        val e = PebbleProtocol.QueueSlot::Entry
+        assertEquals(
+            listOf(h("History")) + (12 until 20).map(e) + h("Now playing") + e(20) +
+                h("Next in queue") + e(21) + e(22) + h("Next from: Night Drives") + (23 until 28).map(e),
+            slots,
+        )
+        // The current row is in the first page, where the watch selects it.
+        assertEquals(true, slots.indexOf(e(20)) < PebbleProtocol.PAGE)
+    }
+
+    @Test
+    fun aQueueWithoutAGroupOrContextSaysLater() {
+        val slots = PebbleProtocol.queueSlots(historyCount = 0, currentIndex = 0, groupCount = 0, totalUpcoming = 1, contextLabel = null)
+        assertEquals(
+            listOf(PebbleProtocol.QueueSlot.Header("Now playing"), PebbleProtocol.QueueSlot.Entry(0), PebbleProtocol.QueueSlot.Header("Later"), PebbleProtocol.QueueSlot.Entry(1)),
+            slots,
+        )
+        assertEquals(emptyList<PebbleProtocol.QueueSlot>(), PebbleProtocol.queueSlots(0, null, 0, 0, null))
+    }
 }
