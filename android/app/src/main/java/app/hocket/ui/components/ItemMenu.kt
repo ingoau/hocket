@@ -256,8 +256,9 @@ fun menuLayout(
     /** Whether this one song is snoozed. Null for a selection: the registry's enabled state decides. */
     snoozed: Boolean? = null,
 ): MenuLayout {
-    val byId = actions.associateBy { it.id }
     val replaced = extras.mapNotNull { it.replaces }.toSet()
+    // An extra stands in for the action it replaces (a playlist's remove, the stash's own remove for Add to stash).
+    val byId = actions.filter { it.id !in replaced }.associateBy { it.id }
     val used = mutableSetOf<String>()
     fun take(id: String): ActionDescriptor? { used += id; return byId[id] }
     val play = PLAY_IDS.mapNotNull(::take)
@@ -281,7 +282,7 @@ fun menuLayout(
     val genius = MenuEntry.Genius.takeIf { kind == MenuKind.Song && count <= 1 }
     val context = CONTEXT_IDS.mapNotNull { id -> take(id)?.takeIf { it.enabled && id !in replaced } }
     val (destructiveExtras, otherExtras) = extras.partition { it.destructive }
-    val rest = actions.filter { it.id !in used && it.id !in UNPERFORMABLE }
+    val rest = actions.filter { it.id !in used && it.id !in replaced && it.id !in UNPERFORMABLE }
     val (restDestructive, restOther) = rest.partition { it.destructive }
     var primary = when (kind) {
         MenuKind.Song -> listOfNotNull(preview, addTo, stash, download, share, genius, goAlbum)
@@ -330,7 +331,9 @@ fun connectedShape(index: Int, count: Int, outer: Dp = 20.dp, inner: Dp = 6.dp):
  * [embedded]: the menu without its sheet, laid into a host's own surface (the selection drawer),
  * which scrolls and drags it: every row shows at once (no More, no Show less), and a row that would
  * hide the sheet runs straight away and reports [onDismiss]. [showPlay] false leaves the play group
- * to the host (the drawer keeps it in its peek).
+ * to the host (the drawer keeps it in its peek). [showHeader] false leaves out the header (and its
+ * love toggle): the stash lists its songs above the menu instead. [onPlay] runs a play group action
+ * in the host's own way (the stash plays as a queue of its own name) instead of the registry's.
  */
 @Composable
 fun MenuSheet(
@@ -348,6 +351,10 @@ fun MenuSheet(
     pull: SheetPull? = null,
     embedded: Boolean = false,
     showPlay: Boolean = true,
+    showHeader: Boolean = true,
+    onPlay: ((ActionDescriptor) -> Unit)? = null,
+    /** On the play group (the stash drawer measures where it ends, to rest with it at its foot). */
+    playGroupModifier: Modifier = Modifier,
     /** Embedded: a change sends the menu back to its first page (the host has closed it to a peek). */
     resetKey: Any? = null,
 ) {
@@ -598,7 +605,7 @@ fun MenuSheet(
         // While a share loads, back does nothing: neither the menu nor closing the sheet.
         BackHandler(enabled = page == MenuPage.Sharing) {}
         Column(if (embedded) Modifier.padding(bottom = 16.dp) else Modifier.nestedScroll(followDrag).verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 24.dp)) {
-            MenuHeader(subject, layout.love, loved, tag) { love, unlove ->
+            if (showHeader) MenuHeader(subject, layout.love, loved, tag) { love, unlove ->
                 if (loved == Tick.On) { unlove?.let(::run); loved = Tick.Off } else { love?.let(::run); loved = Tick.On }
             }
             // A sub-page slides in from the end, the menu slides back from the start, and the height
@@ -632,7 +639,7 @@ fun MenuSheet(
             }
             MenuPage.Main -> Column {
             extraTop?.let { it(); androidx.compose.foundation.layout.Spacer(Modifier.height(8.dp)) }
-            if (showPlay && layout.play.isNotEmpty()) PlayGroup(layout.play, tag) { runAndClose(it) }
+            if (showPlay && layout.play.isNotEmpty()) PlayGroup(layout.play, tag, playGroupModifier) { a -> if (onPlay != null) { onPlay(a); hideThen(onRan) } else runAndClose(a) }
             if (layout.rating) {
                 RatingRow(rating) { stars ->
                     rating = stars
@@ -835,10 +842,10 @@ private fun LoveButton(state: Tick, lovedCount: Int, total: Int, enabled: Boolea
  * Play later below, as one connected group: rounded outer corners, tight inner ones, Play filled and wider.
  */
 @Composable
-private fun PlayGroup(play: List<ActionDescriptor>, tag: String, onRun: (ActionDescriptor) -> Unit) {
+private fun PlayGroup(play: List<ActionDescriptor>, tag: String, modifier: Modifier = Modifier, onRun: (ActionDescriptor) -> Unit) {
     val groupLabel = stringResource(R.string.menu_play_group)
     val rows = play.partition { it.id == ActionIds.PLAY || it.id == ActionIds.PLAY_SHUFFLED }.toList().filter { it.isNotEmpty() }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).semantics { isTraversalGroup = true; contentDescription = groupLabel }, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+    Column(modifier.fillMaxWidth().padding(horizontal = 16.dp).semantics { isTraversalGroup = true; contentDescription = groupLabel }, verticalArrangement = Arrangement.spacedBy(3.dp)) {
         rows.forEachIndexed { r, row ->
             val top = r == 0
             val bottom = r == rows.lastIndex
