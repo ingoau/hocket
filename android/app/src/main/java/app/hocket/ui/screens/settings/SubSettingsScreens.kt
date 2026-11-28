@@ -90,6 +90,11 @@ import app.hocket.core.SwipeOptions
 import app.hocket.ui.components.SwipeSurface
 import app.hocket.ui.components.swipeActionIds
 import app.hocket.ui.nav.BottomBarEditor
+import app.hocket.ui.nav.label
+import androidx.compose.foundation.clickable
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 
 /** ReplayGain, preamp, normalisation, gapless, EQ with draggable bands, output device. */
 @Composable
@@ -99,9 +104,14 @@ fun AudioSettingsScreen(nav: NavHostController) {
     val outputs by client.outputDevices.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { client.dispatch(Command.RefreshOutputDevices) }
     SubScreen(nav, stringResource(R.string.settings_section_audio)) {
-        val rgOptions = listOf(ReplayGainMode.Off to stringResource(R.string.settings_rg_off), ReplayGainMode.Track to stringResource(R.string.settings_rg_track), ReplayGainMode.Album to stringResource(R.string.settings_rg_album), ReplayGainMode.Auto to stringResource(R.string.settings_rg_auto))
+        val rgOptions = listOf(
+            iconOption(ReplayGainMode.Off, stringResource(R.string.settings_rg_off), HocketIcons.Filled.Block),
+            iconOption(ReplayGainMode.Track, stringResource(R.string.settings_rg_track), HocketIcons.Filled.MusicNote),
+            iconOption(ReplayGainMode.Album, stringResource(R.string.settings_rg_album), HocketIcons.Filled.Album),
+            iconOption(ReplayGainMode.Auto, stringResource(R.string.settings_rg_auto), HocketIcons.Filled.AutoAwesome),
+        )
         SettingRow(stringResource(R.string.settings_replay_gain), tag = "audio.replayGain")
-        ChoiceRow(rgOptions, isSelected = { audio.replayGain == it }, onSelect = { m -> client.dispatch(Commands.setAudioSettings(audio.copy(replayGain = m))) }, modifier = Modifier.padding(horizontal = 16.dp))
+        OptionCards(rgOptions, isSelected = { audio.replayGain == it }, onSelect = { m -> client.dispatch(Commands.setAudioSettings(audio.copy(replayGain = m))) }, tag = "audio.replayGain.choices", previewHeight = 48.dp)
         val preampLabel = stringResource(R.string.settings_preamp)
         val preampValue = stringResource(R.string.settings_db, audio.replayGainPreampDb)
         SettingRow(preampLabel, preampValue, tag = "audio.preamp")
@@ -126,14 +136,14 @@ fun AudioSettingsScreen(nav: NavHostController) {
         val context = androidx.compose.ui.platform.LocalContext.current
         val systemEq = androidx.compose.runtime.remember { app.hocket.playback.AudioEffectSession.controlPanelIntent(context) }
         if (systemEq != null) {
-            SettingRow(stringResource(R.string.settings_system_eq), stringResource(R.string.settings_system_eq_body), onClick = {
+            SettingRow(stringResource(R.string.settings_system_eq), onClick = {
                 runCatching { context.startActivity(app.hocket.playback.AudioEffectSession.controlPanelIntent(context) ?: systemEq) }
             }, tag = "audio.systemEq") { Chevron() }
         }
         if (outputs.isNotEmpty()) {
-            SettingsSection(stringResource(R.string.settings_output_device), tag = "audio.output")
             val selectedOutput = audio.outputDevice ?: outputs.firstOrNull { it.isDefault }?.id
-            ChoiceRow(outputs.map { it.id to it.name }, isSelected = { selectedOutput == it }, onSelect = { client.dispatch(Commands.setOutputDevice(it)) }, modifier = Modifier.padding(horizontal = 16.dp))
+            ChoiceDialogRow(stringResource(R.string.settings_output_device), outputs.map { DialogOption(it.id, it.name, HocketIcons.Filled.Speaker) },
+                selected = selectedOutput, onSelect = { client.dispatch(Commands.setOutputDevice(it)) }, tag = "audio.output")
         }
     }
 }
@@ -161,14 +171,13 @@ private fun TransitionRows(client: app.hocket.core.client.CoreClient) {
         picked = next
         client.dispatch(Commands.setTransitionSettings(next))
     }
-    val subtitle = if (value.mode == TransitionMode.AutoMix) stringResource(R.string.settings_transitions_automix_desc) else null
-    SettingRow(stringResource(R.string.settings_transitions), subtitle, tag = "audio.transitions")
+    SettingRow(stringResource(R.string.settings_transitions), tag = "audio.transitions")
     val modes = listOf(
-        TransitionMode.Off to stringResource(R.string.settings_transitions_off),
-        TransitionMode.Crossfade to stringResource(R.string.settings_transitions_crossfade),
-        TransitionMode.AutoMix to stringResource(R.string.settings_transitions_automix),
-    )
-    ChoiceRow(modes, isSelected = { value.mode == it }, onSelect = { set(value.copy(mode = it)) }, modifier = Modifier.padding(horizontal = 16.dp))
+        Triple(TransitionMode.Off, "off", R.string.settings_transitions_off),
+        Triple(TransitionMode.Crossfade, "crossfade", R.string.settings_transitions_crossfade),
+        Triple(TransitionMode.AutoMix, "automix", R.string.settings_transitions_automix),
+    ).map { (mode, look, label) -> VisualOption(mode, stringResource(label)) { selected -> TransitionPreview(look, selected) } }
+    OptionCards(modes, isSelected = { value.mode == it }, onSelect = { set(value.copy(mode = it)) }, tag = "audio.transitions.choices")
     if (value.mode == TransitionMode.Crossfade) {
         val seconds = value.crossfadeSeconds.roundToInt().coerceIn(1, 12)
         var dragged by remember(seconds) { androidx.compose.runtime.mutableFloatStateOf(seconds.toFloat()) }
@@ -230,19 +239,57 @@ fun EqEditor(bands: List<EqBand>, enabled: Boolean, onChange: (List<EqBand>) -> 
     }
 }
 
-/** Per-network transcoding profiles: format, max bitrate, always-transcode suffixes. */
+/**
+ * Per-network transcoding profiles: one row per network (Wi-Fi and wired, metered, and this
+ * network when it has its own), each summing up its format and bitrate and opening its own page.
+ */
 @Composable
 fun TranscodingSettingsScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
     val network by client.network.collectAsStateWithLifecycle()
     SubScreen(nav, stringResource(R.string.settings_category_streaming)) {
-        Text(stringResource(R.string.settings_transcoding_body), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
-        ProfileEditor(stringResource(R.string.settings_transcoding_wifi), "default")
-        ProfileEditor(stringResource(R.string.settings_transcoding_metered), "metered")
+        ProfileRow(nav, "default")
+        ProfileRow(nav, "metered")
         // This network's own profile (a Wi-Fi network's SSID hash, or wired), which wins over the
-        // metered one; never one of the keys the editors above own.
-        network?.networkId?.takeIf { it != "default" && it != "metered" }?.let { id -> ProfileEditor(stringResource(R.string.settings_transcoding_current), id) }
+        // metered one; never one of the keys the rows above own.
+        network?.networkId?.takeIf { it != "default" && it != "metered" }?.let { id -> ProfileRow(nav, id) }
     }
+}
+
+/** A transcoding profile's page title: the network it is for. */
+@Composable
+internal fun profileTitle(networkId: String): String = stringResource(
+    when (networkId) {
+        "default" -> R.string.settings_transcoding_wifi
+        "metered" -> R.string.settings_transcoding_metered
+        else -> R.string.settings_transcoding_current
+    },
+)
+
+/** The stored profile for [networkId] (an empty one when there is none) and a setter. */
+@Composable
+private fun rememberProfile(networkId: String): Pair<TranscodingProfile, (TranscodingProfile) -> Unit> {
+    val client = LocalCoreClient.current
+    val handle = setting(SettingKeys.TRANSCODING_PROFILES)
+    val profile = remember(handle.raw, networkId) {
+        handle.raw?.let { runCatching { HocketJson.json.decodeFromString(MapSerializer(String.serializer(), TranscodingProfile.serializer()), it) }.getOrNull() }?.get(networkId)
+            ?: TranscodingProfile(null, null, emptyList())
+    }
+    return profile to { p -> client.dispatch(Commands.setTranscodingProfile(networkId.takeIf { it != "default" }, p)) }
+}
+
+@Composable
+private fun formatLabel(format: String?): String = format?.uppercase() ?: stringResource(R.string.settings_format_original)
+
+@Composable
+private fun bitrateLabel(kbps: Int?): String = kbps?.let { stringResource(R.string.settings_bitrate_kbps, it) } ?: stringResource(R.string.settings_bitrate_unlimited)
+
+@Composable
+private fun ProfileRow(nav: NavHostController, networkId: String) {
+    val (profile, _) = rememberProfile(networkId)
+    val summary = formatLabel(profile.format) + stringResource(R.string.dot_separator) + bitrateLabel(profile.maxBitRate?.toInt())
+    val tag = "transcoding.${if (networkId == "default" || networkId == "metered") networkId else "current"}"
+    SettingRow(profileTitle(networkId), summary, onClick = { nav.navigate(app.hocket.ui.nav.Route.SettingsPage("transcoding.$networkId")) }, tag = tag) { Chevron() }
 }
 
 /**
@@ -250,23 +297,16 @@ fun TranscodingSettingsScreen(nav: NavHostController) {
  * `wifi` / `wired` (by kind); any other is a `NetworkState.networkId`.
  */
 @Composable
-private fun ProfileEditor(title: String, networkId: String) {
-    val client = LocalCoreClient.current
-    val handle = setting(SettingKeys.TRANSCODING_PROFILES)
-    val profile = remember(handle.raw, networkId) {
-        handle.raw?.let { runCatching { HocketJson.json.decodeFromString(MapSerializer(String.serializer(), TranscodingProfile.serializer()), it) }.getOrNull() }?.get(networkId)
-            ?: TranscodingProfile(null, null, emptyList())
+internal fun TranscodingProfileScreen(nav: NavHostController, networkId: String) {
+    val (profile, push) = rememberProfile(networkId)
+    SubScreen(nav, profileTitle(networkId)) {
+        ChoiceDialogRow(stringResource(R.string.settings_format), listOf(null, "opus", "mp3", "aac").map { DialogOption(it, formatLabel(it)) },
+            selected = profile.format, onSelect = { push(profile.copy(format = it)) }, tag = "transcoding.format")
+        ChoiceDialogRow(stringResource(R.string.settings_max_bitrate), listOf(null, 96, 128, 192, 320).map { DialogOption(it, bitrateLabel(it)) },
+            selected = profile.maxBitRate?.toInt(), onSelect = { push(profile.copy(maxBitRate = it?.toUInt())) }, tag = "transcoding.bitrate")
+        SettingRow(stringResource(R.string.settings_cannot_decode), stringResource(R.string.settings_cannot_decode_body), tag = "transcoding.cannotDecode")
+        CannotDecodeEditor(profile.cannotDecode) { push(profile.copy(cannotDecode = it)) }
     }
-    fun push(p: TranscodingProfile) = client.dispatch(Commands.setTranscodingProfile(networkId.takeIf { it != "default" }, p))
-    SettingsSection(title)
-    val originalLabel = stringResource(R.string.settings_format_original)
-    SettingRow(stringResource(R.string.settings_format), tag = "transcoding.format")
-    ChoiceRow(listOf(null, "opus", "mp3", "aac").map { it to (it ?: originalLabel) }, isSelected = { profile.format == it }, onSelect = { push(profile.copy(format = it)) }, modifier = Modifier.padding(horizontal = 16.dp))
-    val bitrates = listOf(null, 96, 128, 192, 320).map { b -> b to (b?.let { stringResource(R.string.settings_bitrate_kbps, it) } ?: stringResource(R.string.settings_bitrate_unlimited)) }
-    SettingRow(stringResource(R.string.settings_max_bitrate), tag = "transcoding.bitrate")
-    ChoiceRow(bitrates, isSelected = { profile.maxBitRate?.toInt() == it }, onSelect = { push(profile.copy(maxBitRate = it?.toUInt())) }, modifier = Modifier.padding(horizontal = 16.dp))
-    SettingRow(stringResource(R.string.settings_cannot_decode), stringResource(R.string.settings_cannot_decode_body), tag = "transcoding.cannotDecode")
-    CannotDecodeEditor(profile.cannotDecode) { push(profile.copy(cannotDecode = it)) }
 }
 
 /** File types players commonly stumble on, offered as chips for the "always transcode" list. */
@@ -331,130 +371,170 @@ fun ConnectSettingsScreen(nav: NavHostController) {
     }
 }
 
-/** The bottom bar editor, and choose-and-order lists for context menu actions and media buttons. */
+/**
+ * Customise: one row per editor (bottom bar, context menu, notification buttons, swipe actions),
+ * each summing up what is set and opening its own page (SettingsPages.kt); then what swiping up on
+ * the player opens, as cards.
+ */
 @Composable
 fun CustomiseSettingsScreen(nav: NavHostController) {
-    val client = LocalCoreClient.current
-    val menuSetting = setting(SettingKeys.ACTIONS_ORDER_CONTEXT_MENU)
-    val mediaSetting = setting(SettingKeys.ACTIONS_ORDER_MEDIA_SESSION)
     SubScreen(nav, stringResource(R.string.settings_section_customise)) {
-        // The phone's bottom bar: a device-local choice of two to five places (Settings is never one).
-        SettingsSection(stringResource(R.string.settings_bottom_bar), tag = "customise.bottomBar")
-        BottomBarEditor(Modifier.testTag("customise.bottomBar"))
-        SettingsSection(stringResource(R.string.settings_context_menu), tag = "customise.contextMenuSection")
-        Text(stringResource(R.string.settings_reorder_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
-        // Canonical registry ids for the contextMenu surface; an empty stored list means the registry default.
-        val allMenu = ActionIds.CONTEXT_MENU
-        val menuIds = menuSetting.raw?.let { runCatching { HocketJson.json.decodeFromString(ListSerializer(String.serializer()), it) }.getOrNull() }?.ifEmpty { null } ?: allMenu
-        ChooseAndOrder(allMenu, menuIds, minEnabled = 1, label = { actionLabel(it) }, tag = "customise.contextMenu") { ids -> client.dispatch(Commands.setActionOrder("contextMenu", ids)) }
-        SettingsSection(stringResource(R.string.settings_media_buttons), tag = "customise.mediaSessionSection")
-        Text(stringResource(R.string.settings_media_buttons_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
-        val allMedia = ActionIds.MEDIA_SESSION_CHOICES
-        val mediaIds = mediaSetting.raw?.let { runCatching { HocketJson.json.decodeFromString(ListSerializer(String.serializer()), it) }.getOrNull() }?.ifEmpty { null } ?: ActionIds.MEDIA_SESSION
-        ChooseAndOrder(allMedia, mediaIds, minEnabled = 0, label = { actionLabel(it) }, tag = "customise.mediaSession") { ids -> client.dispatch(Commands.setActionOrder("mediaSession", ids)) }
-        SettingsSection(stringResource(R.string.settings_swipe_actions), tag = "customise.swipe")
-        Text(stringResource(R.string.settings_swipe_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
-        SwipeChoices(stringResource(R.string.settings_swipe_queue), SwipeOptions.QUEUE, SwipeSurface.Queue)
-        SwipeChoices(stringResource(R.string.settings_swipe_lists), SwipeOptions.LIST, SwipeSurface.List)
+        fun open(page: String) = nav.navigate(app.hocket.ui.nav.Route.SettingsPage(page))
+        val bar = app.hocket.ui.nav.navItems()
+        NavRow(stringResource(R.string.settings_bottom_bar), bar.map { it.label() }.joinToString(", "), tag = "customise.bottomBar") { open(PAGE_BOTTOM_BAR) }
+        val menu = contextMenuIds()
+        NavRow(stringResource(R.string.settings_context_menu), stringResource(R.string.settings_order_summary, menu.size, ActionIds.CONTEXT_MENU.size), tag = "customise.contextMenuSection") { open(PAGE_CONTEXT_MENU) }
+        val media = mediaSessionIds().filter { it in ActionIds.MEDIA_SESSION_CHOICES }
+        NavRow(stringResource(R.string.settings_media_buttons), media.map { actionLabel(it) }.joinToString(", ").ifEmpty { null }, tag = "customise.mediaSessionSection") { open(PAGE_MEDIA_BUTTONS) }
+        NavRow(stringResource(R.string.settings_swipe_actions), tag = "customise.swipe") { open(PAGE_SWIPE) }
         // swipe.playerUp: what swiping up on the full player's artwork opens.
         val playerUp = setting(SettingKeys.SWIPE_PLAYER_UP)
         val playerUpOptions = listOf(
-            SwipeOptions.PLAYER_UP_QUEUE to stringResource(R.string.settings_player_swipe_up_queue),
-            SwipeOptions.PLAYER_UP_LYRICS to stringResource(R.string.settings_player_swipe_up_lyrics),
-            SwipeOptions.PLAYER_UP_CONNECT to stringResource(R.string.settings_player_swipe_up_connect),
-            SwipeOptions.PLAYER_UP_MENU to stringResource(R.string.settings_player_swipe_up_menu),
+            iconOption(SwipeOptions.PLAYER_UP_QUEUE, stringResource(R.string.settings_player_swipe_up_queue), HocketIcons.AutoMirrored.Filled.QueueMusic),
+            iconOption(SwipeOptions.PLAYER_UP_LYRICS, stringResource(R.string.settings_player_swipe_up_lyrics), HocketIcons.Filled.Lyrics),
+            iconOption(SwipeOptions.PLAYER_UP_CONNECT, stringResource(R.string.settings_player_swipe_up_connect), HocketIcons.Outlined.Devices),
+            iconOption(SwipeOptions.PLAYER_UP_MENU, stringResource(R.string.settings_player_swipe_up_menu), HocketIcons.Filled.MoreVert),
         )
-        SettingsSection(stringResource(R.string.settings_player_swipe_up), tag = "customise.playerSwipeUp")
-        Text(stringResource(R.string.settings_player_swipe_up_body), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
-        ChoiceRow(
+        SettingRow(stringResource(R.string.settings_player_swipe_up), scope = playerUp.scope, tag = "customise.playerSwipeUp")
+        OptionCards(
             playerUpOptions,
             isSelected = { (playerUp.string ?: SwipeOptions.PLAYER_UP_QUEUE) == it },
             onSelect = { playerUp.setString(it) },
-            modifier = Modifier.padding(horizontal = 16.dp).testTag("customise.${SettingKeys.SWIPE_PLAYER_UP}"),
+            tag = "customise.${SettingKeys.SWIPE_PLAYER_UP}", previewHeight = 48.dp,
         )
     }
 }
 
+/** The context menu's actions in order; the registry's default while none are stored. */
+@Composable
+internal fun contextMenuIds(): List<String> = storedIds(setting(SettingKeys.ACTIONS_ORDER_CONTEXT_MENU)) ?: ActionIds.CONTEXT_MENU
+
+/** The notification's buttons in order; the default set while none are stored. */
+@Composable
+internal fun mediaSessionIds(): List<String> = storedIds(setting(SettingKeys.ACTIONS_ORDER_MEDIA_SESSION)) ?: ActionIds.MEDIA_SESSION
+
+/** A stored id list, or null when there is none (or it is empty: the default). */
+internal fun storedIds(handle: SettingHandle): List<String>? =
+    handle.raw?.let { runCatching { HocketJson.json.decodeFromString(ListSerializer(String.serializer()), it) }.getOrNull() }?.ifEmpty { null }
+
 /**
- * One surface's two swipe settings (core registry keys, synced): a choice of action per direction.
- * The directions are named as the finger moves on screen, so right-to-left layouts swap them.
+ * One surface's two swipe settings (core registry keys, synced): a picture of a song row with both
+ * swipes showing, then a choice of action per direction. The directions are named as the finger
+ * moves on screen, so right-to-left layouts swap them (and the picture mirrors, as the row does).
  */
 @Composable
-private fun SwipeChoices(title: String, options: List<String>, surface: SwipeSurface) {
+internal fun SwipeChoices(title: String, options: List<String>, surface: SwipeSurface) {
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val (startToEnd, endToStart) = swipeActionIds(surface)
     val none = stringResource(R.string.settings_swipe_none)
     val section = app.hocket.ui.components.queueSectionOn()
-    Text(title, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp))
+    SettingsSection(title)
+    SwipeRowPreview(startToEnd, endToStart, Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
     for ((key, current) in listOf(surface.startToEndKey to startToEnd, surface.endToStartKey to endToStart)) {
         val handle = setting(key)
         val right = (key == surface.startToEndKey) != rtl
-        Text(stringResource(if (right) R.string.settings_swipe_right else R.string.settings_swipe_left), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp))
-        ChoiceRow(
+        ChoiceDialogRow(
+            stringResource(if (right) R.string.settings_swipe_right else R.string.settings_swipe_left),
             // Add to queue is offered with the queue section on (off, it runs as play later).
-            options.filter { it != ActionIds.ADD_TO_QUEUE || section || it == current }.map { id -> id to if (id == SwipeOptions.NONE) none else actionLabel(id) },
-            isSelected = { it == current },
-            onSelect = { handle.setString(it) },
-            modifier = Modifier.padding(horizontal = 16.dp).testTag("customise.$key"),
+            options.filter { it != ActionIds.ADD_TO_QUEUE || section || it == current }.map { id ->
+                if (id == SwipeOptions.NONE) DialogOption(id, none, HocketIcons.Filled.Block) else DialogOption(id, actionLabel(id), app.hocket.ui.components.swipeLook(id)?.icon)
+            },
+            selected = current, onSelect = { handle.setString(it) }, scope = handle.scope, tag = "customise.$key",
+            trailing = { Icon(if (right) HocketIcons.AutoMirrored.Filled.SwipeRight else HocketIcons.AutoMirrored.Filled.SwipeLeft, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
         )
     }
 }
 
 /**
- * Enabled items first (draggable, in order), then disabled ones; toggling moves between the sets.
- * A plain column (not a fixed-height lazy list), so the section is exactly as tall as its rows.
- * [label] is each id's human label.
+ * Choose and order: what is [enabled] ("Shown"), in order, each with its icon, a hide button and a
+ * drag handle (or the row's Move up / Move down actions for TalkBack); then the rest ("Hidden"),
+ * each shown again with a tap; then Reset to default ([default]). Hiding past [minEnabled] says
+ * why instead of doing it. [label] and [icon] name and picture each id; rows are tagged
+ * `<tag>.<id>`.
  */
 @Composable
-internal fun ChooseAndOrder(all: List<String>, enabled: List<String>, minEnabled: Int, label: @Composable (String) -> String, tag: String? = null, onChange: (List<String>) -> Unit) {
+internal fun ChooseAndOrder(
+    all: List<String>,
+    enabled: List<String>,
+    minEnabled: Int,
+    label: @Composable (String) -> String,
+    icon: (String) -> androidx.compose.ui.graphics.vector.ImageVector?,
+    default: List<String>,
+    tag: String,
+    onChange: (List<String>) -> Unit,
+) {
     val haptics = LocalHapticFeedback.current
-    var order by remember(enabled) { mutableStateOf(enabled.filter { it in all } + all.filter { it !in enabled }) }
-    val enabledSet = remember(enabled) { enabled.toSet() }
+    // What this list last wrote, shown until the stored value comes back (and replaced when it changes).
+    var shown by remember(enabled) { mutableStateOf(enabled.filter { it in all }) }
+    val hidden = all.filter { it !in shown }
+    var message by remember { mutableStateOf<String?>(null) }
+    fun update(next: List<String>) { message = null; shown = next; onChange(next) }
     val moveUp = stringResource(R.string.a11y_move_up)
     val moveDown = stringResource(R.string.a11y_move_down)
-    ReorderableColumn(
-        list = order,
-        onSettle = { from, to ->
-            order = order.toMutableList().apply { add(to, removeAt(from)) }
-            onChange(order.filter { it in enabledSet })
-        },
-        onMove = { haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick) },
-        modifier = Modifier.fillMaxWidth().let { if (tag != null) it.testTag(tag) else it },
-    ) { index, id, _ ->
-        key(id) {
-            ReorderableItem {
-                val checked = id in enabledSet
-                fun toggle(on: Boolean) {
-                    val next = if (on) order.filter { it in enabledSet || it == id } else order.filter { it in enabledSet && it != id }
-                    if (next.size >= minEnabled) onChange(next)
-                }
-                fun move(to: Int) {
-                    val moved = order.toMutableList().apply { add(to, removeAt(index)) }
-                    order = moved
-                    onChange(moved.filter { it in enabledSet })
-                }
-                // One item per action: the row toggles it (role checkbox), and moving it up or down
-                // is an action, the accessible alternative to the drag handle.
-                Row(
-                    Modifier.fillMaxWidth()
-                        .toggleable(value = checked, role = Role.Checkbox, onValueChange = ::toggle)
-                        .semantics {
-                            customActions = buildList {
-                                if (checked && index > 0) add(CustomAccessibilityAction(moveUp) { move(index - 1); true })
-                                if (checked && index + 1 < order.size && order[index + 1] in enabledSet) add(CustomAccessibilityAction(moveDown) { move(index + 1); true })
+    val minimum = pluralStringResource(R.plurals.settings_order_minimum, minEnabled, minEnabled)
+    val scheme = MaterialTheme.colorScheme
+    Column(Modifier.fillMaxWidth().testTag(tag)) {
+        SettingsSection(stringResource(R.string.settings_order_shown))
+        ReorderableColumn(
+            list = shown,
+            onSettle = { from, to -> update(shown.toMutableList().apply { add(to, removeAt(from)) }) },
+            onMove = { haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick) },
+            modifier = Modifier.fillMaxWidth(),
+        ) { index, id, _ ->
+            key(id) {
+                ReorderableItem {
+                    val name = label(id)
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .semantics(mergeDescendants = true) {
+                                customActions = buildList {
+                                    if (index > 0) add(CustomAccessibilityAction(moveUp) { update(shown.toMutableList().apply { add(index - 1, removeAt(index)) }); true })
+                                    if (index < shown.lastIndex) add(CustomAccessibilityAction(moveDown) { update(shown.toMutableList().apply { add(index + 1, removeAt(index)) }); true })
+                                }
                             }
+                            .testTag("$tag.$id")
+                            .heightIn(min = 56.dp)
+                            .padding(start = 16.dp, end = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        icon(id)?.let { Icon(it, null, tint = scheme.primary); Spacer(Modifier.width(16.dp)) }
+                        Text(name, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                        IconButton(
+                            onClick = { if (shown.size <= minEnabled) message = minimum else update(shown - id) },
+                            modifier = Modifier.testTag("$tag.hide.$id"),
+                        ) { Icon(HocketIcons.Filled.RemoveCircleOutline, stringResource(R.string.settings_order_hide, name)) }
+                        Box(Modifier.padding(12.dp).draggableHandle(onDragStarted = { haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate) })) {
+                            Icon(HocketIcons.Filled.DragHandle, null)
                         }
-                        .let { if (tag != null) it.testTag("$tag.$id") else it }
-                        .heightIn(min = 48.dp)
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Checkbox(checked = checked, onCheckedChange = null)
-                    Spacer(Modifier.width(12.dp))
-                    Text(label(id), modifier = Modifier.weight(1f))
-                    Icon(HocketIcons.Filled.DragHandle, null, modifier = Modifier.draggableHandle(onDragStopped = { onChange(order.filter { it in enabledSet }) }))
+                    }
                 }
             }
+        }
+        message?.let {
+            Text(it, color = scheme.error, style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp).semantics { liveRegion = LiveRegionMode.Polite }.testTag("$tag.message"))
+        }
+        if (hidden.isNotEmpty()) {
+            SettingsSection(stringResource(R.string.settings_order_hidden))
+            hidden.forEach { id ->
+                val name = label(id)
+                Row(
+                    Modifier.fillMaxWidth()
+                        .clickable(onClickLabel = stringResource(R.string.settings_order_show, name)) { update(shown + id) }
+                        .testTag("$tag.$id")
+                        .heightIn(min = 56.dp)
+                        .padding(start = 16.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    icon(id)?.let { Icon(it, null, tint = scheme.onSurfaceVariant); Spacer(Modifier.width(16.dp)) }
+                    Text(name, style = MaterialTheme.typography.bodyLarge, color = scheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                    Box(Modifier.padding(12.dp)) { Icon(HocketIcons.Filled.AddCircle, null, tint = scheme.primary) }
+                }
+            }
+        }
+        val reset = default.filter { it in all }
+        TextButton(onClick = { update(reset) }, enabled = shown != reset, modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp).testTag("$tag.reset")) {
+            Text(stringResource(R.string.bottom_bar_reset))
         }
     }
 }

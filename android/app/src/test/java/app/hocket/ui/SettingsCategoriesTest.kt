@@ -1,5 +1,7 @@
 package app.hocket.ui
 
+import app.hocket.core.SettingKeys
+import androidx.compose.ui.test.onLast
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.SemanticsMatcher
@@ -201,36 +203,55 @@ class SettingsCategoriesTest {
     }
 
     @Test
-    fun customiseShowsHumanLabelsAndEachListIsAsTallAsItsRows() {
+    fun customiseEditorsOpenAsPagesWithHumanLabelsAndHideAndShowItems() {
         val core = TestCore(startPlaying = false)
         openSettings(core)
         open(SettingsCategory.Customise)
         fun textOf(tag: String) = compose.onNodeWithTag(tag).performScrollTo().fetchSemanticsNode().config[SemanticsProperties.Text].joinToString("") { it.text }
+        fun page(row: String, list: String) {
+            compose.onNodeWithTag("setting.$row").performScrollTo().performClick()
+            compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag(list).assertExists() }.isSuccess }
+            compose.waitForIdle()
+        }
+        fun pageBack() {
+            compose.onAllNodes(hasTestTag("settings.back")).onLast().performClick()
+            compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag("setting.customise.bottomBar").assertExists() }.isSuccess }
+        }
+        page("customise.contextMenuSection", "customise.contextMenu")
         assertEquals("Shuffle play", textOf("customise.contextMenu.playShuffled"))
         assertEquals("Rate 5 stars", textOf("customise.contextMenu.rate5"))
         assertEquals("Go to album", textOf("customise.contextMenu.goToAlbum"))
+        // Hiding moves an action under Hidden (it stays listed, with a button to show it again) and saves the order without it.
+        compose.onNodeWithTag("customise.contextMenu.hide.playShuffled").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.ACTIONS_ORDER_CONTEXT_MENU]?.value?.let { "\"play\"" in it && "playShuffled" !in it } == true }
+        compose.onNodeWithTag("customise.contextMenu.playShuffled").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.ACTIONS_ORDER_CONTEXT_MENU]?.value?.contains("playShuffled") == true }
+        pageBack()
+        page("customise.mediaSessionSection", "customise.mediaSession")
         assertEquals("Shuffle", textOf("customise.mediaSession.shuffle"))
         // Play/pause is always on the notification, so it isn't offered.
         assertTrue(compose.onAllNodes(SemanticsMatcher("play/pause row") { it.config.getOrNull(SemanticsProperties.TestTag) == "customise.mediaSession.togglePlay" }).fetchSemanticsNodes().isEmpty())
-        for (list in listOf("customise.contextMenu", "customise.mediaSession")) {
-            val column = compose.onNodeWithTag(list).performScrollTo().fetchSemanticsNode().boundsInRoot
-            val rows = compose.onAllNodes(SemanticsMatcher("rows of $list") { it.config.getOrNull(SemanticsProperties.TestTag)?.startsWith("$list.") == true }).fetchSemanticsNodes()
-            assertTrue(rows.isNotEmpty())
-            val rowsHeight = rows.sumOf { it.boundsInRoot.height.toDouble() }
-            assertEquals("no gap after $list", rowsHeight, column.height.toDouble(), 2.0)
-        }
+        // Moving is a row action too (TalkBack's alternative to the drag handle).
+        val actions = compose.onNodeWithTag("customise.mediaSession.next").fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.CustomActions].map { it.label }
+        assertEquals(listOf("Move up", "Move down"), actions)
     }
 
     @Test
-    fun signOutIsLastAndAccountRowsCarryScopes() {
+    fun onlySyncedSettingsCarryTheSyncMark() {
         val core = TestCore(startPlaying = false)
         openSettings(core)
         open(SettingsCategory.Account)
         // Each account's rows end with its removal; Add account and the sync switch follow the list.
         assertEquals(listOf("server.remove", "account.add", "sync.master"), rowsOnScreen().takeLast(3))
+        // Device-local rows: no mark, nothing extra read out.
         for (tag in listOf("sync.master", "server.info")) {
-            compose.onNode(hasAnyAncestor(hasTestTag("setting.$tag")).or(hasTestTag("setting.$tag")).and(hasText("This device", substring = true))).assertExists()
+            assertTrue(compose.onAllNodes(hasAnyAncestor(hasTestTag("setting.$tag")).or(hasTestTag("setting.$tag")).and(hasText("Synced", substring = true))).fetchSemanticsNodes().isEmpty())
         }
+        back()
+        open(SettingsCategory.Appearance)
+        // A synced row reads ", Synced" after its title, and the page explains the mark once at its foot.
+        compose.onNode(hasTestTag("setting.display.playerRating").and(hasText("Synced", substring = true))).assertExists()
+        compose.onNodeWithTag("settings.syncedLegend").performScrollTo().assertExists()
     }
 
     @Test

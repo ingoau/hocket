@@ -724,7 +724,7 @@
     <string name="settings_search_kw_transitions">crossfade transition automix auto mix dj blend fade beat match</string>
     <string name="settings_search_kw_eq">equaliser equalizer eq bass treble</string>
     <string name="settings_search_kw_output">speakers headphones bluetooth usb dac output</string>
-    <string name="settings_search_kw_transcoding">transcode quality opus mp3 aac kbps data mobile wifi</string>
+    <string name="settings_search_kw_transcoding">transcode format bitrate quality opus mp3 aac kbps data mobile wifi</string>
     <string name="settings_search_kw_storage">disk space storage size offline downloads</string>
     <string name="settings_search_kw_cache">cache stream disk space offline</string>
     <string name="settings_search_kw_data">mobile data cellular metered bandwidth wifi hotspot tethering data saver</string>
@@ -863,7 +863,7 @@
     <string name="settings_section_customise">Customise</string>
     <string name="settings_context_menu">Context menu actions</string>
     <string name="settings_media_buttons">Media notification buttons</string>
-    <string name="settings_media_buttons_hint">Android shows about two extra buttons besides play and skip. Stash stays off until you turn it on, and then it moves ahead of shuffle, repeat and love, so one of those drops off the notification. Drag to choose which stay.</string>
+    <string name="settings_media_buttons_hint">Android fits about two buttons besides play and skip: the faded ones above won\'t show.</string>
     <string name="settings_reorder_hint">Drag to reorder, toggle to show or hide.</string>
     <string name="settings_swipe_actions">Swipe actions</string>
     <string name="settings_swipe_hint">What swiping a song sideways does. Every action is also in the song\'s menu.</string>
@@ -1019,6 +1019,17 @@
     <string name="settings_remove_server_confirm">Sign out of %1$s? Downloads and the library stored on this device are removed.</string>
     <string name="settings_scope_synced">Synced</string>
     <string name="settings_scope_local">This device</string>
+    <string name="settings_synced_legend">Syncs to your other devices</string>
+    <string name="settings_love_threshold_value">%1$d★ or more</string>
+    <string name="settings_order_shown">Shown</string>
+    <string name="settings_order_hidden">Hidden</string>
+    <string name="settings_order_hide">Hide %1$s</string>
+    <string name="settings_order_show">Show %1$s</string>
+    <string name="settings_order_summary">%1$d of %2$d shown</string>
+    <plurals name="settings_order_minimum">
+        <item quantity="one">Keep at least %d item shown.</item>
+        <item quantity="other">Keep at least %d items shown.</item>
+    </plurals>
     <string name="settings_cache_images">Images: %1$s</string>
     <string name="settings_free_space">Free: %1$s</string>
     <string name="settings_output_device">Output device</string>

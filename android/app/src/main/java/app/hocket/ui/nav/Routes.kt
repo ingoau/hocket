@@ -39,6 +39,8 @@ sealed interface Route {
     @Serializable data object SettingsBackup : Route
     @Serializable data object SettingsPebble : Route
     @Serializable data object SettingsAdvanced : Route
+    /** One of the settings' own sub-pages (see SettingsPageScreen): an editor too long for its category's screen. */
+    @Serializable data class SettingsPage(val page: String) : Route
     @Serializable data object DeveloperDiagnostics : Route
 }
 

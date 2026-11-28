@@ -90,7 +90,7 @@ fun AdvancedSettingsScreen(nav: NavHostController) {
     SubScreen(nav, stringResource(R.string.settings_category_advanced)) {
         SwitchRow(stringResource(R.string.settings_headphone_handoff), headphoneHandoff.bool ?: false, { headphoneHandoff.setBool(it) }, stringResource(R.string.settings_headphone_handoff_body), headphoneHandoff.scope, tag = "connect.headphone_handoff")
         SwitchRow(stringResource(R.string.settings_developer_mode), devMode.bool ?: false, { devMode.setBool(it) }, stringResource(R.string.settings_developer_mode_body), devMode.scope, tag = "developer.mode")
-        SettingRow(stringResource(R.string.settings_developer_diagnostics), stringResource(R.string.settings_developer_diagnostics_body), onClick = { nav.navigate(Route.DeveloperDiagnostics) }, tag = "developer.open") { Chevron() }
+        SettingRow(stringResource(R.string.settings_developer_diagnostics), onClick = { nav.navigate(Route.DeveloperDiagnostics) }, tag = "developer.open") { Chevron() }
     }
 }
 

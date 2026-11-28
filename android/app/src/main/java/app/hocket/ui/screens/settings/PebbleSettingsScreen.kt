@@ -18,7 +18,9 @@ import app.hocket.core.HocketJson
 import app.hocket.core.SettingKeys
 import app.hocket.playback.pebble.PebbleInstaller
 import app.hocket.playback.pebble.PebbleProtocol
-import app.hocket.ui.components.ChoiceRow
+import androidx.compose.ui.graphics.vector.ImageVector
+import app.hocket.ui.icons.HocketIcons
+import app.hocket.ui.nav.Route
 import kotlinx.coroutines.launch
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
@@ -51,22 +53,24 @@ fun PebbleSettingsScreen(nav: NavHostController) {
         GestureChoice(SettingKeys.PEBBLE_GESTURE_HOLD, R.string.pebble_gesture_hold, "actions")
 
         SettingsSection(stringResource(R.string.pebble_menus))
-        ItemsEditor(SettingKeys.PEBBLE_MENU, R.string.pebble_menu, R.string.pebble_menu_body, PebbleProtocol.MENU_ITEMS, PebbleProtocol.DEFAULT_MENU)
-        ItemsEditor(SettingKeys.PEBBLE_ACTIONS, R.string.pebble_actions, R.string.pebble_actions_body, PebbleProtocol.ACTION_ITEMS, PebbleProtocol.DEFAULT_ACTIONS)
-        ItemsEditor(SettingKeys.PEBBLE_LIBRARY, R.string.pebble_library, R.string.pebble_library_body, PebbleProtocol.LIBRARY_SECTIONS, PebbleProtocol.LIBRARY_SECTIONS)
+        PEBBLE_LISTS.forEach { list ->
+            val handle = setting(list.key)
+            val ids = storedIds(handle) ?: list.default
+            NavRow(stringResource(list.title), stringResource(R.string.settings_order_summary, ids.count { it in list.all }, list.all.size), tag = list.key) { nav.navigate(Route.SettingsPage(list.key)) }
+        }
         val seconds = timeout.int ?: 5
         val off = stringResource(R.string.settings_off)
-        SettingRow(stringResource(R.string.pebble_menu_timeout), if (seconds == 0) off else stringResource(R.string.pebble_seconds, seconds), timeout.scope, tag = "pebble.menuTimeoutSeconds")
-        ChoiceRow(listOf(0, 3, 5, 10).map { it to if (it == 0) off else stringResource(R.string.pebble_seconds, it) }, isSelected = { seconds == it }, onSelect = { timeout.setInt(it) }, modifier = Modifier.padding(horizontal = 16.dp))
+        ChoiceDialogRow(stringResource(R.string.pebble_menu_timeout), listOf(0, 3, 5, 10).map { DialogOption(it, if (it == 0) off else stringResource(R.string.pebble_seconds, it)) },
+            selected = seconds, onSelect = { timeout.setInt(it) }, scope = timeout.scope, tag = "pebble.menuTimeoutSeconds")
 
         SettingsSection(stringResource(R.string.pebble_now_playing))
-        SwitchRow(stringResource(R.string.pebble_volume_controls), volume.bool ?: true, { volume.setBool(it) }, stringResource(R.string.pebble_volume_controls_body), volume.scope, tag = "pebble.showVolumeControls")
-        SwitchRow(stringResource(R.string.pebble_progress_bar), progress.bool ?: true, { progress.setBool(it) }, stringResource(R.string.pebble_progress_bar_body), progress.scope, tag = "pebble.showProgressBar")
-        SwitchRow(stringResource(R.string.pebble_album_art), art.bool ?: true, { art.setBool(it) }, stringResource(R.string.pebble_album_art_body), art.scope, tag = "pebble.showAlbumArt")
-        SwitchRow(stringResource(R.string.pebble_auto_open), autoOpen.bool ?: false, { autoOpen.setBool(it) }, stringResource(R.string.pebble_auto_open_body), autoOpen.scope, tag = "pebble.autoOpen")
+        SwitchRow(stringResource(R.string.pebble_volume_controls), volume.bool ?: true, { volume.setBool(it) }, scope = volume.scope, tag = "pebble.showVolumeControls")
+        SwitchRow(stringResource(R.string.pebble_progress_bar), progress.bool ?: true, { progress.setBool(it) }, scope = progress.scope, tag = "pebble.showProgressBar")
+        SwitchRow(stringResource(R.string.pebble_album_art), art.bool ?: true, { art.setBool(it) }, scope = art.scope, tag = "pebble.showAlbumArt")
+        SwitchRow(stringResource(R.string.pebble_auto_open), autoOpen.bool ?: false, { autoOpen.setBool(it) }, scope = autoOpen.scope, tag = "pebble.autoOpen")
         val minutes = closeWhenPaused.int ?: 0
-        SettingRow(stringResource(R.string.pebble_close_when_paused), if (minutes == 0) off else stringResource(R.string.pebble_minutes, minutes), closeWhenPaused.scope, tag = "pebble.closeWhenPausedMinutes")
-        ChoiceRow(listOf(0, 1, 5, 10, 30).map { it to if (it == 0) off else stringResource(R.string.pebble_minutes, it) }, isSelected = { minutes == it }, onSelect = { closeWhenPaused.setInt(it) }, modifier = Modifier.padding(horizontal = 16.dp))
+        ChoiceDialogRow(stringResource(R.string.pebble_close_when_paused), listOf(0, 1, 5, 10, 30).map { DialogOption(it, if (it == 0) off else stringResource(R.string.pebble_minutes, it)) },
+            selected = minutes, onSelect = { closeWhenPaused.setInt(it) }, scope = closeWhenPaused.scope, tag = "pebble.closeWhenPausedMinutes")
     }
 }
 
@@ -92,20 +96,59 @@ private fun WatchappRow() {
 private fun GestureChoice(key: String, title: Int, default: String) {
     val handle = setting(key)
     val current = handle.string ?: default
-    val options = PebbleProtocol.GESTURES.map { it to gestureLabel(it) }
-    SettingRow(stringResource(title), options.firstOrNull { it.first == current }?.second, handle.scope, tag = key)
-    ChoiceRow(options, isSelected = { current == it }, onSelect = { handle.setString(it) }, modifier = Modifier.padding(horizontal = 16.dp))
+    ChoiceDialogRow(stringResource(title), PebbleProtocol.GESTURES.map { DialogOption(it, gestureLabel(it), gestureIcon(it)) },
+        selected = current, onSelect = { handle.setString(it) }, scope = handle.scope, tag = key)
 }
 
-/** A choose-and-order list stored as ids; an empty list is the default. */
+private fun gestureIcon(id: String): ImageVector = when (id) {
+    "queue" -> HocketIcons.AutoMirrored.Filled.QueueMusic
+    "library" -> HocketIcons.Filled.LibraryMusic
+    "actions" -> HocketIcons.Filled.MoreVert
+    "back" -> HocketIcons.AutoMirrored.Filled.ArrowBack
+    "lyrics" -> HocketIcons.Filled.Lyrics
+    else -> HocketIcons.Filled.Block
+}
+
+/** A choose-and-order list of the watchapp's, stored as ids (an empty list is the default). */
+private class PebbleList(val key: String, val title: Int, val body: Int, val all: List<String>, val default: List<String>)
+
+private val PEBBLE_LISTS = listOf(
+    PebbleList(SettingKeys.PEBBLE_MENU, R.string.pebble_menu, R.string.pebble_menu_body, PebbleProtocol.MENU_ITEMS, PebbleProtocol.DEFAULT_MENU),
+    PebbleList(SettingKeys.PEBBLE_ACTIONS, R.string.pebble_actions, R.string.pebble_actions_body, PebbleProtocol.ACTION_ITEMS, PebbleProtocol.DEFAULT_ACTIONS),
+    PebbleList(SettingKeys.PEBBLE_LIBRARY, R.string.pebble_library, R.string.pebble_library_body, PebbleProtocol.LIBRARY_SECTIONS, PebbleProtocol.LIBRARY_SECTIONS),
+)
+
+/** A Pebble list's own page ([key] is its setting): what it is for, then choose and order. */
 @Composable
-private fun ItemsEditor(key: String, title: Int, body: Int, all: List<String>, default: List<String>) {
+internal fun PebbleItemsPage(nav: NavHostController, key: String) {
+    val list = PEBBLE_LISTS.firstOrNull { it.key == key } ?: return
     val handle = setting(key)
-    val ids = handle.raw?.let { runCatching { HocketJson.json.decodeFromString(ListSerializer(String.serializer()), it) }.getOrNull() }?.ifEmpty { null } ?: default
-    SettingRow(stringResource(title), stringResource(body), handle.scope, tag = key)
-    ChooseAndOrder(all, ids, minEnabled = 1, label = { itemLabel(it) }, tag = "$key.editor") { next ->
-        handle.setRaw(HocketJson.json.encodeToString(ListSerializer(String.serializer()), if (next == default) emptyList() else next))
+    SubScreen(nav, stringResource(list.title)) {
+        Text(stringResource(list.body), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+        ChooseAndOrder(list.all, storedIds(handle) ?: list.default, minEnabled = 1, label = { itemLabel(it) }, icon = ::itemIcon, default = list.default, tag = "$key.editor") { next ->
+            handle.setRaw(HocketJson.json.encodeToString(ListSerializer(String.serializer()), if (next == list.default) emptyList() else next))
+        }
     }
+}
+
+private fun itemIcon(id: String): ImageVector = when (id) {
+    "nowPlaying" -> HocketIcons.Filled.PlayCircle
+    "queue" -> HocketIcons.AutoMirrored.Filled.QueueMusic
+    "library" -> HocketIcons.Filled.LibraryMusic
+    "love" -> HocketIcons.Filled.Favorite
+    "stash" -> HocketIcons.Filled.Inventory2
+    "rating" -> HocketIcons.Filled.Star
+    "shuffle" -> HocketIcons.Filled.Shuffle
+    "repeat" -> HocketIcons.Filled.Repeat
+    "goAlbum", "albums" -> HocketIcons.Filled.Album
+    "goArtist", "artists" -> HocketIcons.Filled.Person
+    "playOn" -> HocketIcons.Outlined.Devices
+    "playlists" -> HocketIcons.AutoMirrored.Filled.PlaylistPlay
+    "recent" -> HocketIcons.Filled.History
+    "downloads" -> HocketIcons.Filled.Download
+    "search" -> HocketIcons.Filled.Search
+    "lyrics" -> HocketIcons.Filled.Lyrics
+    else -> HocketIcons.Filled.MusicNote
 }
 
 @Composable
