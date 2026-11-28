@@ -1,5 +1,6 @@
 package app.hocket.ui
 
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -199,6 +200,10 @@ class CacheUiTest {
         compose.waitUntil(5_000) { core.client.storage.value.cacheBudgetAuto == false }
         assertEquals(4e9, core.client.settings.value[SettingKeys.STORAGE_CACHE_MAX_BYTES]!!.value.toDouble(), 1.0)
         rowHas("storage.cacheMaxBytes", "Custom: 4.00 GB")
+        // The dialog opens with that size picked.
+        choice("4 GB").assertIsSelected()
+        compose.onNodeWithTag("choice.cancel").performClick()
+        compose.waitForIdle()
         choice("Automatic").performClick()
         compose.waitUntil(5_000) { core.client.storage.value.cacheBudgetAuto == true }
         assertEquals("null", core.client.settings.value[SettingKeys.STORAGE_CACHE_MAX_BYTES]!!.value)

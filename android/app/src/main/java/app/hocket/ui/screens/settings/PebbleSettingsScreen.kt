@@ -110,9 +110,9 @@ private fun gestureIcon(id: String): ImageVector = when (id) {
 }
 
 /** A choose-and-order list of the watchapp's, stored as ids (an empty list is the default). */
-private class PebbleList(val key: String, val title: Int, val body: Int, val all: List<String>, val default: List<String>)
+internal class PebbleList(val key: String, val title: Int, val body: Int, val all: List<String>, val default: List<String>)
 
-private val PEBBLE_LISTS = listOf(
+internal val PEBBLE_LISTS = listOf(
     PebbleList(SettingKeys.PEBBLE_MENU, R.string.pebble_menu, R.string.pebble_menu_body, PebbleProtocol.MENU_ITEMS, PebbleProtocol.DEFAULT_MENU),
     PebbleList(SettingKeys.PEBBLE_ACTIONS, R.string.pebble_actions, R.string.pebble_actions_body, PebbleProtocol.ACTION_ITEMS, PebbleProtocol.DEFAULT_ACTIONS),
     PebbleList(SettingKeys.PEBBLE_LIBRARY, R.string.pebble_library, R.string.pebble_library_body, PebbleProtocol.LIBRARY_SECTIONS, PebbleProtocol.LIBRARY_SECTIONS),
@@ -121,7 +121,8 @@ private val PEBBLE_LISTS = listOf(
 /** A Pebble list's own page ([key] is its setting): what it is for, then choose and order. */
 @Composable
 internal fun PebbleItemsPage(nav: NavHostController, key: String) {
-    val list = PEBBLE_LISTS.firstOrNull { it.key == key } ?: return
+    val list = PEBBLE_LISTS.firstOrNull { it.key == key }
+    if (list == null) { androidx.compose.runtime.LaunchedEffect(Unit) { nav.popBackStack() }; return }
     val handle = setting(key)
     SubScreen(nav, stringResource(list.title)) {
         Text(stringResource(list.body), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))

@@ -246,7 +246,8 @@ fun PlaybackSettingsScreen(nav: NavHostController) {
         SwitchRow(stringResource(R.string.settings_autoplay), queue.autoplay, { client.dispatch(Commands.setAutoplay(it)) }, tag = "queue.autoplay")
         val resumeAlbums = setting(SettingKeys.PLAYBACK_RESUME_ALBUMS)
         SwitchRow(stringResource(R.string.settings_resume_albums), resumeAlbums.bool ?: true, { resumeAlbums.setBool(it) }, scope = resumeAlbums.scope, tag = "playback.resumeAlbums")
-        SwitchRow(stringResource(R.string.settings_external_control), externalControl.bool ?: false, { externalControl.setBool(it) }, scope = externalControl.scope, tag = "media.externalControl")
+        SwitchRow(stringResource(R.string.settings_external_control), externalControl.bool ?: false, { externalControl.setBool(it) },
+            subtitle = stringResource(R.string.settings_external_control_summary), scope = externalControl.scope, tag = "media.externalControl")
         HomeScreenSection()
     }
 }
@@ -324,7 +325,7 @@ fun DownloadsSettingsScreen(nav: NavHostController) {
 
         // Metered = mobile data, a hotspot or metered Wi-Fi, as the system reports it.
         SettingsSection(stringResource(R.string.settings_section_connection))
-        SwitchRow(stringResource(R.string.settings_offline_mode), offlineMode.bool ?: false, { offlineMode.setBool(it) }, scope = offlineMode.scope, tag = "network.offlineMode")
+        SwitchRow(stringResource(R.string.settings_offline_mode), offlineMode.bool ?: false, { offlineMode.setBool(it) }, stringResource(R.string.settings_offline_mode_body), offlineMode.scope, tag = "network.offlineMode")
         SwitchRow(stringResource(R.string.settings_data_saver), dataSaver.bool ?: true, { dataSaver.setBool(it) }, scope = dataSaver.scope, tag = "network.dataSaver")
         SwitchRow(stringResource(R.string.settings_downloads_wifi_only), wifiOnly.bool ?: true, { wifiOnly.setBool(it) }, scope = wifiOnly.scope, tag = "downloads.wifiOnly")
         SwitchRow(stringResource(R.string.settings_prefetch_mobile), prefetchMobile.bool ?: false, { prefetchMobile.setBool(it) }, scope = prefetchMobile.scope, tag = "storage.prefetchOnMobileData")
@@ -375,6 +376,7 @@ fun LyricsSettingsScreen(nav: NavHostController) {
             onLess = { offset.setInt((ms - 100).coerceAtLeast(-10_000)) }, onMore = { offset.setInt((ms + 100).coerceAtMost(10_000)) },
             lessLabel = stringResource(R.string.lyrics_offset_earlier_a11y), moreLabel = stringResource(R.string.lyrics_offset_later_a11y),
             scope = offset.scope, tag = "lyrics.defaultOffsetMs",
+            onReset = { offset.setInt(0) }.takeIf { ms != 0 }, resetLabel = stringResource(R.string.lyrics_offset_reset_a11y),
         )
     }
 }

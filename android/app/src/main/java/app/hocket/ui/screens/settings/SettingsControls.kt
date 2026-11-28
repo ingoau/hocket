@@ -3,6 +3,7 @@ package app.hocket.ui.screens.settings
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,6 +45,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -163,20 +165,25 @@ fun <T> ChoiceDialogRow(
 
 /** A row that opens a page of its own: title, an optional summary of what is set there, a chevron. */
 @Composable
-fun NavRow(title: String, summary: String? = null, tag: String? = null, onClick: () -> Unit) =
-    SettingRow(title, summary, onClick = onClick, tag = tag) { Chevron() }
+fun NavRow(title: String, summary: String? = null, scope: SettingScope? = null, tag: String? = null, onClick: () -> Unit) =
+    SettingRow(title, summary, scope, onClick = onClick, tag = tag) { Chevron() }
 
 /**
  * A number stepped by buttons on the row itself: title on the left, then minus, the value, plus.
- * Each button speaks its own action ([lessLabel], [moreLabel]); the value is part of the row's text.
+ * Each button speaks its own action ([lessLabel], [moreLabel]); the value is part of the row's text,
+ * and with [onReset] tapping it resets ([resetLabel]).
  */
 @Composable
-fun StepperRow(title: String, value: String, onLess: () -> Unit, onMore: () -> Unit, lessLabel: String, moreLabel: String, scope: SettingScope? = null, tag: String? = null) {
+fun StepperRow(title: String, value: String, onLess: () -> Unit, onMore: () -> Unit, lessLabel: String, moreLabel: String, scope: SettingScope? = null, tag: String? = null, onReset: (() -> Unit)? = null, resetLabel: String? = null) {
     SettingRow(title, scope = scope, tag = tag) {
         Row(Modifier.clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainerHigh), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onLess, modifier = Modifier.testTag("$tag.less").semantics { contentDescription = lessLabel }) { Icon(app.hocket.ui.icons.HocketIcons.Filled.Remove, null) }
-            Text(value, style = MaterialTheme.typography.titleSmall, textAlign = TextAlign.Center, modifier = Modifier.width(72.dp))
-            IconButton(onClick = onMore, modifier = Modifier.testTag("$tag.more").semantics { contentDescription = moreLabel }) { Icon(app.hocket.ui.icons.HocketIcons.Filled.Add, null) }
+            IconButton(onClick = onLess, modifier = Modifier.testTag("${tag ?: "stepper"}.less").semantics { contentDescription = lessLabel }) { Icon(app.hocket.ui.icons.HocketIcons.Filled.Remove, null) }
+            // The value itself resets (when [onReset] is given): back to the default in one tap.
+            Text(value, style = MaterialTheme.typography.titleSmall, textAlign = TextAlign.Center,
+                modifier = Modifier.width(72.dp).let { if (onReset != null) it.clip(CircleShape).clickable(onClickLabel = resetLabel, onClick = onReset).padding(vertical = 8.dp) else it }
+                    // Each step is read out as it lands.
+                    .semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite })
+            IconButton(onClick = onMore, modifier = Modifier.testTag("${tag ?: "stepper"}.more").semantics { contentDescription = moreLabel }) { Icon(app.hocket.ui.icons.HocketIcons.Filled.Add, null) }
         }
     }
 }

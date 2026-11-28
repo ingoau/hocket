@@ -143,7 +143,9 @@ fun AudioSettingsScreen(nav: NavHostController) {
         if (outputs.isNotEmpty()) {
             val selectedOutput = audio.outputDevice ?: outputs.firstOrNull { it.isDefault }?.id
             ChoiceDialogRow(stringResource(R.string.settings_output_device), outputs.map { DialogOption(it.id, it.name, HocketIcons.Filled.Speaker) },
-                selected = selectedOutput, onSelect = { client.dispatch(Commands.setOutputDevice(it)) }, tag = "audio.output")
+                selected = selectedOutput, onSelect = { client.dispatch(Commands.setOutputDevice(it)) }, tag = "audio.output",
+                // A device set before and since unplugged: named by its id rather than left blank.
+                valueText = outputs.firstOrNull { it.id == selectedOutput }?.name ?: selectedOutput)
         }
     }
 }
@@ -171,7 +173,8 @@ private fun TransitionRows(client: app.hocket.core.client.CoreClient) {
         picked = next
         client.dispatch(Commands.setTransitionSettings(next))
     }
-    SettingRow(stringResource(R.string.settings_transitions), tag = "audio.transitions")
+    // AutoMix's limits (never within albums, ...), so it doesn't look broken there.
+    SettingRow(stringResource(R.string.settings_transitions), if (value.mode == TransitionMode.AutoMix) stringResource(R.string.settings_transitions_automix_desc) else null, tag = "audio.transitions")
     val modes = listOf(
         Triple(TransitionMode.Off, "off", R.string.settings_transitions_off),
         Triple(TransitionMode.Crossfade, "crossfade", R.string.settings_transitions_crossfade),
@@ -303,7 +306,8 @@ internal fun TranscodingProfileScreen(nav: NavHostController, networkId: String)
         ChoiceDialogRow(stringResource(R.string.settings_format), listOf(null, "opus", "mp3", "aac").map { DialogOption(it, formatLabel(it)) },
             selected = profile.format, onSelect = { push(profile.copy(format = it)) }, tag = "transcoding.format")
         ChoiceDialogRow(stringResource(R.string.settings_max_bitrate), listOf(null, 96, 128, 192, 320).map { DialogOption(it, bitrateLabel(it)) },
-            selected = profile.maxBitRate?.toInt(), onSelect = { push(profile.copy(maxBitRate = it?.toUInt())) }, tag = "transcoding.bitrate")
+            selected = profile.maxBitRate?.toInt(), onSelect = { push(profile.copy(maxBitRate = it?.toUInt())) }, tag = "transcoding.bitrate",
+            valueText = bitrateLabel(profile.maxBitRate?.toInt()))
         SettingRow(stringResource(R.string.settings_cannot_decode), stringResource(R.string.settings_cannot_decode_body), tag = "transcoding.cannotDecode")
         CannotDecodeEditor(profile.cannotDecode) { push(profile.copy(cannotDecode = it)) }
     }
@@ -383,10 +387,10 @@ fun CustomiseSettingsScreen(nav: NavHostController) {
         val bar = app.hocket.ui.nav.navItems()
         NavRow(stringResource(R.string.settings_bottom_bar), bar.map { it.label() }.joinToString(", "), tag = "customise.bottomBar") { open(PAGE_BOTTOM_BAR) }
         val menu = contextMenuIds()
-        NavRow(stringResource(R.string.settings_context_menu), stringResource(R.string.settings_order_summary, menu.size, ActionIds.CONTEXT_MENU.size), tag = "customise.contextMenuSection") { open(PAGE_CONTEXT_MENU) }
+        NavRow(stringResource(R.string.settings_context_menu), stringResource(R.string.settings_order_summary, menu.size, ActionIds.CONTEXT_MENU.size), scope = setting(SettingKeys.ACTIONS_ORDER_CONTEXT_MENU).scope, tag = "customise.contextMenuSection") { open(PAGE_CONTEXT_MENU) }
         val media = mediaSessionIds().filter { it in ActionIds.MEDIA_SESSION_CHOICES }
-        NavRow(stringResource(R.string.settings_media_buttons), media.map { actionLabel(it) }.joinToString(", ").ifEmpty { null }, tag = "customise.mediaSessionSection") { open(PAGE_MEDIA_BUTTONS) }
-        NavRow(stringResource(R.string.settings_swipe_actions), tag = "customise.swipe") { open(PAGE_SWIPE) }
+        NavRow(stringResource(R.string.settings_media_buttons), media.map { actionLabel(it) }.joinToString(", ").ifEmpty { null }, scope = setting(SettingKeys.ACTIONS_ORDER_MEDIA_SESSION).scope, tag = "customise.mediaSessionSection") { open(PAGE_MEDIA_BUTTONS) }
+        NavRow(stringResource(R.string.settings_swipe_actions), scope = setting(SettingKeys.SWIPE_LIST_START_TO_END).scope, tag = "customise.swipe") { open(PAGE_SWIPE) }
         // swipe.playerUp: what swiping up on the full player's artwork opens.
         val playerUp = setting(SettingKeys.SWIPE_PLAYER_UP)
         val playerUpOptions = listOf(
@@ -440,7 +444,8 @@ internal fun SwipeChoices(title: String, options: List<String>, surface: SwipeSu
                 if (id == SwipeOptions.NONE) DialogOption(id, none, HocketIcons.Filled.Block) else DialogOption(id, actionLabel(id), app.hocket.ui.components.swipeLook(id)?.icon)
             },
             selected = current, onSelect = { handle.setString(it) }, scope = handle.scope, tag = "customise.$key",
-            trailing = { Icon(if (right) HocketIcons.AutoMirrored.Filled.SwipeRight else HocketIcons.AutoMirrored.Filled.SwipeLeft, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+            // By the key: the icons mirror themselves in right-to-left layouts, as the names swap.
+            trailing = { Icon(if (key == surface.startToEndKey) HocketIcons.AutoMirrored.Filled.SwipeRight else HocketIcons.AutoMirrored.Filled.SwipeLeft, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
         )
     }
 }
