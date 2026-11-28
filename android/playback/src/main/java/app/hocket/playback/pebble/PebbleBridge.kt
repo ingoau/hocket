@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.SystemClock
 import app.hocket.core.Commands
 import app.hocket.core.CoreHandle
+import app.hocket.core.QueueWindows
 import app.hocket.core.entryAt
 import app.hocket.core.HocketJson
 import app.hocket.core.Queries
@@ -567,8 +568,9 @@ class PebbleBridge(
         when {
             item == "self" -> CastDevices.stop()
             item.startsWith("cast:") -> {
-                val id = item.removePrefix("cast:")
                 val cast = CastDevices.state.value
+                // A route id runs past what the watch keeps of a row id: matched back by its short form.
+                val id = cast.devices.firstOrNull { PebbleProtocol.fitRowId("cast:", it.id) == item }?.id ?: return
                 val self = devices.firstOrNull { it.isSelf }
                 if (cast.active?.id == id && self?.playing != false) return CastDevices.stop()
                 val elsewhere = self != null && !self.playing && devices.any { it.playing && !it.isSelf }
@@ -721,20 +723,23 @@ class PebbleBridge(
         val wanted = page.filterIsInstance<QueueSlot.Entry>().map { it.index }
         val missing = wanted.filter { q.entryAt(it) == null }
         val extra = if (missing.isEmpty()) null else (query(Commands.queueRange(missing.min(), missing.max() - missing.min() + 1)) as? QueryResult.Queue)?.data
-        val rows = page.mapNotNull { slot ->
+            // The queue changed under the request: its rows would land at the wrong indices.
+            ?.takeIf { QueueWindows.sameShape(q, it) }
+        // The watch places rows in order from the offset, so a gap ends the page (it asks again for the rest).
+        val rows = page.asSequence().map { slot ->
             when (slot) {
                 is QueueSlot.Header -> Row("", slot.title, flags = RowFlag.HEADER)
                 is QueueSlot.Entry -> (q.entryAt(slot.index) ?: extra?.entryAt(slot.index))?.let { queueRow(it, it.item.key == q.current?.item?.key) }
             }
-        }
+        }.takeWhile { it != null }.filterNotNull().toList()
         return Triple(slots.size, rows, null)
     }
 
     private fun queueRow(e: QueueEntry, current: Boolean): Row {
         val id = PebbleProtocol.queueRowId(e.item.key)
         servedQueue[id] = e
-        val off = if (e.item.unavailable == true) RowFlag.UNAVAILABLE else unavailable(e.track.offline)
-        return Row(id, e.track.title, e.track.artist ?: "", RowFlag.TRACK or off or if (current) RowFlag.CURRENT else 0)
+        // Only offline refuses a row, as on the phone: `item.unavailable` (a device couldn't play it) still plays and moves.
+        return Row(id, e.track.title, e.track.artist ?: "", RowFlag.TRACK or unavailable(e.track.offline) or if (current) RowFlag.CURRENT else 0)
     }
 
     /** The queue entry a row id the watch sent back stands for ([PebbleProtocol.queueRowId]). */
@@ -754,7 +759,7 @@ class PebbleBridge(
             addAll(connect)
             if (casting != null) add(Row("self", "This phone", "Stop casting"))
             cast.devices.forEach { d ->
-                add(Row("cast:${d.id}", d.name, when { casting?.id == d.id -> "Casting"; cast.connecting == d.id -> "Connecting…"; else -> d.description ?: "Cast" }))
+                add(Row(PebbleProtocol.fitRowId("cast:", d.id), d.name, when { casting?.id == d.id -> "Casting"; cast.connecting == d.id -> "Connecting…"; else -> d.description ?: "Cast" }))
             }
         }
     }

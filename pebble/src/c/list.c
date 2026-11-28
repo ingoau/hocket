@@ -251,6 +251,13 @@ void list_handle_page(DictionaryIterator *iter) {
       if (!(l->rows[i].flags & RowHeader)) at = i;
     }
     if (at > 0) menu_layer_set_selected_index(l->menu, MenuIndex(0, l->base + at), MenuRowAlignCenter, false);
+  } else {
+    // The selection moved onto a row before its page came, and it turned out a heading: step on.
+    const uint16_t sel = menu_layer_get_selected_index(l->menu).row;
+    if (prv_cached(l, sel) && (l->rows[sel - l->base].flags & RowHeader)) {
+      const bool down = sel + 1 < l->total;
+      menu_layer_set_selected_index(l->menu, MenuIndex(0, down ? sel + 1 : (sel ? sel - 1 : 0)), MenuRowAlignNone, false);
+    }
   }
 }
 
@@ -320,7 +327,7 @@ static void prv_draw_row(GContext *ctx, const Layer *cell, MenuIndex *index, voi
 #if defined(PBL_ROUND)
     // The basic header is left-aligned, which the round screen's edge cuts off: centred instead.
     const GRect b = layer_get_bounds(cell);
-    graphics_context_set_text_color(ctx, GColorBlack);
+    graphics_context_set_text_color(ctx, menu_cell_layer_is_highlighted(cell) ? GColorWhite : GColorBlack);
     graphics_draw_text(ctx, r->title, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GRect(8, (b.size.h - 18) / 2, b.size.w - 16, 18),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 #else

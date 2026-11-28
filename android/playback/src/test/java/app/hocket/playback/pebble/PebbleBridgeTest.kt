@@ -379,6 +379,16 @@ class PebbleBridgeTest {
         assertEquals(listOf(0, PebbleProtocol.RowFlag.UNAVAILABLE), rows.map { it.flags and PebbleProtocol.RowFlag.UNAVAILABLE })
     }
 
+    @Test
+    fun aQueueEntryThatFailedToPlayOnceIsNotRefused() = runTest {
+        val q = queue(total = 3, history = 0, group = 0, window = 3)
+        val failed = q.copy(entries = q.entries.mapIndexed { i, e -> if (i == 1) e.copy(item = e.item.copy(unavailable = true)) else e })
+        val b = bridge(ScriptedCore { null })
+        b.onEvent(Event.QueueChanged(EventQueueChangedInner(failed)))
+        val rows = b.list("queue", 0).second.filter { it.flags and PebbleProtocol.RowFlag.HEADER == 0 }
+        assertEquals(listOf(0, 0, 0), rows.map { it.flags and PebbleProtocol.RowFlag.UNAVAILABLE })
+    }
+
     private fun track(id: String, source: String, offline: OfflineState) = Track(
         id = id, serverId = source, title = "Song $id", durationMs = 1000u, rating = 0u, loved = false, playCount = 0u, offline = offline, explicit = false,
     )
