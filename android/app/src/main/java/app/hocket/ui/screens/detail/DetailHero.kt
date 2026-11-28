@@ -198,8 +198,8 @@ internal fun DetailHero(
     footer: (@Composable () -> Unit)? = null,
     /** On the cover, first (an album's preview: where it is, hidden while the preview has it). Given the cover's corner radius and artwork size. */
     artModifier: (radius: Dp, artSize: Int) -> Modifier = { _, _ -> Modifier },
-    /** Read while drawing: the cover is elsewhere (an album's preview has it), so its continuation goes too. */
-    hideCover: () -> Boolean = { false },
+    /** Read while drawing: how much of the cover is here (0 while an album's preview has it), its continuation with it. */
+    coverAlpha: () -> Float = { 1f },
 ) {
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     BoxWithConstraints(Modifier.fillMaxWidth().testTag("detail.header").semantics { }) {
@@ -208,7 +208,7 @@ internal fun DetailHero(
             val edge = look.edge
             // The cover from the very top of the screen, under the status bar and the bar's icons,
             // a shade over its top so they read whatever the cover is.
-            if (edge != null) BoxWithConstraints(Modifier.matchParentSize().clipToBounds().graphicsLayer { alpha = if (hideCover()) 0f else 1f }) { DetailContinuation(coverArt, edge, width, 0.dp, maxHeight) }
+            if (edge != null) BoxWithConstraints(Modifier.matchParentSize().clipToBounds().graphicsLayer { alpha = coverAlpha() }) { DetailContinuation(coverArt, edge, width, 0.dp, maxHeight) }
             // Its foot fades as the player's does (a mirror's onto its reflection, a flat edge's last
             // few rows onto its colour); any other extension carries straight on with no fade.
             val footFades = edge != null && (edge.style == ArtworkStyle.Mirror || edge.isFlat())

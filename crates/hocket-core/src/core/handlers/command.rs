@@ -15,8 +15,19 @@ impl Actor {
         // main playback first: the command itself is what the user asked
         // for. Restoring and then toggling would pause a track the user
         // had just heard as paused.
-        if super::preview::command_ends_preview(&cmd) {
-            self.stop_preview(false);
+        // Playing the song being previewed carries it on from the preview.
+        if super::preview::command_ends_preview(&cmd)
+            && !(super::preview::command_plays_from_preview(&cmd) && self.begin_preview_handoff())
+        {
+            // Play and seeks expect the song a handover was loading to be heard.
+            let resume = matches!(
+                cmd,
+                Command::Play
+                    | Command::SeekTo { .. }
+                    | Command::SeekBy { .. }
+                    | Command::ResumeHere
+            );
+            self.end_preview(false, resume);
         }
         match cmd {
             // -- lifecycle --

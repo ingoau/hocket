@@ -634,6 +634,11 @@ class ExoBackend(
                 applySetNext(command.data.next)
             }
             BackendCommand.Play -> {
+                // Starting while a preview plays is the core handing the previewed song over to
+                // this player: the preview gives up audio focus and plays on until it is stopped
+                // (once this one is heard), where losing focus to this player would pause it at
+                // once and leave a gap.
+                if (previewActive) previewPlayer?.let { it.setAudioAttributes(it.audioAttributes, false) }
                 if (player.playbackState == Player.STATE_IDLE) player.prepare()
                 if (player.playbackState == Player.STATE_ENDED) player.seekTo(0)
                 player.play()
@@ -697,6 +702,8 @@ class ExoBackend(
                 // ours and is not reported as another app interrupting.
                 previewActive = true
                 val p = ensurePreviewPlayer()
+                // Back on focus (a handover below takes it off).
+                p.setAudioAttributes(p.audioAttributes, true)
                 val source = command.data.source
                 p.setMediaSource(mediaSource(source), command.data.position_ms.toLong())
                 val linear = 10.0.pow(source.gainDb / 20.0)

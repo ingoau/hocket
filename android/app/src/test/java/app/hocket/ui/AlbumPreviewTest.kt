@@ -28,7 +28,8 @@ import org.robolectric.annotation.GraphicsMode
 /**
  * The album preview: a pull down from the top of an album page docks the cover and previews the
  * song on it (pausing what was playing here), a swipe moves the preview to the next song, and
- * putting it away stops the preview and gives playback back. A short pull only springs back.
+ * putting it away stops the preview and gives playback back. A short pull only springs back. Play
+ * from here (the button, or the card let go at the bottom) plays the album on from the preview.
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35], application = android.app.Application::class, qualifiers = "w411dp-h891dp")
@@ -221,5 +222,37 @@ class AlbumPreviewTest {
         assertNull(core.client.preview.value)
         compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.id == previewed }
         assertTrue(tracks.any { it.id == previewed })
+        // On from the preview (which opened 30% in), not from the top.
+        assertTrue(core.client.transport.value.position.positionMs > 0u)
+    }
+
+    @Test
+    fun aTapBesideTheCardPutsItAway() {
+        val core = TestCore(startPlaying = false)
+        open(core)
+        pull(200f)
+        compose.waitUntil(5_000) { core.client.preview.value != null }
+        // Above the card's left edge, clear of the card and the close button.
+        compose.onRoot().performTouchInput { click(Offset(16f * density, 100f * density)) }
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.waitForIdle()
+        assertFalse(exists("albumPreview"))
+        assertNull(core.client.preview.value)
+    }
+
+    @Test
+    fun draggingTheCardToTheBottomPlaysFromIt() {
+        val core = TestCore(startPlaying = false)
+        open(core)
+        pull(200f)
+        compose.waitUntil(5_000) { core.client.preview.value != null }
+        val previewed = core.client.preview.value!!.trackId
+        // Past the dismissal, on to the bottom of the screen: the drop target lights up.
+        swipeCard(540f)
+        assertFalse(exists("albumPreview"))
+        assertNull(core.client.preview.value)
+        compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.id == previewed }
+        assertTrue(core.client.transport.value.position.isPlaying)
+        assertTrue(core.client.transport.value.position.positionMs > 0u)
     }
 }

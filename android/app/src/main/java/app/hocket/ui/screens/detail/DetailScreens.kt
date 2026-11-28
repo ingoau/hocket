@@ -52,6 +52,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -208,7 +209,7 @@ private fun DetailScaffold(
                                     onTitleBottom = { titleBottom = it },
                                     footer = heroFooter.takeIf { !loading },
                                     artModifier = { radius, size -> if (preview != null && !loading) Modifier.albumPreviewSource(preview, radius, size, previewLabel) else Modifier },
-                                    hideCover = { preview?.active == true },
+                                    coverAlpha = { preview?.let(::albumPreviewCoverAlpha) ?: 1f },
                                     actions = { if (loading) { Box(Modifier.weight(1f).height(56.dp).skeleton(CircleShape)); Box(Modifier.weight(1f).height(56.dp).skeleton(CircleShape)) } else heroActions() },
                                 )
                             }
@@ -221,9 +222,13 @@ private fun DetailScaffold(
                     }
                     // A long playlist's thumb, under the bar and clear of the bottom chrome.
                     FastScrollbar(listState, Modifier.align(Alignment.TopEnd), top = with(LocalDensity.current) { barBottom.toDp() }, bottom = BottomContentInset)
-                    DetailTopBar(title, collapsed = collapsed, onBack = if (embedded) null else ({ nav.popBackStack() }), overArt = overArt, shade = look.immersive && pastShade && !collapsed,
-                        // A card page: the bar fills in as soon as the tile reaches it.
-                        filled = collapsed || (!look.immersive && scrolled), actions = barActions)
+                    // Out of the way early in an album preview's pull (its own close button comes in
+                    // where the page's actions were), back as the cover goes home.
+                    Box(Modifier.then(if (preview != null) Modifier.graphicsLayer { alpha = albumPreviewChromeAlpha(preview) } else Modifier)) {
+                        DetailTopBar(title, collapsed = collapsed, onBack = if (embedded) null else ({ nav.popBackStack() }), overArt = overArt, shade = look.immersive && pastShade && !collapsed,
+                            // A card page: the bar fills in as soon as the tile reaches it.
+                            filled = collapsed || (!look.immersive && scrolled), actions = barActions)
+                    }
                     overlay()
                 }
             }

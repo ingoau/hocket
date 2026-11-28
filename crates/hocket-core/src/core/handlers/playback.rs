@@ -472,6 +472,9 @@ impl Actor {
                 return;
             }
             let Some(source) = self.media_source_for(&item.key, &track) else {
+                if self.preview_handoff().is_some() {
+                    self.stop_preview(false);
+                }
                 tracing::info!(target: "hocket::player", key = %item.key, track = %track.id, "no source to play this from");
                 self.player_notice(
                     PlayerNoticeCode::NoServer,
@@ -515,7 +518,25 @@ impl Actor {
             let next_source = self.next_source(&upcoming, None);
             self.playback.next_doc_key = upcoming.first().map(|i| i.key.clone());
             self.playback.next = next_source.clone();
-            if let Err(e) = self.backend.load(source, next_source, position_ms, play) {
+            // The song being previewed carries on from the preview: loaded
+            // paused where it is, and started on Ready (`on_handoff_ready`).
+            let mut backend_play = play;
+            if let Some((at, hold)) = self.preview_handoff_load(&track.id) {
+                position_ms = if track.duration_ms > 0 {
+                    at.min(track.duration_ms)
+                } else {
+                    at
+                };
+                self.playback.position_ms = position_ms;
+                backend_play = play && !hold;
+                if play && hold {
+                    tracing::debug!(target: "hocket::player", key = %item.key, position_ms, "handing over from the preview");
+                }
+            }
+            if let Err(e) = self
+                .backend
+                .load(source, next_source, position_ms, backend_play)
+            {
                 self.error(ErrorKind::Playback, "load", Some(e.to_string()));
             }
             self.mix_log_arm();
@@ -736,7 +757,11 @@ impl Actor {
             self.post_order_for_mix();
             // A preview started while someone else held the transport must
             // not keep playing once this device takes it over.
-            if self.preview.as_ref().is_some_and(|p| p.hold.is_none()) {
+            if self
+                .preview
+                .as_ref()
+                .is_some_and(|p| p.hold.is_none() && p.handoff.is_none())
+            {
                 self.stop_preview(false);
             }
             self.playback.consecutive_skips = 0;
@@ -903,7 +928,15 @@ impl Actor {
         match cmd {
             TransportCommand::Pause => self.drop_preview_hold(),
             TransportCommand::SetVolume { .. } => {}
-            _ => self.stop_preview(false),
+            _ => {
+                let resume = matches!(
+                    cmd,
+                    TransportCommand::Play
+                        | TransportCommand::SeekTo { .. }
+                        | TransportCommand::SeekBy { .. }
+                );
+                self.end_preview(false, resume);
+            }
         }
         match cmd {
             TransportCommand::Play => {
@@ -1332,13 +1365,44 @@ impl Actor {
 
     pub(crate) fn on_backend_report(&mut self, report: BackendReport) {
         if self.preview.is_some() {
+            use crate::core::state::PreviewHandoff;
+            let handoff = self.preview_handoff();
+            let current_key = match &report {
+                BackendReport::Playing { key, .. }
+                | BackendReport::Paused { key, .. }
+                | BackendReport::Error { key, .. } => {
+                    self.playback.backend_key.as_ref() == Some(key)
+                }
+                _ => false,
+            };
             match &report {
-                // The preview player taking the output is not another app,
-                // and a Playing report must not start the main item under it.
+                // The preview player taking the output is not another app.
                 BackendReport::AudioFocusLost { .. } => return,
+                // Handing over: the main player is heard, so the preview stops.
+                BackendReport::Playing { .. }
+                    if matches!(handoff, Some(PreviewHandoff::Starting { .. })) && current_key =>
+                {
+                    self.stop_preview(false);
+                }
+                // A Playing report must not start the main item under it.
                 BackendReport::Playing { .. } => {
                     let _ = self.backend.pause();
                     return;
+                }
+                // Loaded paused for the handover on purpose: still playing as
+                // far as anyone is told.
+                // (A backend that reports it with Ready, after the handover
+                // has started it, too.)
+                BackendReport::Paused { .. }
+                    if matches!(
+                        handoff,
+                        Some(PreviewHandoff::Loading { .. } | PreviewHandoff::Starting { .. })
+                    ) && current_key =>
+                {
+                    return;
+                }
+                BackendReport::Error { .. } if handoff.is_some() && current_key => {
+                    self.stop_preview(false);
                 }
                 _ => {}
             }
@@ -1360,7 +1424,17 @@ impl Actor {
                 return;
             }
             BackendReport::PreviewInterrupted => {
+                // Not resumed into whatever interrupted it: a song a handover
+                // was loading stays paused.
+                let loading = matches!(
+                    self.preview_handoff(),
+                    Some(crate::core::state::PreviewHandoff::Loading { .. })
+                );
                 self.stop_preview(false);
+                if loading {
+                    self.playback.want_playing = false;
+                    self.set_playing(false);
+                }
                 return;
             }
             BackendReport::PreviewFailed => {
@@ -1414,6 +1488,7 @@ impl Actor {
                 self.playback.consecutive_skips = 0;
                 self.clear_player_notice();
                 self.emit_transport();
+                self.on_handoff_ready();
             }
             BackendReport::Playing { key, position_ms } => {
                 if !current(&key, self) {

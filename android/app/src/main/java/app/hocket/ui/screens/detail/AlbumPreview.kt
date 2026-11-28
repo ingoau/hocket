@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -155,6 +156,24 @@ private const val REQUEST_HOLD_MS = 1_500L
 
 private val CARD_RADIUS = 28.dp
 
+/** How long the card takes to drop into the mini player when the album plays from it. */
+private const val DROP_MS = 520
+
+/** Gathering itself, then easing into the mini player (Material's emphasized curve). */
+private val DROP_EASING = androidx.compose.animation.core.CubicBezierEasing(0.2f, 0f, 0f, 1f)
+
+/** Under this far from the bottom (past the nav bar) the card's centre plays the album when let go. */
+private val PLAY_ZONE = 200.dp
+
+/** How far past the play threshold the card gives under the finger. */
+private val PLAY_GIVE = 16.dp
+
+/** The drop target's height, and its gap above the system bar. */
+private val DROP_TARGET_HEIGHT = 56.dp
+private val DROP_TARGET_GAP = 20.dp
+
+/** How much smaller the card gets, pulled all the way down to play. */
+private const val PLAY_SHRINK = 0.34f
 /**
  * Where the album preview is: [progress] 0 with the cover in the header, 1 docked in the middle,
  * between while the finger (or a settle) moves it. [open] once it has docked and the songs can be
@@ -186,11 +205,39 @@ internal class AlbumPreviewState(private val scope: CoroutineScope) {
     /** How far down a docked card is pulled for a release to put it away, as a fraction: 0 to 1. */
     val downFraction: Float get() = (down / dismissPx).coerceIn(0f, 1f)
 
+    /**
+     * Docked, how far down (px) the card is pulled for a release to play the album from it instead
+     * of putting it away: near the bottom of the screen, where the drop target is.
+     */
+    internal var playPx = Float.MAX_VALUE
+
+    /** Set by the overlay: how much further than [playPx] the card gives (px), however far the finger goes. */
+    internal var playGivePx = 0f
+
+    /** Where the card is drawn, pulled down: with the finger, until past [playPx] it only gives a little (the drop target stays in view under it). */
+    val shownDown: Float get() = if (down <= playPx || playGivePx <= 0f) down else playPx + playGivePx * (1f - exp(-(down - playPx) / (playGivePx * 3f)))
+
+    /** Let go now, the album plays from the card. */
+    val armedToPlay: Boolean get() = open && down >= playPx
+
+    /** Playing from the card: it drops into the mini player, [drop] going 0 to 1; the overlay goes once it's there. */
+    var dropping by mutableStateOf(false)
+        private set
+    var drop by mutableFloatStateOf(0f)
+        private set
+
+    /** Where the card was when it started dropping (px pulled down). */
+    internal var dropFrom = 0f
+        private set
+
+    /** Set by the overlay: plays the album from the card in the middle. */
+    internal var playFromCard: () -> Unit = {}
+
     /** Docked and still: the card row takes over from the flying cover. */
     val docked: Boolean get() = open && !dragging && !settling
 
     /** Anything of the preview is on screen (the header's cover is hidden meanwhile). */
-    val active: Boolean get() = open || travel > 0f
+    val active: Boolean get() = open || travel > 0f || dropping
 
     /** The header's cover in the window, and its corner radius and artwork size, to fly from and back to. */
     internal var heroBounds by mutableStateOf<Rect?>(null)
@@ -257,8 +304,11 @@ internal class AlbumPreviewState(private val scope: CoroutineScope) {
     private fun moveDown(deltaPx: Float): Float {
         val before = down
         down = (down + deltaPx).coerceAtLeast(0f)
-        if (before < dismissPx && down >= dismissPx) haptics?.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
-        else if (before >= dismissPx && down < dismissPx) haptics?.performHapticFeedback(HapticFeedbackType.SegmentTick)
+        // A detent at each threshold: put away, then play.
+        for (at in floatArrayOf(dismissPx, playPx)) {
+            if (before < at && down >= at) haptics?.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+            else if (before >= at && down < at) haptics?.performHapticFeedback(HapticFeedbackType.SegmentTick)
+        }
         return down - before
     }
 
@@ -269,22 +319,70 @@ internal class AlbumPreviewState(private val scope: CoroutineScope) {
         val v = velocityPx / pullPx
         when {
             !open -> if (travel >= 1f || (travel > 0.4f && v > FLICK)) openNow() else settleTo(0f)
-            // Pulled down far enough (or flicked down): away, flying home from where it was let go.
-            down > 0f -> if (down >= dismissPx || v > FLICK) close() else settleDown()
+            // Down to the bottom: the album plays from the card. Pulled down far enough (or flicked
+            // down): away, flying home from where it was let go.
+            down > 0f -> when {
+                // Flicked back up: changed its mind.
+                v < -FLICK -> settleDown()
+                down >= playPx -> playFromHere()
+                down >= dismissPx || v > FLICK -> close()
+                else -> settleDown()
+            }
             else -> if (travel < CLOSE_AT || v < -FLICK) close() else settleTo(1f)
         }
     }
 
     /** Dock the cover in the middle and open the songs (a release past the threshold, or the accessibility action). */
     fun openNow() {
+        if (dropping) return
         if (!open) haptics?.performHapticFeedback(HapticFeedbackType.Confirm)
         open = true
         settleTo(1f)
     }
 
+    /**
+     * Play the album from the card in the middle (Play from here, or the card let go at the bottom):
+     * the preview carries on as the song itself (the core hands it over, so it isn't stopped here),
+     * and the card drops into the mini player as that comes back.
+     */
+    fun playFromHere() {
+        if (!open || dropping) return
+        haptics?.performHapticFeedback(HapticFeedbackType.Confirm)
+        playFromCard()
+        settle?.cancel()
+        // Grabbed mid over-pull: where it is on screen.
+        if (travel > 1f) {
+            down += (progress - 1f) * flightPx.coerceAtLeast(0f)
+            travel = 1f
+        }
+        dropFrom = shownDown
+        open = false
+        dragging = false
+        settling = false
+        drop = 0f
+        dropping = true
+        fun landed() {
+            travel = 0f
+            down = 0f
+            drop = 0f
+            dropping = false
+        }
+        if (reducedMotion) {
+            landed()
+            return
+        }
+        settle = scope.launch {
+            try {
+                animate(0f, 1f, animationSpec = androidx.compose.animation.core.tween(DROP_MS, easing = DROP_EASING)) { value, _ -> drop = value }
+            } finally {
+                landed()
+            }
+        }
+    }
+
     /** Put the cover back in the header. */
     fun close() {
-        if (!active) return
+        if (!active || dropping) return
         if (open) {
             haptics?.performHapticFeedback(HapticFeedbackType.GestureEnd)
             stopPreview()
@@ -353,6 +451,12 @@ internal class AlbumPreviewState(private val scope: CoroutineScope) {
         }
     }
 
+    /** The card's size, pulled [d] px down from docked: a little smaller towards a dismissal, then smaller still on to play. */
+    fun pulledScale(d: Float): Float {
+        val reach = if (playPx <= dismissPx) 0f else ((d - dismissPx) / (playPx - dismissPx)).coerceIn(0f, 1f)
+        return 1f - 0.12f * (d / dismissPx).coerceIn(0f, 1f) - PLAY_SHRINK * reach
+    }
+
     private fun rubber(t: Float): Float = if (t <= 1f) t else 1f + OVERPULL * (1f - exp(-(t - 1f) * 1.6f))
 }
 
@@ -408,6 +512,21 @@ internal fun Modifier.albumPreviewPull(state: AlbumPreviewState, list: LazyListS
         .nestedScroll(connection)
 }
 
+/**
+ * The page's own top bar while the preview is out: gone by a quarter of the way (before the
+ * preview's close button comes in where its actions were), back over the last quarter home, or as
+ * the card drops into the mini player.
+ */
+internal fun albumPreviewChromeAlpha(state: AlbumPreviewState): Float =
+    if (state.dropping) state.drop else 1f - (state.progress / 0.25f).coerceIn(0f, 1f)
+
+/** The header's cover: hidden while the preview has it, back as the card drops into the mini player (it isn't coming home). */
+internal fun albumPreviewCoverAlpha(state: AlbumPreviewState): Float = when {
+    state.dropping -> state.drop
+    state.active -> 0f
+    else -> 1f
+}
+
 /** On the header's cover: where it is (to fly from), hidden while the preview has it, and the accessibility way in. */
 internal fun Modifier.albumPreviewSource(state: AlbumPreviewState, radius: Dp, artSize: Int, label: String): Modifier = this
     .onGloballyPositioned {
@@ -416,7 +535,7 @@ internal fun Modifier.albumPreviewSource(state: AlbumPreviewState, radius: Dp, a
         state.heroRadius = radius
         state.heroArtSize = artSize
     }
-    .graphicsLayer { alpha = if (state.active) 0f else 1f }
+    .graphicsLayer { alpha = albumPreviewCoverAlpha(state) }
     .semantics { customActions = listOf(CustomAccessibilityAction(label) { state.openNow(); true }) }
 
 /**
@@ -440,7 +559,8 @@ internal fun BoxScope.AlbumPreviewOverlay(
     state.haptics = LocalHapticFeedback.current
     state.reducedMotion = LocalReducedMotion.current
     val active by remember(state) { derivedStateOf { state.active } }
-    BackHandler(enabled = state.open) { state.close() }
+    // Dropping into the mini player, back waits for it to land rather than leaving the page under it.
+    BackHandler(enabled = state.open || state.dropping) { state.close() }
     // Put away (or the page left with it open): stop the preview, which gives back what it paused.
     state.stopPreview = { client.dispatch(Command.PreviewStop) }
     DisposableEffect(state) { onDispose { if (state.open) client.dispatch(Command.PreviewStop) } }
@@ -449,7 +569,10 @@ internal fun BoxScope.AlbumPreviewOverlay(
     // Taken past halfway, given back under a third (so a pull hovering at halfway doesn't flap them).
     var holdChrome by remember(state) { mutableStateOf(false) }
     LaunchedEffect(state) {
-        snapshotFlow { state.open to state.progress }.collect { (open, p) -> holdChrome = open || if (holdChrome) p > 0.3f else p > 0.5f }
+        snapshotFlow { Triple(state.open, state.progress, state.dropping) }.collect { (open, p, dropping) ->
+            // Playing from the card, they come straight back: it drops into the mini player.
+            holdChrome = !dropping && (open || if (holdChrome) p > 0.3f else p > 0.5f)
+        }
     }
     DisposableEffect(holdChrome, chromeAway) {
         val release = if (holdChrome) chromeAway.hold() else null
@@ -465,7 +588,23 @@ internal fun BoxScope.AlbumPreviewOverlay(
     val animatedBackground = settings[app.hocket.core.SettingKeys.DISPLAY_ANIMATED_BACKGROUND]?.value?.trim() != "false" && !saver.has(app.hocket.core.api.SaverFeature.StillBackground)
     val seed by app.hocket.ui.player.artworkSeed(coverArt)
     val scheme = remember(seed) { seed?.let { app.hocket.ui.theme.ArtworkColors.scheme(it, dark = true) } ?: darkColorScheme() }
-    BoxWithConstraints(Modifier.matchParentSize().onGloballyPositioned { hostOrigin = it.positionInRoot() }.testTag("albumPreview")) {
+    BoxWithConstraints(
+        Modifier
+            .matchParentSize()
+            .onGloballyPositioned { hostOrigin = it.positionInRoot() }
+            // Until it's open (on the way out after a short pull, or home after closing) nothing here
+            // takes a touch: the controls are invisible, and a tap must not start a preview. On the
+            // parent, ahead of its children, so a tap beside the card still reaches the scrim.
+            .pointerInput(state) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        if (!state.open) event.changes.forEach { it.consume() }
+                    }
+                }
+            }
+            .testTag("albumPreview"),
+    ) {
         val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
         val top = statusTop + 56.dp
         // The bar and the mini player step away while it's up ([ChromeAway]): down to the system bar.
@@ -479,6 +618,41 @@ internal fun BoxScope.AlbumPreviewOverlay(
         val target = with(density) { Rect(Offset((maxWidth.toPx() - sidePx) / 2f, cardTop.toPx()), Size(sidePx, sidePx)) }
         val pager = rememberPagerState(initialPage = startIndex.coerceIn(0, tracks.lastIndex)) { tracks.size }
         state.flightPx = state.heroBounds?.let { target.center.y - (it.center.y - hostOrigin.y) } ?: 0f
+        state.playFromCard = { onPlayFrom(pager.currentPage.coerceIn(0, tracks.lastIndex)) }
+        // Let go with its centre this near the bottom, the card plays the album; past the dismissal in any case.
+        val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        state.playGivePx = with(density) { PLAY_GIVE.toPx() }
+        state.playPx = with(density) { maxOf((maxHeight - navBottom - PLAY_ZONE).toPx() - target.center.y, state.dismissPx + 96.dp.toPx()) }
+        // Where the card lands playing: the mini player's thumbnail as it comes back (followed as it
+        // moves), or, with nothing playing until now, where the drop target was.
+        val miniThumb = app.hocket.ui.nav.LocalMiniThumb.current
+        val playerVisible = app.hocket.ui.nav.LocalPlayerVisible.current
+        var intoThumb by remember { mutableStateOf(false) }
+        LaunchedEffect(state.dropping) { if (state.dropping) intoThumb = playerVisible && miniThumb.bounds() != null }
+        val fallback = with(density) {
+            val side = app.hocket.ui.player.HeroGeometry.THUMB_SIZE.toPx()
+            val y = (maxHeight - navBottom - DROP_TARGET_GAP - DROP_TARGET_HEIGHT / 2).toPx()
+            Rect(Offset(maxWidth.toPx() / 2f - side / 2f, y - side / 2f), Size(side, side))
+        }
+        // Dropping, the card is drawn over the bar and the mini player (in window coordinates), so it
+        // lands on the thumbnail rather than going under the mini player.
+        val overChrome = app.hocket.ui.nav.LocalOverChrome.current
+        // In the slot's coordinates (the window's, less whatever sits above the shell).
+        val inSlot by rememberUpdatedState(hostOrigin - overChrome.origin)
+        val slotTarget by rememberUpdatedState(target)
+        val slotFallback by rememberUpdatedState(fallback)
+        // Registered for as long as the preview is up and drawn only while dropping: the switch from
+        // the page's cover to this one happens in the same frame.
+        DisposableEffect(overChrome) {
+            val mine: @Composable () -> Unit = {
+                FlyingCover(state, coverArt, slotTarget.translate(inSlot), Offset.Zero, overChrome = true) {
+                    (if (intoThumb) miniThumb.bounds()?.translate(-overChrome.origin) else null) ?: slotFallback.translate(inSlot)
+                }
+            }
+            overChrome.content = mine
+            onDispose { if (overChrome.content === mine) overChrome.content = null }
+        }
+        val landing = { (if (intoThumb) miniThumb.bounds()?.translate(-hostOrigin) else null) ?: fallback }
 
         // Behind: the player's blurred cover. Tapping it (or dragging the card up) puts the cover away.
         // Only while open: a delta still on its way after closing must not pull the cover back out.
@@ -486,7 +660,7 @@ internal fun BoxScope.AlbumPreviewOverlay(
         Box(
             Modifier
                 .fillMaxSize()
-                .graphicsLayer { alpha = (state.progress * 1.25f).coerceIn(0f, 1f) * (1f - 0.4f * state.downFraction) }
+                .graphicsLayer { alpha = (state.progress * 1.25f).coerceIn(0f, 1f) * (1f - 0.3f * state.downFraction) * (1f - state.drop) }
                 .background(Color.Black)
                 .pointerInput(state) { detectTapGestures { if (state.open) state.close() } }
                 .draggable(dismiss, Orientation.Vertical, enabled = state.open, onDragStopped = { v -> if (state.open) state.release(v) }),
@@ -496,24 +670,16 @@ internal fun BoxScope.AlbumPreviewOverlay(
 
         MaterialTheme(colorScheme = scheme) {
             CompositionLocalProvider(LocalContentColor provides scheme.onSurface, app.hocket.ui.theme.LocalDarkTheme provides true) {
-              // Until it's open (on the way out after a short pull, or home after closing) nothing
-              // here takes a touch: the controls are invisible, and a tap must not start a preview.
-              Box(Modifier.matchParentSize().pointerInput(state) {
-                  awaitPointerEventScope {
-                      while (true) {
-                          val event = awaitPointerEvent(PointerEventPass.Initial)
-                          if (!state.open) event.changes.forEach { it.consume() }
-                      }
-                  }
-              }) {
+              Box(Modifier.matchParentSize()) {
+                PlayDropTarget(state, bottom = navBottom + DROP_TARGET_GAP)
                 PreviewCards(state, pager, tracks, coverArt, side, target, dismiss, requests)
-                FlyingCover(state, coverArt, target, hostOrigin)
-                PreviewInfo(state, pager, tracks, albumArtist, target, infoWidth, stillWave = saver.has(app.hocket.core.api.SaverFeature.StillSeekWave), requests, onPlayFrom)
+                FlyingCover(state, coverArt, target, hostOrigin, overChrome = false, landing)
+                PreviewInfo(state, pager, tracks, albumArtist, target, infoWidth, stillWave = saver.has(app.hocket.core.api.SaverFeature.StillSeekWave), requests)
                 // A way out you can see, as well as back and the drag.
                 IconButton(
                     onClick = { state.close() },
                     modifier = Modifier.align(Alignment.TopEnd).padding(top = statusTop + 4.dp, end = 4.dp)
-                        .graphicsLayer { alpha = ((state.progress - 0.6f) / 0.4f).coerceIn(0f, 1f) * (1f - state.downFraction) }.testTag("albumPreview.close"),
+                        .graphicsLayer { alpha = ((state.progress - 0.6f) / 0.4f).coerceIn(0f, 1f) * (1f - state.downFraction) * fadeOnDrop(state) }.testTag("albumPreview.close"),
                     enabled = state.open,
                 ) { Icon(HocketIcons.Filled.Close, stringResource(R.string.album_preview_close)) }
               }
@@ -551,24 +717,47 @@ private val CARD_INSET = 36.dp
 /** The height of what sits under a docked card: title, artist, seek bar, transport and Play from here. */
 private val INFO_HEIGHT = 276.dp
 
-/** A group's inner corners and the gap between its parts (as the album page's Play, Shuffle and notes). */
-private val GROUP_INNER = 8.dp
-private val GROUP_GAP = 4.dp
-
 /** The transport's height under the card (the full player's compact one). */
 private val TRANSPORT_HEIGHT = 72.dp
 
 /** The cover between the header and the middle, following the progress (draw phase only). */
 @Composable
-private fun FlyingCover(state: AlbumPreviewState, coverArt: String?, target: Rect, hostOrigin: Offset) {
+private fun FlyingCover(state: AlbumPreviewState, coverArt: String?, target: Rect, hostOrigin: Offset, overChrome: Boolean, landing: () -> Rect) {
     val density = LocalDensity.current
     val cardRadius = with(density) { CARD_RADIUS.toPx() }
+    val thumbRadius = with(density) { app.hocket.ui.player.HeroGeometry.THUMB_CORNER.toPx() }
     val shadow = with(density) { 24.dp.toPx() }
     Box(
         Modifier
             .offset { IntOffset(target.left.roundToInt(), target.top.roundToInt()) }
             .size(with(density) { target.width.toDp() })
             .graphicsLayer {
+                // Dropping, it's the copy over the chrome that's drawn; otherwise the page's.
+                if (overChrome != state.dropping) {
+                    alpha = 0f
+                    return@graphicsLayer
+                }
+                if (state.dropping) {
+                    // Playing from here: from where it was let go into the mini player's thumbnail.
+                    val d = state.drop
+                    val land = landing()
+                    // The thumbnail may still be moving (the mini player coming back): locked on to
+                    // it over the last of the way, so the card doesn't trail it.
+                    val lock = ((d - 0.6f) / 0.3f).coerceIn(0f, 1f)
+                    val scale = lerp(lerp(state.pulledScale(state.dropFrom), land.width / target.width, d), land.width / target.width, lock)
+                    val centre = lerp(lerp(target.center + Offset(0f, state.dropFrom), land.center, d), land.center, lock)
+                    scaleX = scale
+                    scaleY = scale
+                    translationX = centre.x - target.center.x
+                    translationY = centre.y - target.center.y
+                    shape = RoundedCornerShape(lerp(cardRadius, thumbRadius, d) / scale.coerceAtLeast(0.01f))
+                    clip = true
+                    // Gone before it fades (a shadow shows through a see-through card).
+                    shadowElevation = shadow * (1f - d / 0.6f).coerceAtLeast(0f)
+                    // Gone into the thumbnail (the same cover) over the last of the way.
+                    alpha = ((1f - d) / 0.18f).coerceIn(0f, 1f)
+                    return@graphicsLayer
+                }
                 val p = state.progress
                 val hidden = state.docked
                 alpha = if (hidden) 0f else 1f
@@ -578,11 +767,11 @@ private fun FlyingCover(state: AlbumPreviewState, coverArt: String?, target: Rec
                 val w = lerp(from.width, target.width, fit)
                 val centre = lerp(from.center, target.center, p)
                 // Pulled down when docked: it follows the finger, shrinking a little as it goes.
-                val scale = w / target.width * (1f - 0.12f * state.downFraction)
+                val scale = w / target.width * state.pulledScale(state.shownDown)
                 scaleX = scale
                 scaleY = scale
                 translationX = centre.x - target.center.x
-                translationY = centre.y - target.center.y + state.down
+                translationY = centre.y - target.center.y + state.shownDown
                 val r = lerp(if (hero != null) with(density) { state.heroRadius.toPx() } else cardRadius, cardRadius, fit)
                 shape = RoundedCornerShape((r / scale.coerceAtLeast(0.01f)).coerceAtLeast(0f))
                 clip = true
@@ -641,14 +830,16 @@ private fun PreviewCards(
                     scaleY = scale
                     // A neighbour shrinks towards the middle card, so what peeks past the edge stays.
                     transformOrigin = TransformOrigin(if (page > pager.currentPage) 0f else if (page < pager.currentPage) 1f else 0.5f, 0.5f)
-                    val shown = lerp(1f, 0.5f, off)
                     // Until docked the flying cover is the middle card; its neighbours fade in on the way.
-                    alpha = when {
-                        state.docked -> shown
+                    val fade = when {
+                        state.docked -> 1f
                         off < 0.5f -> 0f
-                        else -> shown * ((state.progress - 0.35f) / 0.65f).coerceIn(0f, 1f) * (1f - state.downFraction)
+                        else -> ((state.progress - 0.35f) / 0.65f).coerceIn(0f, 1f) * (1f - state.downFraction) * fadeOnDrop(state)
                     }
-                    shadowElevation = 24.dp.toPx() * (1f - off)
+                    alpha = fade
+                    // A neighbour stays opaque (dimmed inside instead): a shadow under a see-through
+                    // card shows through it as a grey slab. Fading in, the shadow comes last.
+                    shadowElevation = 24.dp.toPx() * (1f - off) * fade * fade * fade
                     shape = RoundedCornerShape(CARD_RADIUS)
                     clip = true
                 }
@@ -663,6 +854,8 @@ private fun PreviewCards(
                 .testTag("albumPreview.card.$page"),
         ) {
             Artwork(coverArt, state.heroArtSize, null, Modifier.fillMaxSize(), RectangleShape)
+            // A neighbour dimmed, receding behind the card in the middle.
+            Box(Modifier.matchParentSize().graphicsLayer { alpha = 0.55f * pager.getOffsetDistanceInPages(page).absoluteValue.coerceIn(0f, 1f) }.background(Color.Black))
             // Where the song is in the album, so cards wearing one cover still tell apart (faded in as the
             // row takes over from the flying cover).
             val badge by androidx.compose.animation.core.animateFloatAsState(if (state.docked) 1f else 0f, androidx.compose.animation.core.tween(180), label = "previewBadge")
@@ -689,10 +882,9 @@ private fun PreviewCards(
 @Composable
 private fun BoxScope.PreviewInfo(
     state: AlbumPreviewState, pager: PagerState, tracks: List<Track>, albumArtist: String?, target: Rect, width: Dp, stillWave: Boolean,
-    requests: PreviewRequests, onPlayFrom: (Int) -> Unit,
+    requests: PreviewRequests,
 ) {
     val client = LocalCoreClient.current
-    val haptics = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
     val preview by client.preview.collectAsStateWithLifecycle()
     val page = pager.currentPage.coerceIn(0, tracks.lastIndex)
@@ -752,7 +944,7 @@ private fun BoxScope.PreviewInfo(
             .align(Alignment.TopCenter)
             .offset { IntOffset(0, (target.bottom + 12.dp.toPx()).roundToInt()) }
             .width(width)
-            .graphicsLayer { alpha = ((state.progress - 0.55f) / 0.45f).coerceIn(0f, 1f) * (1f - state.downFraction) }
+            .graphicsLayer { alpha = ((state.progress - 0.55f) / 0.45f).coerceIn(0f, 1f) * (1f - state.downFraction) * fadeOnDrop(state) }
             .testTag("albumPreview.info"),
     ) {
         // Start-aligned to the card's edge, as the player's title is to its artwork's.
@@ -785,19 +977,57 @@ private fun BoxScope.PreviewInfo(
             height = TRANSPORT_HEIGHT,
             modifier = Modifier.testTag("albumPreview.transport"),
         )
-        Spacer(Modifier.height(GROUP_GAP))
+        Spacer(Modifier.height(10.dp))
         FilledTonalButton(
-            shape = RoundedCornerShape(topStart = GROUP_INNER, topEnd = GROUP_INNER, bottomStart = 26.dp, bottomEnd = 26.dp),
-            onClick = {
-                haptics.performHapticFeedback(HapticFeedbackType.Confirm)
-                onPlayFrom(page)
-                state.close()
-            },
+            shape = CircleShape,
+            // Its haptic and the album playing are the state's (as for the card let go at the bottom).
+            onClick = { state.playFromHere() },
             modifier = Modifier.fillMaxWidth().height(52.dp).testTag("albumPreview.playFrom"),
         ) {
             Icon(HocketIcons.Filled.PlaylistPlay, null, Modifier.size(22.dp))
             Spacer(Modifier.size(8.dp))
             Text(stringResource(R.string.album_preview_play_from_here), style = MaterialTheme.typography.titleSmall)
         }
+    }
+}
+
+/** What goes at once as the card drops into the mini player (its controls, the close button, its neighbours). */
+private fun fadeOnDrop(state: AlbumPreviewState): Float = (1f - state.drop * 4f).coerceIn(0f, 1f)
+
+/**
+ * The drop target at the bottom: shows as the card is pulled down past the dismissal and lights up
+ * once a release there would play the album from the card.
+ */
+@Composable
+private fun BoxScope.PlayDropTarget(state: AlbumPreviewState, bottom: Dp) {
+    val scheme = MaterialTheme.colorScheme
+    val armed = state.armedToPlay || state.dropping
+    val lit by androidx.compose.animation.core.animateFloatAsState(
+        if (armed) 1f else 0f, spring(dampingRatio = 0.6f, stiffness = 700f), label = "playDropTarget",
+    )
+    val container = androidx.compose.ui.graphics.lerp(scheme.surfaceContainerHighest, scheme.primary, lit)
+    val content = androidx.compose.ui.graphics.lerp(scheme.onSurface, scheme.onPrimary, lit)
+    Row(
+        Modifier
+            .align(Alignment.BottomCenter)
+            .padding(bottom = bottom)
+            .height(DROP_TARGET_HEIGHT)
+            .graphicsLayer {
+                val appear = ((state.down - state.dismissPx * 0.5f) / (state.dismissPx * 0.8f)).coerceIn(0f, 1f)
+                alpha = appear * (1f - state.drop * 2.5f).coerceIn(0f, 1f)
+                translationY = (1f - appear) * 32.dp.toPx()
+                val grow = 1f + 0.08f * lit
+                scaleX = grow
+                scaleY = grow
+            }
+            .background(container, CircleShape)
+            .padding(horizontal = 24.dp)
+            .testTag("albumPreview.dropTarget")
+            .clearAndSetSemantics { },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(HocketIcons.Filled.PlaylistPlay, null, Modifier.size(22.dp), tint = content)
+        Spacer(Modifier.size(8.dp))
+        Text(stringResource(R.string.album_preview_play_from_here), style = MaterialTheme.typography.titleSmall, color = content)
     }
 }

@@ -304,6 +304,26 @@ pub(crate) struct PreviewSession {
     /// The start offset has been applied. A song whose duration arrives
     /// only once the player opens is seeked to 30% then.
     pub positioned: bool,
+    /// When `position_ms` was true (the core's clock): a playing preview has
+    /// moved on since.
+    pub position_at: f64,
+    /// Playing the song for real from here: the preview plays on until the
+    /// main player takes over ([`PreviewHandoff`]).
+    pub handoff: Option<PreviewHandoff>,
+}
+
+/// Where a preview is in handing over to the main player, which plays the
+/// same song on from where the preview has got to. Each stage notes when it
+/// began (the core's clock): one that lasts too long is given up.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum PreviewHandoff {
+    /// A play command came in; its load hasn't yet.
+    Pending { since: f64 },
+    /// The main player is loading the song, paused, near the preview.
+    Loading { since: f64 },
+    /// It's ready and was moved to the preview's position and started: the
+    /// preview stops once it's heard.
+    Starting { since: f64 },
 }
 
 /// Persisted next to the session document.

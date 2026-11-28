@@ -518,3 +518,248 @@ async fn a_preview_that_fails_while_playing_says_so_and_gives_playback_back() {
     assert!(t.transport().await.position.is_playing);
     assert!(t.backend.is_playing());
 }
+
+/// Started with a song playing and a preview of `t3` on for two seconds.
+async fn previewing_t3() -> (TestCore, u32) {
+    let t = synced_core("handoff").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayTracks {
+        tracks: TrackRef::list(&sid, ["t0", "t1"]),
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    t.run_for(2_000.0).await;
+    t.run(Command::PreviewStart {
+        track: TrackRef::new(sid, "t3"),
+    })
+    .await;
+    t.run_for(2_000.0).await;
+    let at = preview_of(&t.events.all()).expect("previewing").position_ms;
+    assert!(at >= 61_000, "the preview moved on, at {at}");
+    (t, at)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn playing_the_previewed_song_carries_it_on_from_the_preview() {
+    let (t, at) = previewing_t3().await;
+    t.backend.set_load_latency_ms(400.0);
+    let sid = t.server_id.clone();
+    t.events.clear();
+    let log_from = t.backend.log().len();
+    t.run(Command::PlayTracks {
+        tracks: TrackRef::list(&sid, ["t2", "t3", "t4"]),
+        start_index: 1,
+        label: "Album".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    // Loaded paused where the preview is; the preview plays on meanwhile.
+    let log = t.backend.log()[log_from..].to_vec();
+    let load = log
+        .iter()
+        .find_map(|c| match c {
+            ScriptedCall::Load {
+                key,
+                position_ms,
+                play,
+                ..
+            } => Some((key.clone(), *position_ms, *play)),
+            _ => None,
+        })
+        .expect("the song loads");
+    assert!(!load.2, "loaded paused for the handover");
+    assert!(
+        load.1.abs_diff(at) < 600,
+        "loaded at the preview's {at}, got {}",
+        load.1
+    );
+    assert!(
+        !log.iter().any(|c| matches!(c, ScriptedCall::PreviewStop)),
+        "the preview plays on while the song loads"
+    );
+    assert!(
+        t.transport().await.position.is_playing,
+        "playing, as far as anyone is told"
+    );
+
+    t.run_for(1_000.0).await;
+    let log = t.backend.log()[log_from..].to_vec();
+    let play = log
+        .iter()
+        .position(|c| matches!(c, ScriptedCall::Play))
+        .expect("started once ready");
+    let seek = log
+        .iter()
+        .position(|c| matches!(c, ScriptedCall::Seek { .. }))
+        .expect("moved to where the preview got to");
+    let stop = log
+        .iter()
+        .position(|c| matches!(c, ScriptedCall::PreviewStop))
+        .expect("the preview stops");
+    assert!(
+        seek < play && play < stop,
+        "seek, play, then the preview stops: {log:?}"
+    );
+    if let ScriptedCall::Seek { position_ms } = log[seek] {
+        // The load's 400 ms later, plus the lead.
+        assert!(
+            position_ms >= load.1 + 300 && position_ms <= load.1 + 700,
+            "caught up with the preview: loaded at {}, sought to {position_ms}",
+            load.1
+        );
+    }
+    assert!(preview_of(&t.events.all()).is_none(), "preview closed");
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t3"));
+    let transport = t.transport().await;
+    assert!(transport.position.is_playing);
+    assert!(t.backend.is_playing());
+    assert!(
+        transport.position.position_ms > at,
+        "on from the preview's {at}, at {}",
+        transport.position.position_ms
+    );
+    // Never told anyone it paused: a backend reports Paused with the paused
+    // load's Ready, after the handover has started it.
+    assert!(
+        !t.events.all().iter().any(
+            |e| matches!(e, Event::TransportChanged { transport } if !transport.position.is_playing)
+        ),
+        "the transport stayed playing"
+    );
+    // Nothing was given back to the song the preview paused.
+    assert!(
+        !t.events.all().iter().any(|e| matches!(e, Event::TransportChanged { transport } if transport.position.position_ms < 10_000 && transport.position.is_playing)),
+        "t0 did not come back"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn playing_a_paused_preview_starts_where_it_was() {
+    let (t, _) = previewing_t3().await;
+    t.run(Command::PreviewToggle).await;
+    let at = preview_of(&t.events.all()).expect("paused").position_ms;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayTracks {
+        tracks: TrackRef::list(&sid, ["t3", "t4"]),
+        start_index: 0,
+        label: "Album".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    t.run_for(500.0).await;
+    assert!(preview_of(&t.events.all()).is_none(), "preview closed");
+    assert!(t.backend.log().iter().any(|c| matches!(c, ScriptedCall::Load { position_ms, play: true, .. } if position_ms.abs_diff(at) < 50)));
+    let transport = t.transport().await;
+    assert!(transport.position.is_playing);
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t3"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn playing_another_song_stops_the_preview_and_starts_at_the_top() {
+    let (t, _) = previewing_t3().await;
+    let sid = t.server_id.clone();
+    let log_from = t.backend.log().len();
+    t.run(Command::PlayTracks {
+        tracks: TrackRef::list(&sid, ["t2", "t3"]),
+        start_index: 0,
+        label: "Album".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    t.run_for(500.0).await;
+    assert!(preview_of(&t.events.all()).is_none(), "preview closed");
+    let log = t.backend.log()[log_from..].to_vec();
+    assert!(
+        log.iter().any(|c| matches!(
+            c,
+            ScriptedCall::Load {
+                position_ms: 0,
+                play: true,
+                ..
+            }
+        )),
+        "{log:?}"
+    );
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t2"));
+    assert!(t.transport().await.position.is_playing);
+}
+
+/// The handover started loading the song (paused, 400 ms to go).
+async fn handing_over() -> (TestCore, u32) {
+    let (t, at) = previewing_t3().await;
+    t.backend.set_load_latency_ms(400.0);
+    let sid = t.server_id.clone();
+    t.run(Command::PlayTracks {
+        tracks: TrackRef::list(&sid, ["t3", "t4"]),
+        start_index: 0,
+        label: "Album".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    assert!(
+        preview_of(&t.events.all()).is_some(),
+        "still previewing while it loads"
+    );
+    (t, at)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_preview_interrupted_while_handing_over_leaves_the_song_paused() {
+    let (t, _) = handing_over().await;
+    let log_from = t.backend.log().len();
+    t.backend.finish_preview(true);
+    t.run_for(1_000.0).await;
+    assert!(preview_of(&t.events.all()).is_none(), "preview closed");
+    assert!(
+        !t.transport().await.position.is_playing,
+        "not resumed into what interrupted it"
+    );
+    assert!(!t.backend.is_playing());
+    assert!(
+        !t.backend.log()[log_from..]
+            .iter()
+            .any(|c| matches!(c, ScriptedCall::Play)),
+        "the song was never started"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pausing_while_handing_over_never_starts_the_song() {
+    let (t, _) = handing_over().await;
+    let log_from = t.backend.log().len();
+    t.run(Command::Pause).await;
+    t.run_for(1_000.0).await;
+    assert!(preview_of(&t.events.all()).is_none(), "preview closed");
+    assert!(!t.transport().await.position.is_playing);
+    assert!(
+        !t.backend.log()[log_from..]
+            .iter()
+            .any(|c| matches!(c, ScriptedCall::Play)),
+        "no play before the pause"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_preview_closed_while_handing_over_starts_the_song_where_it_got_to() {
+    let (t, at) = handing_over().await;
+    t.run_for(100.0).await;
+    t.run(Command::PreviewStop).await;
+    t.run_for(1_000.0).await;
+    assert!(preview_of(&t.events.all()).is_none());
+    let transport = t.transport().await;
+    assert!(transport.position.is_playing, "the song plays on");
+    assert!(t.backend.is_playing());
+    assert_eq!(t.current_track_id().await.as_deref(), Some("t3"));
+    assert!(
+        transport.position.position_ms > at,
+        "on from the preview's {at}, at {}",
+        transport.position.position_ms
+    );
+}
