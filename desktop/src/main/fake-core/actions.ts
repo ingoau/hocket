@@ -51,7 +51,6 @@ export const REGISTRY: RegistryEntry[] = [
   { id: "ui.info", label: "Details", icon: "info", category: "navigate", targets: ["tracks"], surfaces: ["contextMenu"] },
   { id: "removeFromQueue", label: "Remove from queue", icon: "remove", category: "queue", targets: ["queueItems"], surfaces: ["contextMenu"], undoable: true },
   { id: "removeFromPlaylist", label: "Remove from playlist", icon: "remove", category: "library", targets: ["tracks"], surfaces: ["contextMenu"], undoable: true },
-  { id: "ui.renamePlaylist", label: "Rename playlist…", icon: "edit", category: "library", targets: ["playlists"], surfaces: ["contextMenu"] },
   { id: "deletePlaylist", label: "Delete playlist", icon: "trash", category: "library", targets: ["playlists"], surfaces: ["contextMenu"], destructive: true },
   { id: "restoreSavedQueue", label: "Restore", icon: "restore", category: "queue", targets: ["savedQueue"], surfaces: ["contextMenu"], undoable: true },
   { id: "pinSavedQueue", label: "Pin", icon: "pin", category: "queue", targets: ["savedQueue"], surfaces: ["contextMenu"] },

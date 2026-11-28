@@ -19,7 +19,7 @@ import { accountIdFor } from "../account-id";
 import { DEFAULT_KEYMAP, canonicalActionId } from "@shared/keymap";
 import { coverPng } from "../png";
 import { describeActions, shortcutDefaults, DEFAULT_ORDERS } from "./actions";
-import { menuItemsInfo, menuLayout, parseOverrides, withOverride } from "./menu";
+import { menuItemsInfo, menuLayout, overridesValid, parseOverrides, withOverride } from "./menu";
 import { generateLibrary, summary, coverSeed, type FakeLibrary } from "./library";
 import { lyricsFor } from "./lyrics";
 import { Rng, hash32 } from "./random";
@@ -690,6 +690,8 @@ export class FakeCore implements CoreHandle {
         this.emitLyrics(cmd.data.track_id);
         return;
       case "setSetting":
+        // Like the core's validator: menu.overrides must be an object of tiers.
+        if (cmd.data.key === "menu.overrides" && !overridesValid(parseOrUndefined(cmd.data.value))) return;
         this.setSettingValue(cmd.data.key, cmd.data.value);
         if (cmd.data.key === "storage.cacheMaxBytes") this.applyCacheBudget();
         if (cmd.data.key === "network.offlineMode") this.applyNetwork();
@@ -3780,4 +3782,13 @@ function showNewStash(previous: readonly string[], ids: string[]): string[] {
   });
   rest.splice(at, 0, "stash");
   return rest;
+}
+
+/** A JSON value, or undefined when it doesn't parse. */
+function parseOrUndefined(raw: string): unknown {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return undefined;
+  }
 }

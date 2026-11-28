@@ -29,7 +29,7 @@ export interface ActionContext {
 const RENDERER_HANDLED = new Set([
   "openCommandPalette", "findInList", "toggleQueuePanel", "toggleLyrics", "toggleFullscreen", "toggleMiniPlayer",
   "navigateRecent", "ui.back", "ui.forward", "ui.toggleSidebar", "ui.escape", "selectAll", "remove", "handoff", "sleepTimer", "copyDiagnostics",
-  "goToAlbum", "goToArtist", "ui.info", "addToPlaylist", "ui.newPlaylist", "removeFromPlaylist", "ui.renamePlaylist",
+  "goToAlbum", "goToArtist", "ui.info", "addToPlaylist", "ui.newPlaylist", "removeFromPlaylist",
   "deletePlaylist", "unpin", "saveQueueAsPlaylist", "ui.developerDiagnostics", "openStash",
 ]);
 
@@ -171,14 +171,6 @@ export async function executeAction(rawId: string, target: ActionTarget = { type
     case "removeFromPlaylist": {
       if (!ctx.playlistId || !ctx.indices?.length) return;
       b.dispatch({ type: "playlistRemove", data: { playlist_id: ctx.playlistId, indices: ctx.indices } });
-      return;
-    }
-    case "ui.renamePlaylist": {
-      if (target.type !== "playlists" || !target.data.ids[0]) return;
-      const id = target.data.ids[0];
-      const r = await b.query({ type: "playlist", data: { id } });
-      const current = r.type === "playlistDetail" ? r.data?.name : undefined;
-      app.openDialog({ kind: "prompt", title: t("dialog.renamePlaylist"), label: t("dialog.playlistName"), initial: current, onConfirm: (name) => b.dispatch({ type: "renamePlaylist", data: { playlist_id: id, name, comment: undefined, public: undefined } }) });
       return;
     }
     case "deletePlaylist": {

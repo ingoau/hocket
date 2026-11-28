@@ -1,7 +1,7 @@
 // The fake core's item menus follow the core's (crates/hocket-core/src/actions/menu.rs tests).
 import { describe, expect, it } from "vitest";
 import type { ActionDescriptor, ActionTarget, MenuScreen } from "@core/api";
-import { menuItemsInfo, menuLayout, parseOverrides, withOverride } from "./menu";
+import { menuItemsInfo, menuLayout, overridesValid, parseOverrides, withOverride } from "./menu";
 
 const d = (id: string): ActionDescriptor => ({ id, label: id, icon: "", category: "", enabled: true, undoable: false, destructive: false });
 const SONG = ["play", "playNext", "addToQueue", "playLater", "rate5", "rate4", "rate3", "rate2", "rate1", "rate0", "love", "addToPlaylist", "stash", "pinToLibrary", "goToAlbum", "goToArtist", "download", "preview", "snooze", "removeFromPlaylist"].map(d);
@@ -46,6 +46,34 @@ describe("fake core item menus", () => {
     expect(m.shown).toEqual(["addToPlaylist", "goToAlbum", "goToArtist", "download", "genius"]);
     expect(m.more).toEqual(["stash", "pinToLibrary", "preview", "info", "snooze"]);
     expect(m.ids).not.toContain("rating");
+  });
+
+  it("keeps a newer device's overrides in the setting and skips them when read", () => {
+    expect(overridesValid({ genius: "shown", love: "hidden" })).toBe(true);
+    expect(overridesValid([])).toBe(false);
+    expect(overridesValid({ genius: "folded" })).toBe(false);
+    const newer = { nope: "shown", rating: "more", play: "hidden", genius: "shown" };
+    expect(overridesValid(newer)).toBe(true);
+    expect([...parseOverrides(JSON.stringify(newer))]).toEqual([["genius", "shown"]]);
+    expect(JSON.parse(withOverride(JSON.stringify(newer), "genius", "more"))).toEqual({ nope: "shown", rating: "more", play: "hidden" });
+  });
+
+  it("keeps a row the user put under More there, in a short menu and alone", () => {
+    const m = layout(tracks(2), "list", ["share"], 0, JSON.stringify({ snooze: "more" }));
+    expect(m.shown).toEqual(["addToPlaylist", "stash", "download", "share"]);
+    expect(m.more).toEqual(["snooze"]);
+  });
+
+  it("folds nothing in a menu of seven rows", () => {
+    const m = layout(tracks(1), "list", ["share", "info"], 0, JSON.stringify({ pinToLibrary: "hidden", preview: "hidden", snooze: "hidden" }));
+    expect(m.more).toEqual([]);
+    expect(m.shown.at(-1)).toBe("info");
+  });
+
+  it("keeps promoted rows and pushes the defaults down", () => {
+    const m = layout(tracks(1), "list", SONG_APPS, 2, JSON.stringify({ preview: "shown", info: "shown", genius: "shown", snooze: "shown" }));
+    expect(m.shown).toEqual(["preview", "info", "genius", "snooze"]);
+    expect(m.more).toEqual(["addToPlaylist", "stash", "pinToLibrary", "goToAlbum", "goToArtist", "download", "share"]);
   });
 
   it("writes overrides as the core does: a default clears, a tier the row can't take is refused", () => {

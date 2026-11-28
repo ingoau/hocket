@@ -67,29 +67,39 @@ function choices(d: Def): MenuTier[] {
 
 const defaultTier = (d: Def): MenuTier => (d.folded ? "more" : "shown");
 
-/** `menu.overrides` (`{ id: tier }`), skipping what the core would refuse. */
+/** The stored `menu.overrides` object as is ({} when it isn't one). */
+function storedOverrides(raw: string | undefined): Record<string, unknown> {
+  try {
+    const v: unknown = JSON.parse(raw ?? "{}");
+    return v && typeof v === "object" && !Array.isArray(v) ? { ...(v as Record<string, unknown>) } : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Whether a value is a valid `menu.overrides`: the shape only, like the core's `overrides_valid`.
+ * A row this build doesn't know, or a tier it doesn't allow there, may come from a newer device. */
+export function overridesValid(v: unknown): boolean {
+  return !!v && typeof v === "object" && !Array.isArray(v) && Object.values(v).every((t) => t === "shown" || t === "more" || t === "hidden");
+}
+
+/** `menu.overrides` (`{ id: tier }`), skipping rows this build doesn't know and tiers they can't take. */
 export function parseOverrides(raw: string | undefined): Map<string, MenuTier> {
   const out = new Map<string, MenuTier>();
-  let v: unknown;
-  try {
-    v = JSON.parse(raw ?? "{}");
-  } catch {
-    return out;
-  }
-  if (!v || typeof v !== "object" || Array.isArray(v)) return out;
-  for (const [id, tier] of Object.entries(v as Record<string, unknown>)) {
+  for (const [id, tier] of Object.entries(storedOverrides(raw))) {
     const d = find(id);
     if (d && choices(d).includes(tier as MenuTier)) out.set(id, tier as MenuTier);
   }
   return out;
 }
 
-/** `menu.overrides` with `id` set to `tier` (its default removes the entry); throws like the core refuses. */
+/** `menu.overrides` with `id` set to `tier` (its default removes the entry), keeping the entries
+ * it doesn't know; throws like the core refuses. */
 export function withOverride(raw: string | undefined, id: string, tier: MenuTier): string {
   const d = find(id);
   if (!d) throw new Error(`unknown menu item ${id}`);
   if (!choices(d).includes(tier)) throw new Error(`${id} can't be ${tier}`);
-  const map = Object.fromEntries(parseOverrides(raw));
+  const map = storedOverrides(raw);
   if (tier === defaultTier(d)) delete map[id];
   else map[id] = tier;
   return JSON.stringify(map);
@@ -163,7 +173,8 @@ export function menuLayout(req: MenuRequest): MenuLayout {
   // The fold: only the list rows (not the strip, the stars, Love or removing).
   const foldable = (d: Def) => d.section !== "play" && d.section !== "rate" && d.section !== "danger";
   const listed = rows.filter((r) => foldable(r.d)).length;
-  const folded = rows.map(() => false);
+  // A row the user put under More stays there, however short the menu.
+  const folded = rows.map((r) => foldable(r.d) && r.tier === "more");
   if (listed + req.extras > NO_FOLD_MAX) {
     // Rows the user put in the menu always stay; the defaults fill what's left of the short list by priority.
     const pinned = rows.filter((r) => foldable(r.d) && r.tier === "shown").length;
@@ -177,8 +188,9 @@ export function menuLayout(req: MenuRequest): MenuLayout {
       if (room > 0) room--;
       else folded[i] = true;
     }
-    // A More holding one row is a tap for nothing.
-    if (folded.filter(Boolean).length === 1) folded.fill(false);
+    // A More holding one row is a tap for nothing, unless the user put it there.
+    const alone = folded.flatMap((f, i) => (f ? [i] : []));
+    if (alone.length === 1 && rows[alone[0]!]!.tier !== "more") folded[alone[0]!] = false;
   }
 
   return { items: rows.map((r, i): MenuItem => ({ id: r.d.id, section: r.d.section, folded: folded[i] ?? false, actions: r.actions })) };

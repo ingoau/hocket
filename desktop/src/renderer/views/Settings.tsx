@@ -700,7 +700,6 @@ function LyricsSizeRow() {
 function Customisation() {
   return (
     <>
-      <div className="muted small" style={{ marginBottom: 12 }}>{t("settings.customiseHint")}</div>
       <OrderList surface="sidebar" anchor="sidebarItems" title={t("settings.sidebarItems")} />
       <MenuItemsList />
       <OrderList surface="mediaSession" anchor="mediaSessionButtons" title={t("settings.mediaSessionButtons")} />
@@ -859,6 +858,7 @@ function OrderList({ surface, anchor, title }: { surface: string; anchor: string
   return (
     <div style={{ marginBottom: 20 }} id={`setting-${anchor}`}>
       <h2 className="section-title" id={`order-${surface}-title`}>{title}</h2>
+      <div className="muted small" style={{ marginBottom: 8 }}>{t("settings.customiseHint")}</div>
       {surface === "mediaSession" ? <div className="muted small" style={{ marginBottom: 8 }}>{t("settings.mediaSessionButtonsNote")}</div> : null}
       <ul className="order-list plain-list" aria-labelledby={`order-${surface}-title`} data-testid={`order-${surface}`}>
         {items.map((it, i) => (
