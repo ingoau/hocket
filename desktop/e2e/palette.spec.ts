@@ -174,7 +174,8 @@ test.describe("command palette", () => {
     await page.keyboard.press("ArrowDown");
     await page.keyboard.press("Enter");
     await expect(palette).toHaveCount(0);
-    await page.getByTestId("content").click();
+    // Focus off any field (a click at the page's centre could land on one of Settings' controls).
+    await page.getByTestId("content").focus();
     await page.keyboard.press("Control+z");
     const row = page.locator("#setting-paletteTelemetry + .setting-row");
     await expect(row).toContainText("1 picks, 1 not the first row (100%), 1 undone");

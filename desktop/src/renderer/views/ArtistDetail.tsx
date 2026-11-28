@@ -15,17 +15,19 @@ import { fmtTime } from "../lib/format";
 import { Icon } from "../components/Icon";
 import { Heart } from "../components/Stars";
 import { Tile, TileList } from "../components/Tile";
+import { Shelf } from "../components/Shelf";
 import { openContextMenu, openMenuFromButton } from "../components/ContextMenu";
 import { DetailHead } from "../components/DetailHead";
 import { TOP_SONGS_COUNT, TOP_SONGS_PREVIEW as TOP_PREVIEW, topSongsSection } from "../lib/top-songs";
 import { byReleaseKind, type ReleaseKind } from "../lib/release-kind";
 import { ratingTarget, refOf } from "../lib/track-ref";
+import { useScrollMemory } from "../lib/scroll-memory";
 
 /** Releases on a shelf before "View more". */
 const SHELF = 8;
 
 /** A shelf on the page: a release kind, or the albums they're featured on. */
-type Shelf = ReleaseKind | "featured";
+type ShelfKind = ReleaseKind | "featured";
 
 export function releaseCounts(groups: { kind: ReleaseKind; albums: unknown[] }[]): string {
   return groups.map((g) => t(g.albums.length === 1 ? `release.count.${g.kind}.one` : `release.count.${g.kind}.other`, { count: g.albums.length })).join(" · ");
@@ -41,11 +43,11 @@ export function ArtistDetail({ id }: { id: string }) {
   const top = useQuery(() => ({ type: "artistTopSongs", data: { id, count: TOP_SONGS_COUNT } }), "trackList", [id]);
   const info = useQuery(() => ({ type: "artistInfo", data: { id } }), "externalInfo", [id], { static: true });
   const [allTop, setAllTop] = useState(false);
-  const [grid, setGrid] = useState<Shelf | null>(null);
+  const [grid, setGrid] = useState<ShelfKind | null>(null);
   const [oldest, setOldest] = useState(false);
   useEffect(() => { setGrid(null); setAllTop(false); }, [id]);
   // Focus follows the swap: onto the grid's back arrow going in, back onto that shelf's View more coming out.
-  const lastGrid = useRef<Shelf | null>(null);
+  const lastGrid = useRef<ShelfKind | null>(null);
   useEffect(() => {
     const target = grid ? '[data-testid="artist-grid-back"]' : lastGrid.current ? `[data-testid="artist-shelf-more-${lastGrid.current}"]` : null;
     if (grid) lastGrid.current = grid;
@@ -59,7 +61,7 @@ export function ArtistDetail({ id }: { id: string }) {
   const playTop = (i: number) => bridge().dispatch({ type: "playTracks", data: { tracks: topAll.map(refOf), start_index: i, label: `${a?.name ?? ""} · ${t("artist.topSongs")}`, shuffle: false } });
   const groups = byReleaseKind(albums.data?.items ?? []);
   const featuredOn = featured.data?.items ?? [];
-  const shelves: { kind: Shelf; title: string; count: string; albums: Album[] }[] = [
+  const shelves: { kind: ShelfKind; title: string; count: string; albums: Album[] }[] = [
     ...groups.map((g) => ({ kind: g.kind, title: t(`release.kind.${g.kind}`), count: releaseCounts([g]), albums: g.albums })),
     ...(featuredOn.length ? [{ kind: "featured" as const, title: t("artist.featuredOn"), count: releaseCounts([{ kind: "album", albums: featuredOn }]), albums: featuredOn }] : []),
   ];
@@ -71,14 +73,18 @@ export function ArtistDetail({ id }: { id: string }) {
     <Tile key={al.id} title={al.name} subtitle={al.artistId !== id && al.artist ? [al.artist, al.year].filter(Boolean).join(" · ") : `${al.year ?? ""}${al.year ? " · " : ""}${t("misc.tracks", { count: al.songCount })}`} coverArt={al.coverArt} onOpen={() => navigate({ view: "album", id: al.id })} onContextMenu={(e) => void openContextMenu(e, { type: "albums", data: { ids: [al.id] } }, { screen: al.artistId === id ? "artistPage" : "list" })} dragTarget={{ type: "albums", data: { ids: [al.id] } }} testId="artist-album" />
   );
   const open = shelves.find((g) => g.kind === grid);
+  // Back returns to where the page was left, once everything that sets its height is in.
+  const page = useRef<HTMLDivElement>(null);
+  const settled = (q: { data?: unknown; error?: string }) => q.data !== undefined || q.error !== undefined;
+  useScrollMemory(page, "artist", [artist, albums, featured, top, info].every(settled));
   return (
-    <div className="view detail-page" data-testid="view-artist">
-      <DetailHead coverArt={a?.coverArt} round icon="artist" onContextMenu={(e) => a && void openContextMenu(e, { type: "artists", data: { ids: [a.id] } }, { screen: "artistPage" })} actions={
+    <div ref={page} className="view detail-page" data-testid="view-artist">
+      <DetailHead coverArt={a?.coverArt} loading={!a && !artist.error} title={a?.name ?? ""} barAction={<button type="button" className="btn primary detail-bar-play" aria-label={t("album.play")} title={t("album.play")} onClick={() => play(false)} data-testid="artist-bar-play"><Icon name="play" size={22} filled /></button>} round icon="artist" onContextMenu={(e) => a && void openContextMenu(e, { type: "artists", data: { ids: [a.id] } }, { screen: "artistPage" })} actions={
         <>
           <button type="button" className="btn primary fab" onClick={() => play(false)} data-testid="artist-play"><Icon name="play" size={24} filled /> {t("album.play")}</button>
           <button type="button" className="btn icon" aria-label={t("album.shuffle")} title={t("album.shuffle")} onClick={() => play(true)} data-testid="artist-shuffle"><Icon name="shuffle" size={24} /></button>
-          {a ? <Heart size={24} on={a.loved} onToggle={() => bridge().dispatch({ type: "setArtistLoved", data: { artist_id: a.id, loved: !a.loved } })} /> : null}
-          {a ? <button type="button" className="btn icon" aria-haspopup="menu" aria-label={t("misc.more")} title={t("misc.more")} onClick={(e) => openMenuFromButton(e, { type: "artists", data: { ids: [a.id] } }, { screen: "artistPage" })} data-testid="artist-more"><Icon name="more" size={24} /></button> : null}
+          <Heart size={24} on={!!a?.loved} onToggle={() => a && bridge().dispatch({ type: "setArtistLoved", data: { artist_id: a.id, loved: !a.loved } })} />
+          <button type="button" className="btn icon" aria-haspopup="menu" aria-label={t("misc.more")} title={t("misc.more")} onClick={(e) => a && openMenuFromButton(e, { type: "artists", data: { ids: [a.id] } }, { screen: "artistPage" })} data-testid="artist-more"><Icon name="more" size={24} /></button>
         </>
       }>
         <h1>{a?.name ?? ""}</h1>
@@ -135,7 +141,7 @@ export function ArtistDetail({ id }: { id: string }) {
                   <h2 id={`artist-shelf-${g.kind}`}>{g.title}</h2>
                   {g.albums.length > SHELF ? <button type="button" className="btn view-more" onClick={() => { setGrid(g.kind); setOldest(false); }} data-testid={`artist-shelf-more-${g.kind}`}>{t("release.viewMore")}<Icon name="chevronRight" size={18} /></button> : null}
                 </div>
-                <TileList label={g.title} className="scroller">{g.albums.slice(0, SHELF).map(tile)}</TileList>
+                <Shelf label={g.title}>{g.albums.slice(0, SHELF).map(tile)}</Shelf>
               </section>
             ))}
             {about ? (

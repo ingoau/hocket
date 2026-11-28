@@ -15,6 +15,7 @@ import { parseDeepLink } from "@shared/deep-link";
 import { CredentialWarning } from "../components/CredentialWarning";
 import { Icon } from "../components/Icon";
 import { BrandMark } from "../components/BrandMark";
+import { BareTitleBar } from "../components/TopBar";
 
 // Whether this window is showing setup over an app that has an account: the post-connect
 // summary, "Add another source?", or the form while adding one. Set when Connect is pressed (or
@@ -83,11 +84,14 @@ export function Setup() {
         ? <Sources adding />
         : <Summary server={server} />;
   return (
-    <main className="setup" data-testid="setup">
-      {/* The lockup (docs/brand.md): the bare wave and the lowercase word mark, read once as "Hocket". */}
-      <p className="brand brand-lockup setup-lockup"><BrandMark /><span aria-hidden="true">hocket</span><span className="sr-only">{t("app.name")}</span></p>
-      {body}
-    </main>
+    <div className="setup-shell">
+      <BareTitleBar />
+      <main className="setup" data-testid="setup">
+        {/* The lockup (docs/brand.md): the bare wave and the lowercase word mark, read once as "Hocket". */}
+        <p className="brand brand-lockup setup-lockup"><BrandMark /><span aria-hidden="true">hocket</span><span className="sr-only">{t("app.name")}</span></p>
+        {body}
+      </main>
+    </div>
   );
 }
 

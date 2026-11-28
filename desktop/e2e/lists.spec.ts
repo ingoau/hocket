@@ -248,7 +248,9 @@ test.describe("library lists", () => {
         const box = head.getBoundingClientRect();
         const under = Array.from(scroller.querySelectorAll("[data-testid=track-row]")).some((r) => { const b = r.getBoundingClientRect(); return b.top < box.bottom && b.bottom > box.top; });
         const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
-        return { stuck: Math.abs(box.top - scroller.getBoundingClientRect().top) < 1, under, covered: head.contains(hit), background: getComputedStyle(head).backgroundColor, content: getComputedStyle(document.querySelector(".content")!).backgroundColor };
+        // Stuck under the page's compact bar (the title and Play), which has faded in by now.
+        const bar = scroller.querySelector<HTMLElement>("[data-testid=detail-bar]")!;
+        return { stuck: Math.abs(box.top - bar.getBoundingClientRect().bottom) < 1 && bar.classList.contains("stuck"), under, covered: head.contains(hit), background: getComputedStyle(head).backgroundColor, content: getComputedStyle(document.querySelector(".content")!).backgroundColor };
       });
       expect(result).toMatchObject({ stuck: true, under: true, covered: true });
       // It is filled with the content pane's own surface: the rows pass under it, not through it.

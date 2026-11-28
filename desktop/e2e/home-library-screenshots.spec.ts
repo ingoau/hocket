@@ -68,7 +68,8 @@ test("home and library", async () => {
       await page.getByTestId("home-customise").click();
       await expect(page.getByTestId("home-customise-panel")).toBeVisible();
       await shot("03-customise");
-      await page.getByTestId("home-customise").click();
+      // (Its Close: on a page this narrow the panel lies over Customise.)
+      await page.getByTestId("home-customise-panel").getByRole("button", { name: "Close" }).click();
 
       await page.getByTestId("nav-library").click();
       await expect(page.getByTestId("view-library")).toBeVisible();

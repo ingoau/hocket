@@ -61,9 +61,21 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
   const lyricsOptions = useLyricsOptionsTrigger("above");
   const queueHold = useLongPress(switchToRecentQueue);
   const queueOn = (sideOpen || reveal) && (reveal || panels.rightView === "queue" || panels.rightView === "recent");
+  // The transport stays centred in the window (as native players keep it): the song's side is held
+  // at least as wide as the right side's controls, which the stylesheet reads as --player-side.
+  const bar = useRef<HTMLDivElement>(null);
+  const right = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const root = bar.current;
+    const el = right.current;
+    if (!root || !el) return;
+    const ro = new ResizeObserver(() => root.style.setProperty("--player-side", `${el.offsetWidth}px`));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   return (
-    <div className="player" role="region" aria-label={t("misc.nowPlaying")} inert={inert} data-testid="player-bar">
+    <div ref={bar} className="player" role="region" aria-label={t("misc.nowPlaying")} inert={inert} data-testid="player-bar">
       {notice ? <div className="notice"><Icon name="warn" size={12} /> {notice}</div> : null}
 
       <div className="now" onContextMenu={track ? (e) => void openContextMenu(e, { type: "queueItems", data: { keys: [now.item.key] } }, { screen: "nowPlaying" }) : undefined}
@@ -103,7 +115,7 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
         <Seek variant="bar" durationMs={track?.durationMs} />
       </div>
 
-      <div className="right">
+      <div ref={right} className="right">
         {sleep ? <span className="badge"><Icon name="sleep" size={11} title={t("player.sleepTimer")} /></span> : null}
         {batterySaver ? <span className="badge"><Icon name="battery" size={11} title={t("player.batterySaver")} /></span> : null}
         <Volume />
@@ -212,9 +224,10 @@ function Volume() {
   const syncing = useConnectSyncing();
   const silent = v.muted || v.shown === 0;
   return (
-    <div className={`volume ${syncing ? "connect-syncing" : ""}`} title={v.label} aria-busy={syncing || undefined}>
+    // The wheel anywhere over it (the speaker too) turns it, as in native players.
+    <div className={`volume ${syncing ? "connect-syncing" : ""}`} title={v.label} aria-busy={syncing || undefined} onWheel={v.unknown ? undefined : v.onWheel}>
       <button type="button" className="btn icon" aria-label={t("player.mute")} aria-pressed={v.muted} title={v.muted ? t("a11y.unmute") : t("player.mute")} disabled={v.unknown} onClick={v.toggleMute} data-testid="mute"><Icon name={silent ? "mute" : "volume"} size={20} /></button>
-      <Slider size="sm" min={0} max={1} step={0.01} value={v.shown} disabled={v.unknown} aria-label={v.label} aria-valuetext={v.valueText} onKeyDown={v.onKeyDown} onChange={v.set} onWheel={v.onWheel} data-testid="volume" />
+      <Slider size="sm" min={0} max={1} step={0.01} value={v.shown} disabled={v.unknown} aria-label={v.label} aria-valuetext={v.valueText} onKeyDown={v.onKeyDown} onChange={v.set} data-testid="volume" />
     </div>
   );
 }

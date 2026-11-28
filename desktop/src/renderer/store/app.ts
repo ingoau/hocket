@@ -62,6 +62,8 @@ export interface MenuItem {
 export interface ContextMenuState {
   x: number;
   y: number;
+  /** Opened from a button: where the menu's bottom goes when there is no room under it (the button's top). */
+  above?: number;
   target: ActionTarget;
   /** The core's rows for the target (Query.Menu), in display order. */
   layout: LayoutItem[];

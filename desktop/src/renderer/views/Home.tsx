@@ -10,6 +10,7 @@ import { bridge } from "../core/bridge";
 import { EmptyState } from "../components/EmptyState";
 import { openContextMenu, openItemsMenu } from "../components/ContextMenu";
 import { Tile, TileList } from "../components/Tile";
+import { Shelf } from "../components/Shelf";
 import { Artwork } from "../components/Artwork";
 import { Icon } from "../components/Icon";
 import { BrandMark } from "../components/BrandMark";
@@ -17,6 +18,7 @@ import { filterName } from "../lib/filters";
 import { showToast } from "../lib/ui-toast";
 import { filterMenuItems, playFilter } from "../lib/pin-menus";
 import { libraryDragProps } from "../lib/queue-drag";
+import { useScrollMemory } from "../lib/scroll-memory";
 import { HOME_SECTIONS_KEY, isPinned, moveBefore, moveKnown, moveShown, parseSections, resolvedStyle, sectionDef, sectionsValue, updateSection, setShelves, shelfOf, type SectionPref, type SectionStyle } from "../lib/home-sections";
 import { refOf } from "../lib/track-ref";
 
@@ -67,6 +69,9 @@ export function Home() {
   const setSetting = useApp((s) => s.setSetting);
   const sync = useApp((s) => s.syncProgress);
   const [customising, setCustomising] = useState(false);
+  const main = useRef<HTMLDivElement>(null);
+  // Back returns to where the feed was left (its sections arrive one by one: the memory keeps up).
+  useScrollMemory(main, "home", true);
   const save = (next: SectionPref[]) => setSetting(HOME_SECTIONS_KEY, sectionsValue(next));
   const shown = prefs.filter((p) => p.on && sectionDef(p.id));
   const [empties, setEmpties] = useState<Record<string, boolean>>({});
@@ -107,7 +112,7 @@ export function Home() {
   return (
     <div className={`view page-home ${customising ? "customising" : ""} ${pageVars ? "spot-tinted" : ""}`} style={pageVars} data-testid="view-home">
       <div className="home-layout">
-        <div className="home-main">
+        <div className="home-main" ref={main}>
           <div className="view-header">
             <h1 className="brand-lockup"><BrandMark /><span aria-hidden="true">hocket</span><span className="sr-only">{t("home.title")}</span></h1>
             {sync && !sync.finished ? <span className="badge">{t("sync.syncing", { phase: sync.phase })}</span> : null}
@@ -189,7 +194,7 @@ function SectionItems({ items, style, label }: { items: Item[]; style: SectionSt
       <Tile key={it.key} title={it.title} subtitle={it.subtitle} coverArt={it.coverArt} round={it.round} onOpen={it.open} onPlay={it.play} onContextMenu={it.menu} dragTarget={it.dragTarget} testId="home-item" />
     ),
   );
-  return <TileList label={label} className={style === "grid" ? "grid" : "scroller"}>{tiles}</TileList>;
+  return style === "grid" ? <TileList label={label} className="grid">{tiles}</TileList> : <Shelf label={label}>{tiles}</Shelf>;
 }
 
 function ListeningTile({ totalMs, byWeekday, onOpen }: { totalMs: number; byWeekday: number[]; onOpen: () => void }) {
@@ -318,7 +323,7 @@ function toSummary(tr: { id: string; serverId: string; title: string; artist?: s
   return tr as TrackSummary;
 }
 
-function playContext(serverId: string, kind: { type: "album" | "artist" | "playlist"; data: { id: string } }, label: string, shuffle = false): void {
+export function playContext(serverId: string, kind: { type: "album" | "artist" | "playlist"; data: { id: string } }, label: string, shuffle = false): void {
   bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: kind as never, label, sort: "default", tracks: [] }, shuffle, saveOutgoing: true } } });
 }
 

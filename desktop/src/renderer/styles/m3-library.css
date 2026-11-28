@@ -30,6 +30,9 @@
 .view-header .count-chip:empty { display: none; }
 .view-header .actions .btn:not(.icon) { height: var(--btn-h-lg); padding: 0 20px 0 16px; font-size: var(--fs-md); font-weight: 600; }
 .view-header .actions .btn.tonal { color: var(--fg); }
+/* The source chips (with a second account) sit at the header's end, centred on the title like its
+   actions; not padded as they are under Search's heading. */
+.view-header .source-chips { padding: 0; align-self: center; }
 
 /* ---- Library lists: Pinned, Recent, then the whole list ------------------------
    Each group is a titled single row (tiles, genre cards or compact song rows) that scrolls sideways
@@ -43,7 +46,12 @@
 .list-section-actions { display: flex; align-items: center; gap: 8px; margin-right: var(--page-title-inset); }
 .list-top { padding: 0 var(--page-gutter); flex: 0 0 auto; }
 .list-top .list-all { margin-bottom: 8px; }
-.list-top-groups { max-height: 30vh; overflow: hidden auto; padding-inline: 4px; margin-inline: -4px; }
+.list-top-groups { padding-inline: 4px; margin-inline: -4px; }
+/* Songs scrolls as one page, as a native player's song list does: the title, the groups and the
+   sort scroll away and the column labels stick at the top, over a table that windows its rows
+   against the page (TrackTable's pageScroll). */
+.view.page-songs { overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
+.view.page-songs > .view-body { flex: 0 0 auto; min-height: 0; overflow: visible; padding-bottom: 24px; }
 .grid-header .list-all { margin-top: 4px; }
 :is(.group-row, .genre-row, .group-songs) {
   display: flex; gap: 6px; overflow-x: auto; padding: 6px 4px 10px; margin: -6px -4px 0;
@@ -55,8 +63,15 @@
 .group-row .tile { width: 148px; flex: 0 0 auto; scroll-snap-align: start; }
 .genre-row { gap: 12px; }
 .genre-row > li { width: 200px; flex: 0 0 auto; scroll-snap-align: start; }
-.genre-row .genre-tile { width: 100%; min-height: 92px; }
+.genre-row .genre-tile { width: 100%; }
 .group-songs > li { flex: 0 0 auto; width: 260px; scroll-snap-align: start; }
+/* Over a grid (components/AlbumGrid.tsx, the Genres page) the groups' tiles take the grid's column
+   width and gap: Pinned and Recent line up with the columns below, every tile one size, and a row
+   shows whole tiles only, the next one starting just past the edge. */
+.sized-cols .list-groups { column-gap: var(--grid-gap); }
+.sized-cols .list-groups > .recent { flex-basis: calc(2 * var(--grid-col-w) + var(--grid-gap)); }
+.sized-cols :is(.group-row, .genre-row) { gap: var(--grid-gap); }
+.sized-cols :is(.group-row .tile, .genre-row > li) { width: var(--grid-col-w); }
 .group-song-main {
   width: 100%; display: flex; align-items: center; gap: 12px; height: 60px; padding: 0 10px 0 8px; border: 0; border-radius: var(--shape-md);
   background: var(--surface-tonal-sunken); color: var(--fg); text-align: left; font: inherit;
@@ -130,7 +145,7 @@
   width: 48px; height: 48px; right: 18px; top: calc(100cqw - 50px); border-radius: 50%;
   transform: scale(0.5) translateY(8px);
 }
-.tile:hover .play, .tile:focus-within .play { transform: none; }
+.tile:hover .play, .tile:is(:focus-visible, :has(:focus-visible)) .play { transform: none; }
 .tile .play:hover { box-shadow: var(--shadow); }
 .tile-badge { top: 14px !important; left: 14px !important; padding: 5px; }
 
@@ -141,28 +156,64 @@
   display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; flex: 0 0 auto;
   border-radius: 50%; background: var(--selection); color: var(--accent-text);
 }
-.home-section .scroller {
-  gap: 6px; padding: 6px 4px 12px; margin: -6px -4px 0; scroll-snap-type: x proximity; scroll-padding-inline: 4px;
+/* A shelf runs out under the page's gutters to the pane's edges, so tiles slide under the pane's
+   edge rather than being cut at the gutter; the padding keeps hover lifts and focus rings in. No
+   scroll snapping: Shelf pages it to whole tiles, and a trackpad scrolls freely. */
+.shelf { --shelf-tile: 172px; }
+.shelf > .scroller {
+  gap: 6px; padding: 6px var(--page-gutter) 12px; margin: -6px calc(-1 * var(--page-gutter)) 0;
+  scroll-padding-inline: var(--page-gutter); overscroll-behavior-x: contain;
 }
 /* The carousel's scrollbar stays out of the way until the pointer is over it. */
-.home-section .scroller::-webkit-scrollbar { height: 8px; }
-.home-section .scroller::-webkit-scrollbar-thumb { background: transparent; background-clip: padding-box; border: 2px solid transparent; }
-.home-section .scroller:hover::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--fg) 18%, transparent); background-clip: padding-box; }
-.home-section .scroller .tile { width: 172px; scroll-snap-align: start; }
+.shelf > .scroller::-webkit-scrollbar { height: 8px; }
+.shelf > .scroller::-webkit-scrollbar-thumb { background: transparent; background-clip: padding-box; border: 2px solid transparent; }
+.shelf > .scroller:hover::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--fg) 18%, transparent); background-clip: padding-box; }
+.shelf > .scroller > .tile { width: var(--shelf-tile); }
+/* Back and next over the row's ends, centred on the artwork, while the pointer is on the row. */
+.shelf-arrow {
+  position: absolute; z-index: 2; top: calc(6px + var(--shelf-tile) / 2); width: 40px; height: 40px; margin-top: -20px; padding: 0;
+  display: grid; place-items: center; border: 0; border-radius: 50%; background: var(--bg-elev); color: var(--fg); box-shadow: var(--shadow-2);
+  opacity: 0; transition: opacity var(--dur-short) var(--ease-emphasized), transform var(--dur-short) var(--ease-emphasized);
+}
+.shelf-arrow.back { left: calc(8px - var(--page-gutter)); }
+.shelf-arrow.next { right: calc(8px - var(--page-gutter)); }
+.shelf:hover .shelf-arrow:not(.spent) { opacity: 1; }
+.shelf-arrow:hover { transform: scale(1.06); }
+.shelf-arrow.spent { visibility: hidden; transition: opacity var(--dur-short) var(--ease-emphasized), visibility 0s var(--dur-short); }
 
 /* ---- Detail pages (album, artist, playlist) -------------------------------- */
-/* The page scrolls as a whole: the hero, the actions under it, then sections. */
-.view.detail-page { overflow-y: auto; overflow-x: hidden; }
+/* The page scrolls as a whole, one scrollbar: the hero, the actions under it, then sections (a track
+   table included, however long: it windows its rows against this scroller). The compact bar sticks
+   at the top; what scrolls into view (focus, keys) stops below it. Every hero mode is the same height
+   (--hero-h), so nothing moves when the cover turns out to fill it. */
+.view.detail-page {
+  overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scroll-padding-top: var(--detail-bar-h);
+  --detail-pad: clamp(20px, 3vw, 40px); --detail-bar-h: 64px; --hero-h: clamp(300px, 48vh, 440px);
+}
 .view.detail-page > .view-body { flex: 0 0 auto; overflow: visible; padding: 0 var(--detail-pad) 48px; }
-.view.detail-page { --detail-pad: clamp(20px, 3vw, 40px); }
+/* The compact bar: Play and the title on the hero's colour, faded in once the actions are under it.
+   It overlays the hero's top (no space of its own) and stays out of the way until then. */
+.detail-bar {
+  position: sticky; top: 0; z-index: 3; flex: 0 0 auto; box-sizing: border-box;
+  height: var(--detail-bar-h); margin-bottom: calc(-1 * var(--detail-bar-h));
+  display: flex; align-items: center; gap: 14px; padding: 0 var(--detail-pad);
+  background: var(--hero-wash, #1d1a2b); color: #fff;
+  opacity: 0; transition: opacity var(--dur-short) var(--ease-emphasized);
+}
+.detail-bar.bar-none { background: color-mix(in srgb, var(--accent) 30%, #000); }
+.detail-bar.stuck { opacity: 1; }
+.detail-bar .detail-bar-play { flex: 0 0 auto; width: 44px; height: 44px; padding: 0; justify-content: center; border-radius: 50%; }
+.detail-bar-title { min-width: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The hero, edge to edge across the top of the pane. Artwork is never stretched
    past its own pixels (DetailHead): a cover with the pixels fills it and fades
    into the page (Large); a smaller one sits at its size over a blurred wash of
    itself (Small); with none, an accent gradient (None). */
 .detail-head {
   position: relative; isolation: isolate; flex: 0 0 auto; margin: 0; display: flex; align-items: flex-end; gap: 36px;
-  padding: 0 var(--detail-pad) 36px; min-height: 384px; box-sizing: border-box; border-radius: 0 0 36px 36px;
+  padding: 0 var(--detail-pad) 36px; min-height: var(--hero-h); box-sizing: border-box; border-radius: 0 0 36px 36px;
   color: #fff; background: #1d1a2b; overflow: hidden;
+  /* The title's size follows the pane, not the window (the side panels take some of it). */
+  container-type: inline-size;
 }
 .detail-head .hero-backdrop { position: absolute; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
 .detail-head .hero-backdrop img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -172,8 +223,8 @@
 /* Eyebrow ("Public", "Smart playlist"): a chip on the image. */
 .detail-head .meta > .eyebrow { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: var(--shape-full); background: rgba(255, 255, 255, 0.16); color: #fff; font-size: var(--fs-sm); font-weight: 600; }
 .detail-head .meta h1 {
-  margin: 0; font-size: var(--detail-title, clamp(44px, 4.6vw + 8px, 96px)); line-height: 0.96; font-weight: 800; letter-spacing: -0.035em; padding-bottom: 0.06em;
-  white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere;
+  margin: 0; font-size: clamp(32px, 6.5cqi + 8px, 96px); line-height: 0.96; font-weight: 800; letter-spacing: -0.035em; padding-bottom: 0.06em;
+  white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: break-word;
 }
 .detail-head .meta .detail-sub { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin-top: 4px; font-size: 14px; color: rgba(255, 255, 255, 0.84); }
 .detail-head .meta .detail-sub .plain-link { font-size: 18px; font-weight: 700; color: #fff; }
@@ -186,14 +237,15 @@
 .detail-head.hero-none { background-image: linear-gradient(150deg, color-mix(in srgb, var(--accent) 34%, #000) 0%, color-mix(in srgb, var(--accent) 24%, #000) 100%); }
 .detail-head.hero-none .art.placeholder { display: grid; place-items: center; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.24); color: #fff; }
 /* Large: the cover across the top, fading into the page; the title sits on the fade in the page's own colours. */
-.detail-head.hero-large { min-height: 470px; border-radius: 0; background: var(--bg-elev); color: var(--fg); padding-bottom: 0; }
+.detail-head.hero-large { border-radius: 0; background: var(--bg-elev); color: var(--fg); padding-bottom: 0; }
 .detail-head.hero-large .hero-backdrop::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(20, 16, 24, 0.22) 0%, transparent 26%, transparent 42%, color-mix(in srgb, var(--bg-elev) 80%, transparent) 74%, var(--bg-elev) 92%); }
 .detail-head.hero-large .meta > .eyebrow { background: color-mix(in srgb, var(--bg-elev) 70%, transparent); color: var(--fg); }
 .detail-head.hero-large .meta .detail-sub { color: var(--fg-muted); }
 .detail-head.hero-large .meta .detail-sub .plain-link { color: var(--accent-text); }
 .detail-head.hero-large .meta .detail-note { color: var(--fg); }
 /* The actions under the hero, on the page: Play, then round tonal icon buttons (square when on); the rating at the end. */
-.detail-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 20px var(--detail-pad) 0; }
+/* The same padding washed or not, so the wash arriving moves nothing. */
+.detail-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 20px var(--detail-pad); }
 .detail-actions .btn.fab { height: 56px; padding: 0 24px 0 18px; gap: 8px; border-radius: var(--shape-full); font-size: 16px; font-weight: 600; box-shadow: var(--shadow-1); transition: border-radius var(--dur-spring) var(--spring-fast); }
 /* Play and Resume share a width, so the row doesn't shift when an album can be continued. */
 .detail-actions .btn.album-play { min-width: 148px; justify-content: center; }
@@ -208,6 +260,7 @@
 .detail-rating .stars svg { width: 22px; height: 22px; }
 /* Sections below: a title with its summary or View more on the right. */
 .detail-section { padding-top: 28px; }
+.detail-page > .view-body > .detail-section:first-child { padding-top: 12px; }
 .detail-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; }
 .detail-section-head h2 { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.01em; }
 .detail-section-head .muted { font-size: var(--fs-md); }
@@ -215,6 +268,9 @@
 .btn.view-more { height: 40px; padding: 0 12px 0 16px; gap: 2px; border-radius: var(--shape-full); background: var(--state-selected); color: var(--fg); font-weight: 600; }
 .btn.view-more:hover { background: color-mix(in srgb, var(--fg) 8%, var(--state-selected)); }
 .detail-page .table { --table-inset: 0px; }
+/* A table in a page that scrolls as a whole is as tall as its rows; its header sticks under the bar. */
+.table.in-page, .table.in-page > .table-body { flex: 0 0 auto; min-height: 0; overflow: visible; }
+.view.detail-page .table-head { top: var(--detail-bar-h); }
 .detail-page .home-section { padding: 0; }
 
 /* ---- Track tables --------------------------------------------------------- */
@@ -228,7 +284,7 @@
 }
 /* Where the page scrolls rather than the table, a row brought into view by the
    keyboard stops below the stuck header (its 40px plus 4px gap), not under it. */
-:is(.view.detail-page, .page-search) .tr { scroll-margin-top: 44px; }
+:is(.view.detail-page, .page-search, .page-songs) .tr { scroll-margin-top: 44px; }
 .table-head .th.sortable:hover { background: var(--bg-hover); }
 .table-head .th.sorted { color: var(--fg); }
 .table-head .th.sorted .th-btn { background: var(--state-selected); color: var(--fg); }
@@ -245,6 +301,8 @@
 .tr.playing .td.title { color: var(--fg); font-weight: 700; }
 .tr.playing .td.index .icon { color: var(--accent-text); }
 .tr .art { width: 32px; height: 32px; border-radius: var(--shape-sm); }
+/* A disc's heading over its first song, in an album of several discs. */
+.disc-head { position: absolute; top: 0; left: var(--table-inset); right: var(--table-inset); display: flex; align-items: flex-end; gap: 10px; padding: 0 14px 8px; color: var(--fg-muted); font-size: var(--fs-md); font-weight: 700; pointer-events: none; }
 .tr .row-play { background: var(--accent); color: var(--accent-fg); width: 30px; inset: 5px 0 5px auto; border-radius: 10px; transition: border-radius var(--dur-spring) var(--spring-fast), opacity var(--dur-short) var(--ease-emphasized); }
 .tr .row-play:hover { background: var(--accent); border-radius: 50%; }
 .table .empty .empty-cell { display: flex; flex-direction: column; align-items: center; gap: 12px; }
@@ -288,25 +346,25 @@
   .genre-row { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
   .group-songs { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
   :is(.group-row .tile, .genre-row > li, .group-songs > li) { width: auto; }
+  /* Over a grid, each group takes the width and the grid's columns. */
+  .sized-cols .list-groups > * { flex-basis: 100%; }
+  .sized-cols :is(.group-row, .genre-row) { grid-template-columns: repeat(var(--grid-cols), minmax(0, 1fr)); }
+  .sized-cols :is(.group-row .tile, .genre-row > li) { width: auto; }
   .view-header .actions { margin-left: 0; }
   /* The carousels wrap into the same fluid grid as the library pages, so rows fill the width. */
-  .home-section .scroller { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); margin: 0; padding: 0; }
-  .home-section .scroller .tile { width: auto; }
+  .shelf > .scroller { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); margin: 0; padding: 0; }
+  .shelf > .scroller > .tile { width: auto; }
+  .shelf-arrow { display: none; }
   .genre-grid { --tile-w: 160px; }
 }
 
-/* Short windows (200% zoom): a compact hero, and the page scrolls as a whole
-   so the hero's controls are never cut off; the track list keeps a bounded
-   height of its own for virtualisation. */
+/* Short windows (200% zoom): a compact hero and bar, so the hero's controls
+   and the first rows still fit. */
 @media (max-height: 640px) {
-  .detail-head { min-height: 240px; gap: 20px; padding-bottom: 20px; }
-  .detail-head.hero-large { min-height: 300px; }
+  .view.detail-page { --hero-h: 240px; --detail-bar-h: 56px; }
+  .detail-head { gap: 20px; padding-bottom: 20px; }
   .detail-head .art, .detail-head .art.round { width: 120px; height: 120px; }
   .detail-head .meta h1 { font-size: 36px; }
-  /* Songs, likewise: the page scrolls past its groups to a table that keeps a usable height. */
-  .view:has(> .list-top) { overflow-y: auto; }
-  .view:has(> .list-top) > .list-top .list-top-groups { max-height: none; overflow: visible; }
-  .view:has(> .list-top) > .view-body { flex: 0 0 auto; height: max(240px, 75vh); }
 }
 
 /* ---- Reduced motion: no lifts, spins or pops (colour changes stay) ------- */
@@ -342,7 +400,7 @@
 .search-kind-count { font-variant-numeric: tabular-nums; font-weight: 500; opacity: 0.8; }
 .search-section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .search-nothing, .search-asking, .search-lyrics-note { margin: 0; }
-.search-lyrics-note { padding: 0 var(--page-pad) 12px; }
+.search-lyrics-note { margin: -6px 0 10px var(--page-title-inset); }
 .lyric-hits { display: flex; flex-direction: column; gap: 2px; }
 .lyric-hit { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; text-align: left; padding: 8px 12px; border: 0; border-radius: var(--shape-md); background: transparent; color: inherit; font: inherit; }
 .lyric-hit:hover { background: var(--bg-hover); }

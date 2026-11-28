@@ -2,7 +2,7 @@
 // library's matches — the first songs (all of them under Songs), albums,
 // artists and playlists — and below them what only the server found.
 import { useEffect, useMemo, useState } from "react";
-import type { LyricHit, SearchResults } from "@core/api";
+import type { ActionTarget, LyricHit, SearchResults } from "@core/api";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { bridge } from "../core/bridge";
@@ -10,6 +10,9 @@ import { TrackTable } from "../components/TrackTable";
 import { LyricSnippet } from "../components/LyricSnippet";
 import { useQuery } from "../store/queries";
 import { Tile, TileList } from "../components/Tile";
+import { Shelf } from "../components/Shelf";
+import { openContextMenu } from "../components/ContextMenu";
+import { playContext } from "./Home";
 import { refOf, refKey } from "../lib/track-ref";
 import { SourceChips, useLibrarySource } from "../components/SourceChips";
 
@@ -52,13 +55,13 @@ export function SearchView({ query }: { query: string }) {
       <div className="view-header search-header"><h1>{query}</h1>{found ? <span className="muted" data-testid="search-count">{t(counts.all === 1 ? "search.resultsOne" : "search.results", { count: counts.all })}</span> : null}</div>
       <SourceChips />
       <div className="search-kinds" role="group" aria-label={t("search.kinds")} data-testid="search-kinds">
-        {KINDS.map((k) => (
-          <button key={k} type="button" className={`search-kind ${kind === k ? "on" : ""}`} aria-pressed={kind === k} disabled={k !== "all" && k !== "lyrics" && counts[k] === 0} onClick={() => setKind(k)} data-testid={`search-kind-${k}`}>
+        {/* A kind with nothing found isn't offered (lyrics always is: it says where it looked). */}
+        {KINDS.filter((k) => k === "all" || k === "lyrics" || k === kind || counts[k] > 0).map((k) => (
+          <button key={k} type="button" className={`search-kind ${kind === k ? "on" : ""}`} aria-pressed={kind === k} onClick={() => setKind(k)} data-testid={`search-kind-${k}`}>
             {t(`search.kind.${k}`)}{k !== "all" ? <span className="search-kind-count">{counts[k]}</span> : null}
           </button>
         ))}
       </div>
-      <p className="muted search-lyrics-note" data-testid="search-lyrics-scope">{t("search.lyricsScope")}</p>
       <div className="view-body" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
         {nothing && kind !== "lyrics" ? <p className="muted search-nothing" data-testid="search-nothing">{t("search.noResults", { query })}</p> : null}
         {kind === "lyrics" && lyricHits.length === 0 ? <p className="muted search-nothing" data-testid="search-lyrics-none">{t("search.lyricsNone")}</p> : null}
@@ -77,6 +80,7 @@ export function SearchView({ query }: { query: string }) {
               <h2 className="section-heading" id="search-lyrics">{t("search.lyrics")}</h2>
               {kind === "all" && lyricHits.length > PREVIEW ? <button type="button" className="btn text sm" onClick={() => setKind("lyrics")} data-testid="search-see-all-lyrics">{t("search.seeAllLyrics", { count: lyricHits.length })}</button> : null}
             </div>
+            <p className="small muted search-lyrics-note" data-testid="search-lyrics-scope">{t("search.lyricsScope")}</p>
             <div className="lyric-hits">
               {shownLyrics.map((hit) => (
                 <button key={hit.track.id} type="button" className="lyric-hit" onClick={() => playLyric(hit)} data-testid="lyric-hit">
@@ -91,29 +95,37 @@ export function SearchView({ query }: { query: string }) {
         {show("albums") ? (
           <section className="home-section" aria-labelledby="search-albums">
             <h2 className="section-heading" id="search-albums">{t("search.albums")}</h2>
-            <TileList label={t("search.albums")} className={kind === "albums" ? "grid" : "scroller"}>{albums.map((a) => (
-              <Tile key={a.id} title={a.name} subtitle={a.artist} coverArt={a.coverArt} onOpen={() => navigate({ view: "album", id: a.id })} dragTarget={{ type: "albums", data: { ids: [a.id] } }} />
-            ))}</TileList>
+            <Tiles label={t("search.albums")} grid={kind === "albums"}>{albums.map((a) => {
+              const target: ActionTarget = { type: "albums", data: { ids: [a.id] } };
+              return <Tile key={a.id} title={a.name} subtitle={a.artist} coverArt={a.coverArt} onOpen={() => navigate({ view: "album", id: a.id })} onPlay={() => playContext(a.serverId, { type: "album", data: { id: a.id } }, a.name)} onContextMenu={(e) => void openContextMenu(e, target)} dragTarget={target} />;
+            })}</Tiles>
           </section>
         ) : null}
         {show("artists") ? (
           <section className="home-section" aria-labelledby="search-artists">
             <h2 className="section-heading" id="search-artists">{t("search.artists")}</h2>
-            <TileList label={t("search.artists")} className={kind === "artists" ? "grid" : "scroller"}>{artists.map((a) => (
-              <Tile key={a.id} title={a.name} subtitle={t("search.albumCount", { count: a.albumCount })} coverArt={a.coverArt} round onOpen={() => navigate({ view: "artist", id: a.id })} />
-            ))}</TileList>
+            <Tiles label={t("search.artists")} grid={kind === "artists"}>{artists.map((a) => {
+              const target: ActionTarget = { type: "artists", data: { ids: [a.id] } };
+              return <Tile key={a.id} title={a.name} subtitle={t("search.albumCount", { count: a.albumCount })} coverArt={a.coverArt} round onOpen={() => navigate({ view: "artist", id: a.id })} onPlay={() => playContext(a.serverId, { type: "artist", data: { id: a.id } }, a.name)} onContextMenu={(e) => void openContextMenu(e, target)} dragTarget={target} />;
+            })}</Tiles>
           </section>
         ) : null}
         {show("playlists") ? (
           <section className="home-section" aria-labelledby="search-playlists">
             <h2 className="section-heading" id="search-playlists">{t("search.playlists")}</h2>
-            <TileList label={t("search.playlists")} className={kind === "playlists" ? "grid" : "scroller"}>{playlists.map((p) => (
-              <Tile key={p.id} title={p.name} subtitle={t("search.songCount", { count: p.songCount })} coverArt={p.coverArt} onOpen={() => navigate({ view: "playlist", id: p.id })} />
-            ))}</TileList>
+            <Tiles label={t("search.playlists")} grid={kind === "playlists"}>{playlists.map((p) => {
+              const target: ActionTarget = { type: "playlists", data: { ids: [p.id] } };
+              return <Tile key={p.id} title={p.name} subtitle={t("search.songCount", { count: p.songCount })} coverArt={p.coverArt} onOpen={() => navigate({ view: "playlist", id: p.id })} onPlay={() => playContext(p.serverId, { type: "playlist", data: { id: p.id } }, p.name)} onContextMenu={(e) => void openContextMenu(e, target)} dragTarget={target} />;
+            })}</Tiles>
           </section>
         ) : null}
         {found && !server && kind !== "lyrics" ? <p className="small muted search-asking" data-testid="search-asking">{t("search.searching")}</p> : null}
       </div>
     </div>
   );
+}
+
+/** A kind's results: a shelf under All, every one of them in a grid when narrowed to that kind. */
+function Tiles({ label, grid, children }: { label: string; grid: boolean; children: React.ReactNode }) {
+  return grid ? <TileList label={label} className="grid">{children}</TileList> : <Shelf label={label}>{children}</Shelf>;
 }
