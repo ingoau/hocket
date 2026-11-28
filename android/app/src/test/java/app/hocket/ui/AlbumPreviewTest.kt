@@ -227,6 +227,29 @@ class AlbumPreviewTest {
     }
 
     @Test
+    fun stashAndLoveBesideTheTitleToggleTheSongOnTheCard() {
+        val core = TestCore(startPlaying = false)
+        open(core)
+        pull(200f)
+        compose.waitUntil(5_000) { core.client.preview.value != null }
+        val id = core.client.preview.value!!.trackId
+        val wasLoved = core.fake.library.track(id)!!.loved
+        fun tap(tag: String) {
+            compose.onNodeWithTag(tag).performSemanticsAction(SemanticsActions.OnClick)
+            compose.waitForIdle()
+        }
+        tap("albumPreview.stash")
+        compose.waitUntil(5_000) { core.client.stash.value.any { it.track.id == id } }
+        tap("albumPreview.stash")
+        compose.waitUntil(5_000) { core.client.stash.value.none { it.track.id == id } }
+        tap("albumPreview.love")
+        compose.waitUntil(5_000) { core.fake.library.track(id)!!.loved != wasLoved }
+        // Still up: neither puts the preview away.
+        assertTrue(exists("albumPreview.info"))
+        assertEquals(id, core.client.preview.value?.trackId)
+    }
+
+    @Test
     fun aTapBesideTheCardPutsItAway() {
         val core = TestCore(startPlaying = false)
         open(core)
