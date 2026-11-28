@@ -28,6 +28,20 @@ class AlbumPreviewStartTest {
     }
 
     @Test
+    fun keepsTheFirstWhenTheWordNamesThePieces() {
+        // Chopin's Preludes: every song is one.
+        assertEquals(0, start("Prelude No. 1" to 40, "Prelude No. 2" to 130, "Prelude No. 3" to 60, "Prelude No. 4" to 120))
+        // The Well-Tempered Clavier: Prelude and Fugue pairs.
+        assertEquals(0, start("Prelude No. 1 in C" to 120, "Fugue No. 1 in C" to 110, "Prelude No. 2" to 90, "Fugue No. 2" to 100, "Prelude No. 3" to 80, "Fugue No. 3" to 130))
+    }
+
+    @Test
+    fun keepsATitledOpenerNotMuchShorterThanTheRest() {
+        // A cello suite: the Prelude is one of the movements.
+        assertEquals(0, start("I. Prelude" to 140, "II. Allemande" to 240, "III. Courante" to 150, "IV. Sarabande" to 200, "V. Menuets" to 180, "VI. Gigue" to 100))
+    }
+
+    @Test
     fun aWordOnlyCountsWhole() {
         assertEquals(0, start("Introvert" to 60, "Song" to 210))
     }
