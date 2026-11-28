@@ -67,7 +67,7 @@ fun HocketTheme(client: CoreClient?, content: @Composable () -> Unit) {
     // Only the cover: the entry changes far more often (a star, a rating, the queue), and each
     // recomposition here hands the whole tree a new scheme.
     val playing = client?.let { c ->
-        val cover by remember(c) { c.nowPlaying.map { it?.track?.coverArt }.distinctUntilChanged() }.collectAsStateWithLifecycle(null)
+        val cover by remember(c) { c.nowPlaying.map { it?.track?.coverArt }.distinctUntilChanged() }.collectAsStateWithLifecycle(c.nowPlaying.value?.track?.coverArt)
         val seed = resolveNowPlayingSeed(cover, c)
         remember(cover, seed) { NowPlayingSeed(cover, seed) }
     }
