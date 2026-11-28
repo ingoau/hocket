@@ -95,13 +95,22 @@ import app.hocket.ui.DetailNavigator
 import app.hocket.ui.LocalDetailNavigator
 import app.hocket.ui.components.MenuSheet
 import app.hocket.ui.components.SongMenuExtra
-import app.hocket.ui.components.SongMenuHost
+import app.hocket.ui.components.songSubject
 import app.hocket.ui.components.TrackRow
 import app.hocket.ui.components.formatClock
 import app.hocket.ui.components.segmentedShape
 import app.hocket.ui.components.songsSubject
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalDensity
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 
@@ -241,12 +250,14 @@ object StashChipDefaults {
 }
 
 /**
- * The stash as a sheet: its songs listed as a playlist's are (each with its menu; drag the handle
- * to reorder; tap to pick some), then the songs' menu as the selection drawer opens it, without its
- * header: the play group, the stars, Add to playlist, Download, Share, Snooze. With nothing picked
- * the menu acts on the whole stash, otherwise on the songs picked ("Remove 2 from stash" then too);
- * either way the stash is kept. Play and Shuffle play it as a queue named after the stash and close
- * the sheet. Clear empties it (the core's toast has an Undo).
+ * The stash as a sheet: its songs listed as a playlist's are (drag the handle to reorder, tap to
+ * pick some), then the menu the selection drawer would open for them, without its header: for
+ * several songs the songs' menu (the play group, the stars, Add to playlist, Download, Share,
+ * Snooze); for one song (picked, or all the stash holds) that song's own menu (Preview, Go to
+ * album, Song info, ...). With nothing picked the menu acts on the whole stash, otherwise on the
+ * songs picked ("Remove 2 from stash" then too); either way the stash is kept. Play and Shuffle
+ * play it as a queue named after the stash and close the sheet; going to an album or artist closes
+ * it too. Clear empties it (the core's toast has an Undo).
  */
 @Composable
 fun StashSheet(onDismiss: () -> Unit, navigator: DetailNavigator? = LocalDetailNavigator.current) {
@@ -291,7 +302,16 @@ fun StashSheet(onDismiss: () -> Unit, navigator: DetailNavigator? = LocalDetailN
             if (t == currentTarget) actions = fresh
         }
     }
-    val subject = remember(acting, resources, dot) { songsSubject(acting.size, acting.map { it.track.toSummary() }, null, resources, dot) }
+    // One song (picked, or all the stash holds): its own menu, as its three dots would open it (and a
+    // one-item selection's drawer does). Several: the songs' menu.
+    val pins by client.pins.collectAsStateWithLifecycle()
+    val unknownArtist = stringResource(R.string.unknown_artist)
+    val single = acting.singleOrNull()?.track?.toSummary()
+    val subject = remember(acting, pins, resources, dot) {
+        single?.let { songSubject(it, null, pins, dot, unknownArtist) } ?: songsSubject(acting.size, acting.map { it.track.toSummary() }, null, resources, dot)
+    }
+    // What its Song info opens, over the sheet.
+    var songInfo by remember { mutableStateOf<app.hocket.core.api.TrackSummary?>(null) }
     fun playAction(a: ActionDescriptor) {
         when (a.id) {
             ActionIds.PLAY, ActionIds.PLAY_SHUFFLED -> { client.dispatch(Commands.playTracks(refs, 0, title, a.id == ActionIds.PLAY_SHUFFLED)); close() }
@@ -303,9 +323,7 @@ fun StashSheet(onDismiss: () -> Unit, navigator: DetailNavigator? = LocalDetailN
             }
         }
     }
-    // Each song's menu, over this sheet; its go-to rows (and the rows' accessibility actions)
-    // close the stash first, so what they open is in view.
-    val songMenu = remember { app.hocket.ui.components.SongMenuController() }
+    // The menu's go-to rows (and Song info's links) close the stash first, so what they open is in view.
     val dismiss by rememberUpdatedState(onDismiss)
     val songNavigator = remember(navigator) {
         navigator?.let { n ->
@@ -317,7 +335,6 @@ fun StashSheet(onDismiss: () -> Unit, navigator: DetailNavigator? = LocalDetailN
             )
         }
     }
-    val removeOne = stringResource(R.string.stash_remove_one)
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState, modifier = Modifier.testTag("stash.sheet")) {
         CompositionLocalProvider(LocalAppSnackbar provides snackbar, LocalDetailNavigator provides songNavigator) {
         Box {
@@ -343,13 +360,8 @@ fun StashSheet(onDismiss: () -> Unit, navigator: DetailNavigator? = LocalDetailN
                 items = items,
                 picked = picked,
                 onToggle = { id -> picked = if (id in picked) picked - id else picked + id; haptics.performHapticFeedback(HapticFeedbackType.SegmentTick) },
-                onMore = { item ->
-                    songMenu.open(item.track.toSummary(), extras = listOf(SongMenuExtra(removeOne, HocketIcons.Filled.RemoveCircleOutline,
-                        onClick = { client.dispatch(Command.StashRemove(CommandStashRemoveInner(listOf(item.entryId)))) },
-                        destructive = true, testTag = "songMenu.removeFromStash", replaces = ActionIds.STASH)))
-                },
                 onMove = { id, to -> client.dispatch(Command.StashMove(CommandStashMoveInner(id, to.toUInt()))) },
-            ) {
+            ) { playGroupModifier ->
                 // What the menu acts on, so it's never a surprise: everything, or the songs picked.
                 Text(
                     if (selection.isNotEmpty()) pluralStringResource(R.plurals.stash_acting_selected, selection.size, selection.size)
@@ -358,7 +370,7 @@ fun StashSheet(onDismiss: () -> Unit, navigator: DetailNavigator? = LocalDetailN
                     modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 10.dp).semantics { heading() }.testTag("stash.acting"),
                 )
                 val removePicked = if (selection.isNotEmpty()) SongMenuExtra(
-                    pluralStringResource(R.plurals.stash_remove_n, selection.size, selection.size), HocketIcons.Filled.RemoveCircleOutline,
+                    if (selection.size == 1) stringResource(R.string.stash_remove_one) else pluralStringResource(R.plurals.stash_remove_n, selection.size, selection.size), HocketIcons.Filled.RemoveCircleOutline,
                     onClick = { client.dispatch(Command.StashRemove(CommandStashRemoveInner(selection.map { it.entryId }))) },
                     destructive = true, testTag = "stash.menu.remove", replaces = ActionIds.STASH,
                 ) else null
@@ -370,11 +382,15 @@ fun StashSheet(onDismiss: () -> Unit, navigator: DetailNavigator? = LocalDetailN
                         subject, target, actions.filter { it.id != ActionIds.STASH },
                         onDismiss = {},
                         extras = listOfNotNull(removePicked),
+                        onGoToAlbum = single?.albumId?.let { id -> songNavigator?.let { n -> { n.openAlbum(id) } } },
+                        onGoToArtist = single?.artistId?.let { id -> songNavigator?.let { n -> { n.openArtist(id) } } },
+                        onInfo = single?.let { t -> { songInfo = t } },
                         onRan = { picked = emptySet() },
                         tag = "stash.menu",
                         embedded = true,
                         showHeader = false,
                         onPlay = ::playAction,
+                        playGroupModifier = playGroupModifier,
                     )
                 }
             }
@@ -382,8 +398,14 @@ fun StashSheet(onDismiss: () -> Unit, navigator: DetailNavigator? = LocalDetailN
         SnackbarHost(sheetSnackbars, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(8.dp))
         }
         }
-        CompositionLocalProvider(LocalAppSnackbar provides snackbar, LocalDetailNavigator provides songNavigator) {
-            SongMenuHost(songMenu, songNavigator)
+        songInfo?.let { t ->
+            ModalBottomSheet(onDismissRequest = { songInfo = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("stash.menu.infoSheet")) {
+                app.hocket.ui.player.PlayerAbout(
+                    Modifier.fillMaxWidth().navigationBarsPadding(), track = t, title = stringResource(R.string.menu_song_info), onClose = { songInfo = null },
+                    onOpenAlbum = songNavigator?.let { n -> { id -> songInfo = null; n.openAlbum(id) } },
+                    onOpenArtist = songNavigator?.let { n -> { id -> songInfo = null; n.openArtist(id) } },
+                )
+            }
         }
     }
 }
@@ -393,9 +415,9 @@ private fun StashList(
     items: List<StashItem>,
     picked: Set<String>,
     onToggle: (String) -> Unit,
-    onMore: (StashItem) -> Unit,
     onMove: (String, Int) -> Unit,
-    footer: @Composable () -> Unit,
+    /** The menu after the songs; its play group carries the modifier it is handed. */
+    footer: @Composable (playGroupModifier: Modifier) -> Unit,
 ) {
     val haptics = LocalHapticFeedback.current
     val dot = stringResource(R.string.dot_separator)
@@ -413,11 +435,31 @@ private fun StashList(
         shown = shown.toMutableList().apply { add(b, removeAt(a)) }
         haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
     }
+    // Opened, the list lands with the play group at its foot: as many songs as fit above it, the
+    // buttons in reach. (Once: after that it scrolls only as the user scrolls it.)
+    val listAt = remember { arrayOfNulls<LayoutCoordinates>(1) }
+    val playAt = remember { arrayOfNulls<LayoutCoordinates>(1) }
+    val margin = with(LocalDensity.current) { 12.dp.toPx() }
+    LaunchedEffect(Unit) {
+        snapshotFlow { shown.size }.first { it > 0 }
+        val footer = shown.size
+        if (listState.layoutInfo.visibleItemsInfo.none { it.index == footer }) listState.scrollToItem(footer)
+        // The play group shows once the menu's actions have loaded.
+        val play = withTimeoutOrNull(2_000) {
+            var found: LayoutCoordinates? = null
+            while (found == null) { withFrameNanos { }; found = playAt[0]?.takeIf { it.isAttached } }
+            found
+        } ?: return@LaunchedEffect
+        val list = listAt[0]?.takeIf { it.isAttached } ?: return@LaunchedEffect
+        val playBottom = play.positionInWindow().y + play.size.height
+        val listBottom = list.positionInWindow().y + list.size.height
+        listState.scrollBy(playBottom - (listBottom - margin))
+    }
     val moveUp = stringResource(R.string.stash_move_up)
     val moveDown = stringResource(R.string.stash_move_down)
     LazyColumn(
         state = listState,
-        modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp).testTag("stash.list"),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp).onGloballyPositioned { listAt[0] = it }.testTag("stash.list"),
         contentPadding = PaddingValues(bottom = 16.dp),
     ) {
         itemsIndexed(shown, key = { _, it -> it.entryId }) { index, item ->
@@ -431,7 +473,6 @@ private fun StashList(
                 TrackRow(
                     track,
                     onClick = { onToggle(item.entryId) },
-                    onMore = { onMore(item) },
                     // Tapping picks a song: the stash is always choosing.
                     selected = item.entryId in picked,
                     selectionActive = true,
@@ -476,6 +517,6 @@ private fun StashList(
                 )
             }
         }
-        item(key = "stash.menu") { footer() }
+        item(key = "stash.menu") { footer(Modifier.onGloballyPositioned { playAt[0] = it }) }
     }
 }

@@ -5,6 +5,8 @@ import app.hocket.core.historyEntries
 import app.hocket.core.restEntries
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotDisplayed
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -14,7 +16,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.semantics.SemanticsActions
-import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.Commands
 import app.hocket.core.SettingKeys
@@ -126,35 +128,45 @@ class StashTest {
     }
 
     @Test
-    fun aSongsMenuOpensOverTheStashAndRemovesIt() {
+    fun pickingOneSongShowsItsOwnMenuWhichGoesToItsAlbum() {
         val core = start()
         stashSome(core, 2)
         compose.onNodeWithTag("stash.chip").performClick()
         compose.waitForIdle()
-        val title = core.client.stash.value.first().track.title
-        compose.onNodeWithContentDescription("More options for $title", useUnmergedTree = true).performClick()
+        // Rows have no menu of their own: the menu under them is the one.
+        compose.onAllNodesWithContentDescription("More options for", substring = true, useUnmergedTree = true).assertCountEquals(0)
+        // Several songs: no go-to row.
+        compose.onAllNodesWithTag("stash.menu.action.goToAlbum", useUnmergedTree = true).assertCountEquals(0)
+        compose.onAllNodesWithTag("stash.row")[0].performClick()
         compose.waitForIdle()
-        compose.onNodeWithTag("songMenu").assertIsDisplayed()
-        // Its Add to stash gives way to Remove from stash.
-        compose.onAllNodesWithTag("songMenu.action.stash").assertCountEquals(0)
-        compose.onNodeWithTag("songMenu.removeFromStash", useUnmergedTree = true).performScrollTo().performClick()
-        compose.waitUntil(5_000) { core.client.stash.value.size == 1 }
+        compose.onNodeWithTag("stash.menu.remove").assertTextEquals("Remove from stash")
+        compose.onNodeWithTag("stash.menu.action.goToAlbum", useUnmergedTree = true).performScrollTo().performClick()
+        compose.waitForIdle()
+        compose.onAllNodesWithTag("stash.sheet").assertCountEquals(0)
+        assertTrue(core.client.stash.value.size == 2)
     }
 
     @Test
-    fun aSongsGoToAlbumClosesTheStash() {
+    @Config(qualifiers = "w411dp-h640dp")
+    fun aLongStashOpensScrolledToThePlayButtons() {
         val core = start()
-        stashSome(core, 2)
+        stashSome(core, 9)
         compose.onNodeWithTag("stash.chip").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("stash.menu.action.play", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
         compose.waitForIdle()
-        val title = core.client.stash.value.first().track.title
-        compose.onNodeWithContentDescription("More options for $title", useUnmergedTree = true).performClick()
-        compose.waitForIdle()
-        compose.onNodeWithTag("songMenu.action.goToAlbum", useUnmergedTree = true).performScrollTo().performClick()
-        compose.waitForIdle()
-        compose.onAllNodesWithTag("stash.sheet").assertCountEquals(0)
-        compose.onAllNodesWithTag("songMenu").assertCountEquals(0)
-        assertTrue(core.client.stash.value.size == 2)
+        val play = compose.onNodeWithTag("stash.menu.action.play", useUnmergedTree = true).getBoundsInRoot()
+        val list = compose.onNodeWithTag("stash.list").getBoundsInRoot()
+        // The buttons at the foot of the list, in full (Play heads the group's two rows); the first
+        // songs scrolled away above.
+        assertTrue("play ${play.top}..${play.bottom} in list ${list.top}..${list.bottom}", play.bottom <= list.bottom - 64.dp && play.bottom >= list.bottom - 120.dp)
+        val first = core.client.stash.value.first().track.title
+        val firstRow = compose.onAllNodes(androidx.compose.ui.test.hasTestTag("stash.row") and androidx.compose.ui.test.hasText(first, substring = true))
+        // (Nine songs and the menu don't fit this phone.) The first has scrolled up under the
+        // sheet's header, or away.
+        if (firstRow.fetchSemanticsNodes().isNotEmpty()) {
+            val top = firstRow[0].getBoundsInRoot().top
+            assertTrue("first row top $top vs list top ${list.top}", top < list.top)
+        }
     }
 
     @Test

@@ -10,11 +10,9 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
-import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performScrollToIndex
-import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.hocket.core.api.Command
@@ -34,14 +32,14 @@ import androidx.test.core.view.captureToBitmapAsync
 import java.io.File
 
 /**
- * The stash sheet on the fake core: its songs, picking some, its menu, a song's own menu over it;
+ * The stash sheet on the fake core: its songs, picking some, its menu, one song's own menu;
  * plus frame-by-frame recordings (one frame per 16 ms) of opening it and picking songs. Only runs
  * with an output directory:
  *
  *     HOCKET_SCREENSHOT_DIR=/tmp/stash ./gradlew :app:testDebugUnitTest --tests '*StashScreenshotTest*' --rerun
  */
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [35], application = android.app.Application::class, qualifiers = "w411dp-h891dp-night-xxhdpi")
+@Config(sdk = [35], application = android.app.Application::class, qualifiers = "w411dp-h800dp-night-xxhdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class StashScreenshotTest {
     @get:Rule
@@ -62,15 +60,18 @@ class StashScreenshotTest {
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
         val q = core.client.queue.value
-        val ids = (listOfNotNull(q.current) + q.groupEntries + q.restEntries).map { it.item.track }.distinct().take(5)
+        val ids = (listOfNotNull(q.current) + q.groupEntries + q.restEntries).map { it.item.track }.distinct().take(9)
         core.client.dispatch(Command.StashAdd(CommandStashAddInner(ids)))
         compose.waitUntil(5_000) { core.client.stash.value.size == ids.size }
         settle()
 
-        record(dir, "rec-1-open") { compose.onNodeWithTag("stash.chip").performSemanticsAction(SemanticsActions.OnClick) }
+        record(dir, "rec-1-open", frames = 60) { compose.onNodeWithTag("stash.chip").performSemanticsAction(SemanticsActions.OnClick) }
         compose.waitUntil(5_000) { exists("stash.row") }
         settle()
-        shot(dir, "stash-1-all")
+        shot(dir, "stash-1-open")
+        compose.onNodeWithTag("stash.list").performScrollToIndex(0)
+        settle()
+        shot(dir, "stash-1b-top")
 
         record(dir, "rec-2-pick", frames = 30) { compose.onAllNodesWithTag("stash.row")[1].performSemanticsAction(SemanticsActions.OnClick) }
         record(dir, "rec-3-pick", frames = 30) { compose.onAllNodesWithTag("stash.row")[3].performSemanticsAction(SemanticsActions.OnClick) }
@@ -87,11 +88,11 @@ class StashScreenshotTest {
 
         compose.onNodeWithTag("stash.list").performScrollToIndex(0)
         settle()
-        val title = core.client.stash.value[0].track.title
-        compose.onNodeWithContentDescription("More options for $title", useUnmergedTree = true).performClick()
-        compose.waitUntil(5_000) { exists("songMenu") }
+        compose.onAllNodesWithTag("stash.row")[0].performSemanticsAction(SemanticsActions.OnClick)
         settle()
-        shot(dir, "stash-5-song-menu")
+        compose.onNodeWithTag("stash.list").performScrollToNode(hasTestTag("stash.menu"))
+        settle()
+        shot(dir, "stash-5-one-song")
     }
 
     private fun settle() {
