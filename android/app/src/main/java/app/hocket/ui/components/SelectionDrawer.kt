@@ -96,6 +96,7 @@ import app.hocket.core.Commands
 import app.hocket.core.Queries
 import app.hocket.core.api.ActionDescriptor
 import app.hocket.core.api.ActionTarget
+import app.hocket.core.api.MenuScreen
 import app.hocket.core.api.Album
 import app.hocket.core.api.OfflineState
 import app.hocket.core.api.Pin
@@ -140,7 +141,7 @@ enum class DrawerValue { Hidden, Peek, Open }
  * content clear of it.
  */
 @Composable
-fun SelectionDrawer(modifier: Modifier = Modifier, onSelectAll: (() -> Unit)? = null, context: String? = null, onRemoveFromContext: (() -> Unit)? = null, kinds: Set<SelectionKind>? = null, onPeekHeight: ((Int) -> Unit)? = null) {
+fun SelectionDrawer(modifier: Modifier = Modifier, onSelectAll: (() -> Unit)? = null, context: String? = null, onRemoveFromContext: (() -> Unit)? = null, kinds: Set<SelectionKind>? = null, onPeekHeight: ((Int) -> Unit)? = null, screen: MenuScreen = MenuScreen.List) {
     val client = LocalCoreClient.current
     val selectionAll by client.selection.collectAsStateWithLifecycleCompat()
     val kind by client.selectionKind.collectAsStateWithLifecycleCompat()
@@ -152,7 +153,7 @@ fun SelectionDrawer(modifier: Modifier = Modifier, onSelectAll: (() -> Unit)? = 
     if (selection.active) held[0] = selection
     LaunchedEffect(selection.active) { if (selection.active) leaving = true }
     if (selection.active || leaving) {
-        Drawer(selection.active, held[0], kind, onSelectAll, context, onRemoveFromContext, modifier, onPeekHeight) { leaving = false }
+        Drawer(selection.active, held[0], kind, onSelectAll, context, onRemoveFromContext, modifier, onPeekHeight, screen) { leaving = false }
     }
 }
 
@@ -166,6 +167,7 @@ private fun Drawer(
     onRemoveFromContext: (() -> Unit)?,
     modifier: Modifier,
     onPeekHeight: ((Int) -> Unit)?,
+    screen: MenuScreen,
     onHidden: () -> Unit,
 ) {
     val client = LocalCoreClient.current
@@ -174,21 +176,11 @@ private fun Drawer(
     val resources = androidx.compose.ui.platform.LocalResources.current
     val dot = stringResource(R.string.dot_separator)
     val songs = kind == SelectionKind.Tracks || kind == SelectionKind.QueueItems
-    var actions by remember { mutableStateOf<List<ActionDescriptor>>(emptyList()) }
+    // The core's menu for the selection; its actions also make the peek's quick buttons.
+    var coreMenu by remember { mutableStateOf(CoreMenu(emptyList())) }
+    val actions = remember(coreMenu) { coreMenu.items.flatMap { it.actions } }
     var playlistPicker by remember { mutableStateOf(false) }
     var rating by remember { mutableStateOf(false) }
-    LaunchedEffect(selection, kind) {
-        if (active) actions = client.actions("contextMenu", client.selectionTarget())
-    }
-    LaunchedEffect(Unit) {
-        client.actionsChanged.collectLatest {
-            if (!client.selection.value.active) return@collectLatest
-            val target = client.selectionTarget()
-            val fresh = client.actions("contextMenu", target)
-            // The selection changed meanwhile: its own fetch (above) has the answer.
-            if (client.selectionTarget() == target) actions = fresh
-        }
-    }
     val navigator = LocalDetailNavigator.current
     val pins by client.pins.collectAsStateWithLifecycleCompat()
     val unknownArtist = stringResource(R.string.unknown_artist)
@@ -198,6 +190,23 @@ private fun Drawer(
         if (!active) return@produceState
         value = singleMenu(client, selection, kind, context, pins, resources, dot, unknownArtist, selectedCount)
             ?: if (songs) DrawerMenu(selectionSubject(client, selection, kind, context, resources, dot)) else null
+    }
+    // Asked for as what the open drawer's menu shows: one item's own (its info row), or several songs'.
+    val menuKind = menu?.subject?.kind ?: if (songs) MenuKind.Songs else MenuKind.Other
+    val menuCount = menu?.subject?.count ?: selection.count
+    val menuInfo = menu?.track != null || menu?.album != null
+    val fetchMenu by rememberUpdatedState<suspend (ActionTarget) -> CoreMenu> { target -> client.itemMenu(target, menuKind, menuCount, screen, hasInfo = menuInfo) }
+    LaunchedEffect(selection, kind, menuKind, menuCount, menuInfo) {
+        if (active) coreMenu = fetchMenu(client.selectionTarget())
+    }
+    LaunchedEffect(Unit) {
+        client.actionsChanged.collectLatest {
+            if (!client.selection.value.active) return@collectLatest
+            val target = client.selectionTarget()
+            val fresh = fetchMenu(target)
+            // The selection changed meanwhile: its own fetch (above) has the answer.
+            if (client.selectionTarget() == target) coreMenu = fresh
+        }
     }
     // What one item's Song info / Album info opened (over the drawer, which keeps the selection).
     var songInfo by remember { mutableStateOf<TrackSummary?>(null) }
@@ -392,14 +401,14 @@ private fun Drawer(
                         // Download toggle changes the pins, which mustn't reset the sheet (or stop a preview).
                         key(kind, selection.inverted, selection.ids, s.kind) {
                             MenuSheet(
-                                s, client.selectionTarget(), actions,
+                                s, client.selectionTarget(), coreMenu,
                                 extras = listOfNotNull(onRemoveFromContext?.takeIf { context != null && songs }?.let { remove ->
                                     val label = if (s.count > 1) resources.getString(R.string.menu_remove_n_from, s.count, context) else resources.getString(R.string.menu_remove_from, context)
                                     SongMenuExtra(label, HocketIcons.Filled.PlaylistRemove,
                                         onClick = { remove(); client.clearSelection() }, destructive = true, testTag = "selectionMenu.removeFromPlaylist", replaces = ActionIds.REMOVE_FROM_PLAYLIST)
                                 }),
                                 onGoToAlbum = s.albumId?.takeIf { s.kind == MenuKind.Song }?.let { id -> leaveTo { it.openAlbum(id) } },
-                                onGoToArtist = s.artistId?.takeIf { s.kind != MenuKind.Songs }?.let { id -> leaveTo { it.openArtist(id) } },
+                                onGoToArtist = navigator?.takeIf { s.kind != MenuKind.Songs }?.let { n -> { id -> client.clearSelection(); n.openArtist(id) } },
                                 onInfo = m.track?.let { t -> { songInfo = t } } ?: m.album?.let { a -> { albumInfo = a } },
                                 onDismiss = { if (client.selection.value.active) settleTo(DrawerValue.Peek) },
                                 onRan = { client.clearSelection() },

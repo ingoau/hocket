@@ -183,7 +183,7 @@ class FakeCore(
         def(SettingKeys.DISPLAY_FLOATING_NAV_BAR, "true", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_ACCENT, "null", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_DYNAMIC_COLOUR, "true", SettingScope.DeviceLocal)
-        def(SettingKeys.ACTIONS_ORDER_CONTEXT_MENU, "[]", SettingScope.AccountSynced)
+        def(SettingKeys.MENU_OVERRIDES, "{}", SettingScope.AccountSynced)
         def(SettingKeys.ACTIONS_ORDER_SIDEBAR, "[]", SettingScope.AccountSynced)
         def(SettingKeys.NAV_MOBILE_BAR, "[]", SettingScope.AccountSynced)
         def(SettingKeys.HOME_SECTIONS, "[]", SettingScope.AccountSynced)
@@ -1191,7 +1191,8 @@ class FakeCore(
             }
             is Command.RunAction -> runAction(c.data.action_id, c.data.target)
             is Command.SetShortcut -> Unit
-            is Command.SetActionOrder -> {
+            // Item menus are customised per row (SetMenuItem), not ordered.
+            is Command.SetActionOrder -> if (c.data.surface == "contextMenu") emit(Event.Error(EventErrorInner(ErrorKind.Internal, "the item menus are customised with SetMenuItem", null))) else {
                 val ids = if (c.data.surface == "mediaSession") {
                     val previous = actionOrders["mediaSession"]?.takeIf { it.isNotEmpty() } ?: ActionIds.MEDIA_SESSION
                     ActionIds.withNewlyEnabledStash(previous, c.data.action_ids)
@@ -1200,6 +1201,9 @@ class FakeCore(
                 setSetting(SettingKeys.actionOrder(c.data.surface), HocketJson.json.encodeToString(ListSerializer(String.serializer()), ids))
                 emit(Event.ActionsChanged(EventActionsChangedInner(c.data.surface))); emitMedia()
             }
+            is Command.SetMenuItem -> FakeMenu.withOverride(FakeMenu.parse(settings[SettingKeys.MENU_OVERRIDES]?.value), c.data.id, c.data.tier)
+                ?.let { setSetting(SettingKeys.MENU_OVERRIDES, it.toString()) }
+                ?: emit(Event.Error(EventErrorInner(ErrorKind.Internal, "${c.data.id} can't be ${c.data.tier.string}", null)))
             is Command.SetSelection -> { selection = c.data.target }
             is Command.Touch -> Unit
             Command.CreatePairingInvite -> emit(Event.PairingInvite(EventPairingInviteInner("hocket://pair?d=ZmFrZS1wYWlyaW5nLWludml0ZQ", now() + 600_000.0)))
@@ -1635,6 +1639,8 @@ class FakeCore(
         if (key == SettingKeys.NETWORK_OFFLINE_MODE) applyNetwork()
         if (key == SettingKeys.DOWNLOADS_WIFI_ONLY) applyHolds()
         if (key == SettingKeys.QUEUE_SAVED_CAP) value.toIntOrNull()?.let { savedQueueCap = it }
+        // Open item menus refresh, as the core's do.
+        if (key == SettingKeys.MENU_OVERRIDES) emit(Event.ActionsChanged(EventActionsChangedInner("contextMenu")))
         if (key == SettingKeys.QUEUE_SECTION) {
             queueSection = value.trim() != "false"
             // Off, no new group starts, but one already there stays (as the core).
@@ -1877,13 +1883,15 @@ class FakeCore(
                 *addToQueue.toTypedArray(), d(ActionIds.PLAY_LATER, "Play later", "playlist_add", "queue"),
                 d(ActionIds.SNOOZE, "Snooze", "bedtime", "queue"), d(ActionIds.UNSNOOZE, "Unsnooze", "bedtime", "queue"),
                 d(ActionIds.PREVIEW, "Preview", "headphones", "playback", undoable = false, enabled = target.data.keys.size == 1),
-                d(ActionIds.ADD_TO_PLAYLIST, "Add to playlist", "playlist_add", "library", undoable = false), d(ActionIds.LOVE, "Love", "favorite", "library"), d(ActionIds.DOWNLOAD, "Download", "download", "offline", undoable = false),
+                d(ActionIds.ADD_TO_PLAYLIST, "Add to playlist", "playlist_add", "library", undoable = false), d(ActionIds.LOVE, "Love", "favorite", "library"), d(ActionIds.UNLOVE, "Unlove", "heart_minus", "library"),
+                *(5 downTo 0).map { d(ActionIds.rate(it), if (it == 0) "Clear rating" else "Rate $it", if (it == 0) "star_outline" else "star", "library") }.toTypedArray(),
+                d(ActionIds.DOWNLOAD, "Download", "download", "offline", undoable = false),
                 d(ActionIds.GO_TO_ALBUM, "Go to album", "album", "navigation", undoable = false), d(ActionIds.GO_TO_ARTIST, "Go to artist", "artist", "navigation", undoable = false))
             is ActionTarget.SavedQueue -> listOf(d(ActionIds.RESTORE_SAVED_QUEUE, "Restore", "history", "queue"), d(ActionIds.PIN_SAVED_QUEUE, "Pin", "push_pin", "queue"), d(ActionIds.UNPIN_SAVED_QUEUE, "Unpin", "keep_off", "queue"),
                 d(ActionIds.SAVE_QUEUE_AS_PLAYLIST, "Save as playlist", "playlist_add_check", "queue", undoable = false), d(ActionIds.DELETE_SAVED_QUEUE, "Delete", "delete_forever", "queue", undoable = false, destructive = true))
             ActionTarget.None -> emptyList()
         }
-        val order = actionOrders[surface]?.takeIf { it.isNotEmpty() } ?: if (surface == "contextMenu") ActionIds.CONTEXT_MENU else return base
+        val order = actionOrders[surface]?.takeIf { it.isNotEmpty() } ?: return base
         return base.sortedBy { order.indexOf(it.id).let { i -> if (i < 0) Int.MAX_VALUE else i } }
     }
 
@@ -1987,6 +1995,9 @@ class FakeCore(
         Query.Devices -> QueryResult.Devices(devices.toList())
         Query.UndoState -> QueryResult.Undo(undoState())
         is Query.Actions -> QueryResult.Actions(actionsFor(q.data.surface, q.data.target))
+        is Query.Menu -> QueryResult.Menu(FakeMenu.layout(actionsFor("contextMenu", q.data.target), q.data.target, q.data.screen ?: MenuScreen.List,
+            q.data.app_items.orEmpty(), q.data.extras?.toInt() ?: 0, FakeMenu.parseOverrides(FakeMenu.parse(settings[SettingKeys.MENU_OVERRIDES]?.value))))
+        Query.MenuItems -> QueryResult.MenuItems(FakeMenu.itemsInfo(FakeMenu.parseOverrides(FakeMenu.parse(settings[SettingKeys.MENU_OVERRIDES]?.value))))
         Query.Shortcuts -> QueryResult.Shortcuts(emptyList())
         is Query.Artwork -> QueryResult.Path(artworkFile?.invoke(q.data.id, q.data.size.toInt()))
         is Query.MediaSource -> QueryResult.Source(library.track(q.data.track_id)?.let { MediaSource("k", it.toSummary(), "https://music.example.net/rest/stream?id=${it.id}", hashMapOf(), "audio/flac", -3.0, false) })

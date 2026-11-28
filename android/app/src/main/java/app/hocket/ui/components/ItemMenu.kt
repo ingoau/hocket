@@ -116,6 +116,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.hocket.R
 import app.hocket.core.ActionIds
+import app.hocket.core.MenuItemIds
+import app.hocket.core.api.MenuScreen
+import app.hocket.core.api.MenuSection
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.wrapContentHeight
 import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
 import app.hocket.core.api.Command
@@ -133,6 +138,9 @@ import app.hocket.ui.icons.HocketIcons
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
+/** The core's item menu (`Query.Menu`): its rows in display order. */
+typealias CoreMenu = app.hocket.core.api.MenuLayout
+
 /** What a menu is for: its header and which design it follows. [Songs] is a multi-selection. */
 enum class MenuKind { Song, Album, Artist, Playlist, Songs, Other }
 
@@ -140,8 +148,9 @@ enum class MenuKind { Song, Album, Artist, Playlist, Songs, Other }
  * The item a menu acts on, as its header and toggles show it: title and lines under it, artwork,
  * loved (several songs can be partly loved), rating (null: several songs rated differently,
  * "Mixed"), downloaded and the download row's note ("4.2 MB", "12 songs"; a song's size is fetched
- * by [trackId] when not given), the album and artist the go-to rows name, how many songs a
- * selection holds, and the playlist the songs were opened from ("Remove from Late night").
+ * by [trackId] when not given), the album and artist the go-to rows name (a song's [artists] when
+ * it has several: Go to artist then asks which), how many songs a selection holds, and the playlist
+ * the songs were opened from ("Remove from Late night").
  */
 @Immutable
 data class MenuSubject(
@@ -162,14 +171,20 @@ data class MenuSubject(
     val album: String? = null,
     val artistId: String? = null,
     val artist: String? = null,
+    /** A song's artists, in the server's order (only those in the library can be gone to). */
+    val artists: List<app.hocket.ui.player.TrackArtist> = emptyList(),
     val count: Int = 1,
     val context: String? = null,
 ) {
     /** The song the menu is for, as a reference. */
     val trackRef: app.hocket.core.api.TrackRef? get() = trackId?.let { app.hocket.core.api.TrackRef(trackSource.orEmpty(), it) }
+
+    /** The artists Go to artist can open: the song's linked artists, or the one [artistId]. */
+    val artistChoices: List<Pair<String, String>> get() =
+        artists.mapNotNull { a -> a.id?.let { it to a.name } }.ifEmpty { listOfNotNull(artistId?.let { it to (artist ?: "") }) }
 }
 
-/** One row of a menu's lists. [key] names it for tests (the action id for registry rows). */
+/** One row of a menu's lists. [key] names it for tests (the menu item's id for the core's rows). */
 sealed interface MenuEntry {
     val key: String
 
@@ -185,14 +200,11 @@ sealed interface MenuEntry {
     /** Pin to Library / Pinned: runs `pinToLibrary`, or `unpinFromLibrary` once pinned. */
     data class LibraryPin(val pin: ActionDescriptor?, val unpin: ActionDescriptor?) : MenuEntry { override val key get() = "pin" }
 
-    /** "Go to album · Halfway Home" / "Go to artist · Low Lanterns". */
+    /** "Go to album · Halfway Home" / "Go to artist · Low Lanterns" (several artists: a sub-page of them). */
     data class GoTo(val action: ActionDescriptor) : MenuEntry { override val key get() = action.id }
 
     /** Song info / Album info. */
     data object Info : MenuEntry { override val key get() = "info" }
-
-    /** The rating dialog, for items rated without the star row (an album's rating). */
-    data object Rate : MenuEntry { override val key get() = "rate" }
 
     /** A row the context adds (the player's sleep timer, a playlist's remove). */
     data class Extra(val extra: SongMenuExtra) : MenuEntry { override val key get() = extra.testTag ?: extra.label }
@@ -208,101 +220,115 @@ sealed interface MenuEntry {
 data class LoveToggle(val love: ActionDescriptor?, val unlove: ActionDescriptor?)
 
 /**
- * Where everything goes: the header's love toggle, the play group, whether the star row shows,
- * the short list under it ([primary], then "More"), what More reveals ([more]) and, last, the
- * destructive rows.
+ * Where everything goes on the phone: the header's love toggle, the play group, whether the star
+ * row shows, the short list under it ([primary], then "More"), what More reveals ([more]) and,
+ * always shown after a gap, the rows that remove or delete ([danger]).
  */
-data class MenuLayout(
+data class SheetLayout(
     val love: LoveToggle?,
     val play: List<ActionDescriptor>,
     val rating: Boolean,
     val primary: List<MenuEntry>,
     val more: List<MenuEntry>,
-    val destructive: List<MenuEntry>,
+    val danger: List<MenuEntry>,
 ) {
     /** What "More" reveals: its count ("4 more"). */
-    val hidden: Int get() = more.size + destructive.size
+    val hidden: Int get() = more.size
 }
 
-/** The play group, in its fixed order. */
-private val PLAY_IDS = listOf(ActionIds.PLAY, ActionIds.PLAY_SHUFFLED, ActionIds.PLAY_NEXT, ActionIds.ADD_TO_QUEUE, ActionIds.PLAY_LATER)
+/**
+ * The app-handled rows a menu can offer (the query's `app_items`): Share where [shareChoices] has
+ * any, the info row with [hasInfo], Open in Genius for one song, and the extras that are app items
+ * ([SongMenuExtra.item], the player's Lyrics timing).
+ */
+fun menuAppItems(kind: MenuKind, count: Int, hasInfo: Boolean, extras: List<SongMenuExtra> = emptyList()): List<String> = buildList {
+    if (shareChoices(kind, count).any) add(MenuItemIds.SHARE)
+    if (hasInfo) add(MenuItemIds.INFO)
+    if (kind == MenuKind.Song && count <= 1) add(MenuItemIds.GENIUS)
+    extras.mapNotNullTo(this) { it.item }
+}
 
-/** The registry's rate entries: the star row (or the Rate row) replaces them. */
-private val RATE_IDS = (0..5).map { ActionIds.rate(it) }.toSet() + ActionIds.RATE
+/** How many of [extras] top the short list (the query's `extras`): not the removing ones, nor app items the core places. */
+fun menuExtraCount(extras: List<SongMenuExtra>): Int = extras.count { it.item == null && !it.destructive }
 
-/** Registry actions that only apply in one context (the queue, a playlist): shown only when the core enables them. */
-private val CONTEXT_IDS = setOf(ActionIds.REMOVE_FROM_QUEUE, ActionIds.REMOVE_FROM_PLAYLIST)
-
-/** Ui-handled ids a menu cannot perform (navigation, player-only sheets): never listed. */
-private val UNPERFORMABLE = ActionIds.UI_HANDLED - setOf(ActionIds.ADD_TO_PLAYLIST, ActionIds.RATE, ActionIds.GO_TO_ALBUM, ActionIds.GO_TO_ARTIST)
+/** The core's menu ([CoreClient.menu]) for [target], asked with what this app can offer there. */
+suspend fun app.hocket.core.client.CoreClient.itemMenu(
+    target: ActionTarget,
+    kind: MenuKind,
+    count: Int = 1,
+    screen: MenuScreen = MenuScreen.List,
+    hasInfo: Boolean = false,
+    extras: List<SongMenuExtra> = emptyList(),
+): CoreMenu = menu(target, screen, menuAppItems(kind, count, hasInfo, extras), menuExtraCount(extras))
 
 /**
- * Lays [actions] (the registry's, for the target) out per the menu designs. Song: Play (the registry offers
- * one song no Shuffle), Play next, Add to queue (the registry leaves it out with the Queue section setting off), Play later; the star row; Add to playlist, Download, Share, Open in Genius, Go to album, the context's extras;
- * More: Pin to Library, Go to artist, Song info; then the destructive rows (Remove from Late night).
- * Album: the same without the stars, Go to artist in the short list and Album info under More.
- * Artist and playlist: no go-to rows. Several songs: no go-to, pin or info. Availability and
- * enabled state stay the core's; any registry action the designs don't place goes under More (or,
- * destructive, last), so nothing is lost. A short list left empty takes More's rows.
+ * Lays the core's [menu] (rows in order, each folded or not: `Query.Menu`) out on the sheet. The
+ * play strip, then the stars (with a `rating` row) and the header's heart (with `love`); the short
+ * list is the context's extras, then the unfolded rows; More holds the folded ones; the rows that
+ * remove or delete (the core's, then the context's destructive extras) come last, never folded. An
+ * extra that [SongMenuExtra.replaces] a row stands in for it; one that is an app [SongMenuExtra.item]
+ * sits where the core put that item. Go-to rows need somewhere to go ([canGoToAlbum],
+ * [canGoToArtist]). Snooze shows Snooze or Unsnooze by [snoozed] (null, a selection: whichever the
+ * core offers). A short list left empty takes More's rows.
  */
-fun menuLayout(
-    actions: List<ActionDescriptor>,
-    kind: MenuKind,
+fun sheetLayout(
+    menu: CoreMenu,
     extras: List<SongMenuExtra> = emptyList(),
     canGoToAlbum: Boolean = false,
     canGoToArtist: Boolean = false,
-    hasInfo: Boolean = false,
-    count: Int = 1,
-    /** Whether this one song is snoozed. Null for a selection: the registry's enabled state decides. */
     snoozed: Boolean? = null,
-): MenuLayout {
+): SheetLayout {
     val replaced = extras.mapNotNull { it.replaces }.toSet()
-    // An extra stands in for the action it replaces (a playlist's remove, the stash's own remove for Add to stash).
-    val byId = actions.filter { it.id !in replaced }.associateBy { it.id }
-    val used = mutableSetOf<String>()
-    fun take(id: String): ActionDescriptor? { used += id; return byId[id] }
-    val play = PLAY_IDS.mapNotNull(::take)
-    val preview = take(ActionIds.PREVIEW)?.takeIf { it.enabled && count <= 1 && (kind == MenuKind.Song || kind == MenuKind.Songs) }?.let { MenuEntry.Preview(it) }
-    val love = LoveToggle(take(ActionIds.LOVE), take(ActionIds.UNLOVE)).takeIf { it.love != null || it.unlove != null }
-    val rateable = actions.any { it.id in RATE_IDS }
-    used += RATE_IDS
-    // One song always has its stars (as the player does); several songs and an album, where the
-    // registry rates them (an album's page has no stars of its own).
-    val stars = kind == MenuKind.Song || (rateable && (kind == MenuKind.Songs || kind == MenuKind.Album))
-    val addTo = take(ActionIds.ADD_TO_PLAYLIST)?.let { MenuEntry.Action(it) }
-    val stash = take(ActionIds.STASH)?.let { MenuEntry.Action(it) }
-    val download = MenuEntry.Download(take(ActionIds.DOWNLOAD), take(ActionIds.UNPIN)).takeIf { it.download != null || it.remove != null }
-    val pin = MenuEntry.LibraryPin(take(ActionIds.PIN_TO_LIBRARY), take(ActionIds.UNPIN_FROM_LIBRARY)).takeIf { it.pin != null || it.unpin != null }
-    val goAlbum = take(ActionIds.GO_TO_ALBUM)?.takeIf { canGoToAlbum }?.let { MenuEntry.GoTo(it) }
-    val goArtist = take(ActionIds.GO_TO_ARTIST)?.takeIf { canGoToArtist }?.let { MenuEntry.GoTo(it) }
-    val snoozeAction = take(ActionIds.SNOOZE)
-    val unsnoozeAction = take(ActionIds.UNSNOOZE)
-    val info = MenuEntry.Info.takeIf { hasInfo }
-    val share = MenuEntry.Share.takeIf { shareChoices(kind, count).any }
-    val genius = MenuEntry.Genius.takeIf { kind == MenuKind.Song && count <= 1 }
-    val context = CONTEXT_IDS.mapNotNull { id -> take(id)?.takeIf { it.enabled && id !in replaced } }
-    val (destructiveExtras, otherExtras) = extras.partition { it.destructive }
-    val rest = actions.filter { it.id !in used && it.id !in replaced && it.id !in UNPERFORMABLE }
-    val (restDestructive, restOther) = rest.partition { it.destructive }
-    var primary = when (kind) {
-        MenuKind.Song -> listOfNotNull(preview, addTo, stash, download, share, genius, goAlbum)
-        MenuKind.Album -> listOfNotNull(addTo, stash, download, share, goArtist)
-        else -> listOfNotNull(preview, addTo, stash, download, share)
-    } + otherExtras.map { MenuEntry.Extra(it) }
-    val snoozeRows = when (snoozed) {
-        true -> listOfNotNull(unsnoozeAction)
-        false -> listOfNotNull(snoozeAction)
-        null -> listOfNotNull(unsnoozeAction, snoozeAction)
-    }.map { MenuEntry.Action(it) }
-    var more = when (kind) {
-        MenuKind.Song -> listOfNotNull(pin, goArtist, info)
-        MenuKind.Album -> listOfNotNull(pin, info)
-        MenuKind.Songs -> emptyList()
-        else -> listOfNotNull(pin, goArtist, info)
-    } + snoozeRows + listOfNotNull(MenuEntry.Rate.takeIf { rateable && !stars }) + restOther.map { MenuEntry.Action(it) }
-    if (primary.isEmpty()) { primary = more; more = emptyList() }
-    val destructive = context.map { MenuEntry.Action(it) } + restDestructive.map { MenuEntry.Action(it) } + destructiveExtras.map { MenuEntry.Extra(it) }
-    return MenuLayout(love, play, stars, primary, more, destructive)
+    val play = mutableListOf<ActionDescriptor>()
+    var love: LoveToggle? = null
+    var rating = false
+    val primary = mutableListOf<MenuEntry>()
+    val more = mutableListOf<MenuEntry>()
+    val danger = mutableListOf<MenuEntry>()
+    for (item in menu.items) {
+        if (item.id in replaced || item.actions.any { it.id in replaced }) continue
+        fun action(id: String) = item.actions.firstOrNull { it.id == id }
+        when (item.section) {
+            MenuSection.Play -> { play += item.actions; continue }
+            MenuSection.Rate -> {
+                when (item.id) {
+                    MenuItemIds.RATING -> rating = true
+                    else -> love = LoveToggle(action(ActionIds.LOVE), action(ActionIds.UNLOVE)).takeIf { it.love != null || it.unlove != null }
+                }
+                continue
+            }
+            else -> Unit
+        }
+        val entries: List<MenuEntry> = when (item.id) {
+            ActionIds.PIN_TO_LIBRARY -> listOf(MenuEntry.LibraryPin(action(ActionIds.PIN_TO_LIBRARY), action(ActionIds.UNPIN_FROM_LIBRARY)))
+            ActionIds.DOWNLOAD -> listOf(MenuEntry.Download(action(ActionIds.DOWNLOAD), action(ActionIds.UNPIN)))
+            ActionIds.GO_TO_ALBUM -> listOfNotNull(action(ActionIds.GO_TO_ALBUM)?.takeIf { canGoToAlbum }?.let { MenuEntry.GoTo(it) })
+            ActionIds.GO_TO_ARTIST -> listOfNotNull(action(ActionIds.GO_TO_ARTIST)?.takeIf { canGoToArtist }?.let { MenuEntry.GoTo(it) })
+            ActionIds.PREVIEW -> listOfNotNull(action(ActionIds.PREVIEW)?.takeIf { it.enabled }?.let { MenuEntry.Preview(it) })
+            ActionIds.SNOOZE -> when (snoozed) {
+                true -> listOfNotNull(action(ActionIds.UNSNOOZE))
+                false -> listOfNotNull(action(ActionIds.SNOOZE))
+                null -> item.actions.filter { it.enabled }.ifEmpty { item.actions.take(1) }
+            }.map { MenuEntry.Action(it) }
+            MenuItemIds.SHARE -> listOf(MenuEntry.Share)
+            MenuItemIds.INFO -> listOf(MenuEntry.Info)
+            MenuItemIds.GENIUS -> listOf(MenuEntry.Genius)
+            // Another app item is one of the context's extras (the player's Lyrics timing); a pair
+            // (pin / unpin a saved queue) shows the half that applies.
+            else -> if (item.actions.isEmpty()) extras.filter { it.item == item.id }.map { MenuEntry.Extra(it) }
+                else item.actions.filter { it.enabled }.ifEmpty { item.actions.take(1) }.map { MenuEntry.Action(it) }
+        }
+        when {
+            item.section == MenuSection.Danger -> danger += entries
+            item.folded -> more += entries
+            else -> primary += entries
+        }
+    }
+    val (removing, others) = extras.filter { it.item == null }.partition { it.destructive }
+    var short = others.map { MenuEntry.Extra(it) } + primary
+    var folded: List<MenuEntry> = more
+    if (short.isEmpty()) { short = folded; folded = emptyList() }
+    return SheetLayout(love, play, rating, short, folded, danger + removing.map { MenuEntry.Extra(it) })
 }
 
 /** A list row's fill: a step lighter than the sheet in both themes, so the connected groups read as tiles. */
@@ -317,16 +343,20 @@ fun connectedShape(index: Int, count: Int, outer: Dp = 20.dp, inner: Dp = 6.dp):
 }
 
 /**
- * The compact menu for a song, an album, an artist, a playlist or several songs: a sheet that opens
- * short (header with the love toggle, the connected Play / Shuffle / queue actions group,
- * the star row for songs, a short connected list ending in "More"), and grows to the rest when More,
+ * The compact menu for a song, an album, an artist, a playlist or several songs, laid out from the
+ * core's [menu] ([sheetLayout]): a sheet that opens short (header with the love toggle, the
+ * connected Play / Shuffle / queue actions group, the star row, a short connected list ending in
+ * "More", then the rows that remove or delete, always in view), and grows to the rest when More,
  * the handle or an upward drag asks; "Show less" shrinks it again. Toggles (love, rating, download,
  * pin) apply in place; every other row closes the sheet with its hide animation, its action or
- * navigation starting at once behind it. Add to playlist, Share, Snooze and (a context's extras,
- * [SongMenuExtra.page]) the player's sleep timer open as sub-pages of the sheet instead, back or
- * Done bringing the menu back or closing it. [onRan] follows any action that ran (a selection
+ * navigation starting at once behind it. Add to playlist, Share, Snooze, Go to artist for a song of
+ * several artists and (a context's extras, [SongMenuExtra.page]) the player's sleep timer open as
+ * sub-pages of the sheet instead, back or Done bringing the menu back or closing it. The header's
+ * artist and album names go there too, where the menu has the row. [onGoToArtist] opens an artist
+ * by id. [onRan] follows any action that ran (a selection
  * clears). [extraTop] sits under the header (a Library pin's controls). Tags: `[tag]`, `[tag].header`,
- * `[tag].action.<id>`, `[tag].download`, `[tag].pin`, `[tag].info`, `[tag].more`, `rating`.
+ * `[tag].header.artist`, `[tag].header.album`, `[tag].action.<id>`, `[tag].download`, `[tag].pin`, `[tag].info`, `[tag].more`,
+ * `[tag].danger`, `[tag].artists.<i>`, `rating`.
  *
  * [embedded]: the menu without its sheet, laid into a host's own surface (the selection drawer),
  * which scrolls and drags it: every row shows at once (no More, no Show less), and a row that would
@@ -339,11 +369,11 @@ fun connectedShape(index: Int, count: Int, outer: Dp = 20.dp, inner: Dp = 6.dp):
 fun MenuSheet(
     subject: MenuSubject,
     target: ActionTarget,
-    actions: List<ActionDescriptor>,
+    menu: CoreMenu,
     onDismiss: () -> Unit,
     extras: List<SongMenuExtra> = emptyList(),
     onGoToAlbum: (() -> Unit)? = null,
-    onGoToArtist: (() -> Unit)? = null,
+    onGoToArtist: ((String) -> Unit)? = null,
     onInfo: (() -> Unit)? = null,
     onRan: () -> Unit = {},
     extraTop: (@Composable () -> Unit)? = null,
@@ -379,9 +409,11 @@ fun MenuSheet(
         if (embedded) { after(); closes++; onDismiss(); return }
         scope.launch { sheetState.hide() }.invokeOnCompletion { after(); onDismiss() }
     }
-    val layout = remember(actions, subject.kind, subject.count, extras, onGoToAlbum != null, onGoToArtist != null, onInfo != null, snoozed) {
-        menuLayout(actions, subject.kind, extras, canGoToAlbum = onGoToAlbum != null, canGoToArtist = onGoToArtist != null, hasInfo = onInfo != null, count = subject.count, snoozed = snoozed)
+    val artistChoices = subject.artistChoices
+    val layout = remember(menu, extras, onGoToAlbum != null, onGoToArtist != null && artistChoices.isNotEmpty(), snoozed) {
+        sheetLayout(menu, extras, canGoToAlbum = onGoToAlbum != null, canGoToArtist = onGoToArtist != null && artistChoices.isNotEmpty(), snoozed = snoozed)
     }
+    val entries = layout.primary + layout.more + layout.danger
     var expanded by rememberSaveable { mutableStateOf(embedded) }
     // The sub-page in view (Share, Snooze), or the menu itself. Back (the header's arrow, the
     // system's back or its gesture) returns to the menu rather than closing the sheet.
@@ -394,6 +426,11 @@ fun MenuSheet(
      */
     var page by remember { mutableStateOf(MenuPage.Main) }
     fun goTo(to: MenuPage) { page = to; scope.launch { pages.animateTo(to) } }
+    /** Go to artist: straight there for one, the sub-page of them for several. */
+    fun goToArtist() {
+        val open = onGoToArtist ?: return
+        if (artistChoices.size > 1) goTo(MenuPage.Artists) else artistChoices.firstOrNull()?.let { (id, _) -> open(id); hideThen() }
+    }
     /** How far a predictive back gesture has pulled the sheet in, 0 to 1 (the sheet scales with it). */
     val backPull = remember { Animatable(0f) }
     val shareOptions = remember(subject.kind, subject.count) { shareChoices(subject.kind, subject.count) }
@@ -423,7 +460,6 @@ fun MenuSheet(
     var downloaded by remember { mutableStateOf(subject.downloaded) }
     val pinEntry = (layout.more + layout.primary).filterIsInstance<MenuEntry.LibraryPin>().firstOrNull()
     var pinned by remember { mutableStateOf(pinEntry?.unpin?.enabled == true) }
-    var rateDialog by remember { mutableStateOf(false) }
     var snoozeCustom by remember { mutableStateOf(false) }
     val size by produceState<Double?>(initialValue = null, subject.trackId) {
         value = subject.trackRef?.let { (client.query(Queries.track(it)) as? QueryResult.TrackDetail)?.data?.sizeBytes }
@@ -438,7 +474,7 @@ fun MenuSheet(
     val held = remember { mutableFloatStateOf(-1f) }
     fun shown(): Float = held.floatValue.takeIf { it >= 0f } ?: openness.value
     /** The rest of the menu's full height, measured each layout (it is always laid out, clipped). */
-    val restHeight = remember { intArrayOf(0) }
+    val restHeight = remember { intArrayOf(0, 0) }
     val settleSpec = remember { spring<Float>(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow) }
     // More, Show less and the handle animate it to where [expanded] says; a released drag has
     // already set off there, with the finger's speed.
@@ -464,7 +500,7 @@ fun MenuSheet(
             }
 
             override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
-                val height = restHeight[0]
+                val height = restHeight.sum()
                 // A sub-page has no rest to open and the menu is not on view: drags there are the page's own.
                 if (source != NestedScrollSource.UserInput || page != MenuPage.Main || !canExpandNow || height <= 0) return Offset.Zero
                 val at = shown()
@@ -490,7 +526,7 @@ fun MenuSheet(
                     v > FLICK_VELOCITY -> false
                     else -> at > 0.5f
                 }
-                release(open, -v / restHeight[0].coerceAtLeast(1))
+                release(open, -v / restHeight.sum().coerceAtLeast(1))
                 // Taken whole: neither the list nor the sheet flings on from it.
                 return available
             }
@@ -550,18 +586,19 @@ fun MenuSheet(
             }
             is MenuEntry.GoTo -> {
                 val album = entry.action.id == ActionIds.GO_TO_ALBUM
-                val name = if (album) subject.album else subject.artist
+                val several = !album && artistChoices.size > 1
+                val name = if (album) subject.album else if (several) artistChoices.joinToString(", ") { it.second } else subject.artist
                 val label = buildAnnotatedString {
                     append(stringResource(if (album) R.string.action_go_to_album else R.string.action_go_to_artist))
-                    name?.let { withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant)) { append(stringResource(R.string.dot_separator)); append(it) } }
+                    name?.takeIf { it.isNotBlank() }?.let { withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant)) { append(stringResource(R.string.dot_separator)); append(it) } }
                 }
-                MenuRow(label, if (album) HocketIcons.Filled.Album else HocketIcons.Filled.Person, shape, enabled = entry.action.enabled, tag = "$tag.action.${entry.action.id}") {
-                    (if (album) onGoToAlbum else onGoToArtist)?.invoke()
-                    hideThen()
+                MenuRow(label, if (album) HocketIcons.Filled.Album else HocketIcons.Filled.Person, shape, enabled = entry.action.enabled, tag = "$tag.action.${entry.action.id}",
+                    trailing = if (several) { { Icon(HocketIcons.Filled.ChevronRight, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) } } else null,
+                ) {
+                    if (album) { onGoToAlbum?.invoke(); hideThen() } else goToArtist()
                 }
             }
             MenuEntry.Info -> MenuRow(AnnotatedString(stringResource(if (subject.kind == MenuKind.Album) R.string.menu_album_info else R.string.menu_song_info)), HocketIcons.Filled.Info, shape, tag = "$tag.info") { hideThen { onInfo?.invoke() } }
-            MenuEntry.Rate -> MenuRow(AnnotatedString(stringResource(R.string.action_rate)), HocketIcons.Filled.Star, shape, tag = "$tag.rate") { rateDialog = true }
             MenuEntry.Share -> MenuRow(AnnotatedString(stringResource(R.string.action_share)), HocketIcons.Filled.Share, shape, tag = "$tag.share",
                 trailing = { Icon(HocketIcons.Filled.ChevronRight, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) },
             ) { goTo(MenuPage.Share) }
@@ -605,7 +642,10 @@ fun MenuSheet(
         // While a share loads, back does nothing: neither the menu nor closing the sheet.
         BackHandler(enabled = page == MenuPage.Sharing) {}
         Column(if (embedded) Modifier.padding(bottom = 16.dp) else Modifier.nestedScroll(followDrag).verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 24.dp)) {
-            if (showHeader) MenuHeader(subject, layout.love, loved, tag) { love, unlove ->
+            // The header's artist and album go where the menu's rows would (where it has them).
+            val headerArtist = if (entries.any { it is MenuEntry.GoTo && it.action.id == ActionIds.GO_TO_ARTIST }) { { goToArtist() } } else null
+            val headerAlbum = if (entries.any { it is MenuEntry.GoTo && it.action.id == ActionIds.GO_TO_ALBUM }) { { onGoToAlbum?.invoke(); hideThen() } } else null
+            if (showHeader) MenuHeader(subject, layout.love, loved, tag, onArtist = headerArtist, onAlbum = headerAlbum) { love, unlove ->
                 if (loved == Tick.On) { unlove?.let(::run); loved = Tick.Off } else { love?.let(::run); loved = Tick.On }
             }
             // A sub-page slides in from the end, the menu slides back from the start, and the height
@@ -634,6 +674,7 @@ fun MenuSheet(
                 }
             }
             MenuPage.Playlist -> PlaylistMenuPage(tag, target, onBack = { goTo(MenuPage.Main) }, onClose = { hideThen(onRan) })
+            MenuPage.Artists -> ArtistsMenuPage(tag, artistChoices, onBack = { goTo(MenuPage.Main) }) { id -> onGoToArtist?.invoke(id); hideThen() }
             MenuPage.Sleep -> SleepMenuPage(tag, sleepTimer, onBack = { goTo(MenuPage.Main) }) { timer ->
                 hideThen { client.dispatch(Commands.setSleepTimer(timer)) }
             }
@@ -670,14 +711,23 @@ fun MenuSheet(
                     if (layout.more.isNotEmpty()) Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         layout.more.forEachIndexed { i, entry -> EntryRow(entry, connectedShape(i, layout.more.size)) }
                     }
-                    if (layout.destructive.isNotEmpty()) Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        layout.destructive.forEachIndexed { i, entry -> EntryRow(entry, connectedShape(i, layout.destructive.size)) }
-                    }
-                    if (!embedded) Box(Modifier.fillMaxWidth().padding(top = 18.dp), contentAlignment = Alignment.Center) {
-                        TextButton(onClick = { expanded = false }, modifier = Modifier.heightIn(min = 48.dp).testTag("$tag.showLess")) {
-                            Icon(HocketIcons.Filled.KeyboardArrowDown, null, Modifier.size(20.dp).rotate(180f))
-                            Text(stringResource(R.string.menu_show_less), style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = 8.dp))
-                        }
+                }
+            }
+            // Removing and deleting: always in view, last, after a gap.
+            if (layout.danger.isNotEmpty()) Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 20.dp).testTag("$tag.danger"), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                layout.danger.forEachIndexed { i, entry -> EntryRow(entry, connectedShape(i, layout.danger.size)) }
+            }
+            if (canExpand && !embedded) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .revealed(onMeasured = { restHeight[1] = it }) { shown() }
+                        .then(if (showingRest) Modifier else Modifier.clearAndSetSemantics {}.focusProperties { onEnter = { cancelFocusChange() } }),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    TextButton(onClick = { expanded = false }, modifier = Modifier.padding(top = 18.dp).heightIn(min = 48.dp).testTag("$tag.showLess")) {
+                        Icon(HocketIcons.Filled.KeyboardArrowDown, null, Modifier.size(20.dp).rotate(180f))
+                        Text(stringResource(R.string.menu_show_less), style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = 8.dp))
                     }
                 }
             }
@@ -706,13 +756,10 @@ fun MenuSheet(
             }
         }
     }
-    if (rateDialog) {
-        RatingDialog(current = 0, onRate = { stars -> client.dispatch(Commands.runAction(ActionIds.rate(stars), target)); rateDialog = false; hideThen(onRan) }, onDismiss = { rateDialog = false }, offerClear = true)
-    }
 }
 
 /** What the sheet shows under its header: the menu, or one of its sub-pages. Public for [SongMenuExtra.page]. */
-enum class MenuPage { Main, Share, Snooze, Sharing, Playlist, Sleep }
+enum class MenuPage { Main, Share, Snooze, Sharing, Playlist, Sleep, Artists }
 
 /** Material's predictive back easing: the gesture's progress as the sheet follows it. */
 private val PredictiveBackEasing = CubicBezierEasing(0.1f, 0.1f, 0f, 1f)
@@ -779,14 +826,18 @@ private fun MenuHandle(expanded: Boolean, canExpand: Boolean, onToggle: () -> Un
     }
 }
 
-/** Artwork, the title (one line) with the lines under it, and the love toggle. */
+/**
+ * Artwork, the title (one line) with the lines under it, and the love toggle. The subtitle's artist
+ * (at its start) and album (at its end) are links where [onArtist] / [onAlbum] go there: the menu's
+ * Go to rows, a tap nearer.
+ */
 @Composable
-private fun MenuHeader(subject: MenuSubject, love: LoveToggle?, loved: Tick, tag: String, onLove: (ActionDescriptor?, ActionDescriptor?) -> Unit) {
+private fun MenuHeader(subject: MenuSubject, love: LoveToggle?, loved: Tick, tag: String, onArtist: (() -> Unit)? = null, onAlbum: (() -> Unit)? = null, onLove: (ActionDescriptor?, ActionDescriptor?) -> Unit) {
     Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, bottom = 14.dp).testTag("$tag.header"), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
         Artwork(subject.coverArt, ArtworkSizes.THUMB, null, Modifier.size(64.dp), RoundedCornerShape(16.dp))
         Column(Modifier.weight(1f)) {
             Text(subject.title, style = MaterialTheme.typography.titleLarge.copy(fontSize = 19.sp, lineHeight = 24.sp), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
-            subject.subtitle?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            subject.subtitle?.let { HeaderSubtitle(it, subject, onArtist, onAlbum, tag) }
             subject.meta?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         }
         if (love != null) {
@@ -794,6 +845,65 @@ private fun MenuHeader(subject: MenuSubject, love: LoveToggle?, loved: Tick, tag
             LoveButton(loved, subject.lovedCount, subject.count, enabled = action?.enabled == true, tag = "$tag.love") { onLove(love.love, love.unlove) }
         }
     }
+}
+
+/**
+ * The header's subtitle, its artist and album names ([headerLinkRanges]) each a tap target of its
+ * own (24dp tall, named for what it opens) going where [onArtist] / [onAlbum] go.
+ */
+@Composable
+private fun HeaderSubtitle(subtitle: String, subject: MenuSubject, onArtist: (() -> Unit)?, onAlbum: (() -> Unit)?, tag: String) {
+    val style = MaterialTheme.typography.bodyMedium
+    val color = MaterialTheme.colorScheme.onSurfaceVariant
+    val (artist, album) = headerLinkRanges(subtitle, subject, onArtist != null, onAlbum != null)
+    if (artist == null && album == null) {
+        Text(subtitle, style = style, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        return
+    }
+    val artistLabel = stringResource(R.string.action_go_to_artist)
+    val albumLabel = stringResource(R.string.action_go_to_album)
+    // The subtitle cut at the links: (text, what a tap opens, its name, its tag).
+    val parts = buildList {
+        var at = 0
+        val links = listOfNotNull(artist?.let { Triple(it, onArtist!!, artistLabel to "$tag.header.artist") }, album?.let { Triple(it, onAlbum!!, albumLabel to "$tag.header.album") })
+        for ((range, open, named) in links) {
+            if (range.first > at) add(PartOf(subtitle.substring(at, range.first)))
+            add(PartOf(subtitle.substring(range.first, range.last + 1), open, named.first, named.second))
+            at = range.last + 1
+        }
+        if (at < subtitle.length) add(PartOf(subtitle.substring(at)))
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        parts.forEach { p ->
+            val open = p.open
+            Text(
+                p.text, style = style, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false,
+                modifier = if (open == null) Modifier else Modifier
+                    .weight(1f, fill = false)
+                    .heightIn(min = 24.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable(onClickLabel = p.label) { open() }
+                    .wrapContentHeight()
+                    .testTag(p.tag ?: ""),
+            )
+        }
+    }
+}
+
+/** A piece of the header's subtitle; [open] set for a link. */
+private class PartOf(val text: String, val open: (() -> Unit)? = null, val label: String? = null, val tag: String? = null)
+
+/**
+ * Where the header's subtitle names the artist (at its start: "Low Lanterns · Halfway Home") and the
+ * album (at its end, never overlapping the artist; not on an album's own menu), as character
+ * ranges; null where it doesn't, or where there's nowhere to go ([artist], [album]).
+ */
+internal fun headerLinkRanges(subtitle: String, subject: MenuSubject, artist: Boolean, album: Boolean): Pair<IntRange?, IntRange?> {
+    val a = subject.artist?.takeIf { artist && it.isNotBlank() && subtitle.startsWith(it) }?.let { 0 until it.length }
+    val b = subject.album?.takeIf { album && subject.kind != MenuKind.Album && it.isNotBlank() && subtitle.endsWith(it) }
+        ?.let { (subtitle.length - it.length) until subtitle.length }
+        ?.takeIf { r -> a == null || r.first > a.last }
+    return a to b
 }
 
 /** Love as a toggle: filled when loved, outlined when not, half filled when only some of several songs are. */
@@ -905,7 +1015,7 @@ internal fun playFace(id: String): Pair<String, ImageVector>? = when (id) {
 }
 
 /** The play group's actions, in their fixed order. */
-internal val PlayActionIds: List<String> get() = PLAY_IDS
+internal val PlayActionIds: List<String> = listOf(ActionIds.PLAY, ActionIds.PLAY_SHUFFLED, ActionIds.PLAY_NEXT, ActionIds.ADD_TO_QUEUE, ActionIds.PLAY_LATER)
 
 /** "Rating" and the stars (tap the current star to clear); several songs rated differently read "Mixed". */
 @Composable
@@ -1043,6 +1153,16 @@ private fun SleepMenuPage(tag: String, timer: SleepTimer?, onBack: () -> Unit, o
 private fun PlaylistMenuPage(tag: String, target: ActionTarget, onBack: () -> Unit, onClose: () -> Unit) {
     SubPage(stringResource(R.string.action_add_to_playlist), "$tag.picker", onBack, horizontal = 0.dp) {
         PlaylistPickerBody(target, onClose, modifier = Modifier.imePadding(), listHeight = 420.dp, navigationBarPad = false, showSubject = false)
+    }
+}
+
+/** Go to artist for a song of several artists: one row per artist ([choices]: id and name), each going there. */
+@Composable
+private fun ArtistsMenuPage(tag: String, choices: List<Pair<String, String>>, onBack: () -> Unit, onPick: (String) -> Unit) {
+    SubPage(stringResource(R.string.action_go_to_artist), "$tag.artists", onBack) {
+        choices.forEachIndexed { i, (id, name) ->
+            MenuRow(AnnotatedString(name), HocketIcons.Filled.Person, connectedShape(i, choices.size), tag = "$tag.artists.$i") { onPick(id) }
+        }
     }
 }
 

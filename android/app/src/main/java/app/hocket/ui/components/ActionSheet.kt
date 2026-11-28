@@ -18,8 +18,9 @@ import androidx.compose.ui.res.stringResource
 import app.hocket.R
 import app.hocket.core.Commands
 import app.hocket.core.Queries
-import app.hocket.core.api.ActionDescriptor
 import app.hocket.core.api.ActionTarget
+import app.hocket.core.api.MenuScreen
+import kotlinx.coroutines.flow.collectLatest
 import app.hocket.core.api.Album
 import app.hocket.core.api.OfflineState
 import app.hocket.core.api.Pin
@@ -74,9 +75,10 @@ fun actionIcon(name: String): ImageVector = when (name) {
 /**
  * The menu of an album, an artist, a playlist or a saved queue: the same compact sheet as the song
  * menu ([MenuSheet]) with the item's header (an album's "artist · year" and "N songs · M min"),
- * built from `Query.Actions(surface = "contextMenu", target)` with the registry's ids and run
- * through `Command.RunAction`. The item and its actions are loaded before the sheet shows, so it
- * opens at its final height. [title] and [subtitle] head it until (or where) nothing more is known.
+ * laid out from the core's `Query.Menu` for the target on [screen] (an album's menu on its own page
+ * drops Go to album) and run through `Command.RunAction`. The item and its menu are loaded before
+ * the sheet shows, so it opens at its final height, and the menu follows a change to its
+ * customisation. [title] and [subtitle] head it until (or where) nothing more is known.
  * The registry's ui-handled ids are performed here: Add to playlist opens as a sub-page of the
  * sheet, go-to
  * navigates, Album info opens the album's details. [extraTop] sits under the header.
@@ -88,31 +90,36 @@ fun ActionSheet(
     subtitle: String? = null,
     onDismiss: () -> Unit,
     onGoToAlbum: (() -> Unit)? = null,
-    onGoToArtist: (() -> Unit)? = null,
+    /** Opens an artist by id; the app's navigator by default. */
+    onGoToArtist: ((String) -> Unit)? = null,
     extraTop: (@Composable () -> Unit)? = null,
     /** Rows the page adds (a playlist's Select songs). */
     extras: List<SongMenuExtra> = emptyList(),
+    screen: MenuScreen = MenuScreen.List,
 ) {
     val client = LocalCoreClient.current
     val resources = LocalResources.current
     val navigator = LocalDetailNavigator.current
     val dot = stringResource(R.string.dot_separator)
-    val loaded by produceState<Triple<MenuSubject, Album?, List<ActionDescriptor>>?>(initialValue = null, target) {
+    val loaded by produceState<Triple<MenuSubject, Album?, CoreMenu>?>(initialValue = null, target) {
         val (subject, album) = menuSubject(client, target, title, subtitle, resources, dot, client.pins.value)
-        value = Triple(subject, album, client.actions("contextMenu", target))
+        suspend fun menu() = client.itemMenu(target, subject.kind, subject.count, screen, hasInfo = album != null, extras = extras)
+        value = Triple(subject, album, menu())
+        // The user's menu customisation changed: the open menu follows.
+        client.actionsChanged.collectLatest { value = Triple(subject, album, menu()) }
     }
     // The sheet, then what it opened (the album's details); the caller hears once all are gone.
     var sheetOpen by remember { mutableStateOf(true) }
     var info by remember { mutableStateOf<Album?>(null) }
     val current = loaded
     if (sheetOpen && current != null) {
-        val (subject, album, actions) = current
+        val (subject, album, menu) = current
         MenuSheet(
-            subject, target, actions,
+            subject, target, menu,
             onDismiss = { sheetOpen = false; if (info == null) onDismiss() },
             extras = extras,
             onGoToAlbum = onGoToAlbum,
-            onGoToArtist = onGoToArtist ?: subject.artistId?.let { id -> navigator?.let { { it.openArtist(id) } } },
+            onGoToArtist = onGoToArtist ?: navigator?.let { n -> { id -> n.openArtist(id) } },
             onInfo = album?.let { a -> { info = a } },
             extraTop = extraTop,
             tag = "itemMenu",

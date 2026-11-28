@@ -412,7 +412,7 @@ fun HomeScreen(nav: NavHostController) {
             SectionMenuSheet(pref, title, onDismiss = { sectionMenu = null }, onHide = { hide(pref, title) }, onCustomise = { customising = true })
         }
     }
-    sheets.album?.let { a -> ActionSheet(Commands.albums(listOf(a.id)), a.name, a.artist, onDismiss = { sheets.album = null }, onGoToArtist = a.artistId?.let { id -> { nav.navigate(Route.Artist(id)) } }) }
+    sheets.album?.let { a -> ActionSheet(Commands.albums(listOf(a.id)), a.name, a.artist, onDismiss = { sheets.album = null }, onGoToArtist = { id -> nav.navigate(Route.Artist(id)) }) }
     sheets.artist?.let { a -> ActionSheet(Commands.artists(listOf(a.id)), a.name, null, onDismiss = { sheets.artist = null }) }
     sheets.queue?.let { q -> ActionSheet(Commands.savedQueue(q.id), q.label, null, onDismiss = { sheets.queue = null }) }
     sheets.filter?.let { f -> FilterMenuSheet(f, nav, serverId, onDismiss = { sheets.filter = null }) }

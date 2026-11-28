@@ -113,7 +113,6 @@ export const REGISTRY: RegistryEntry[] = [
 export const DEFAULT_ORDERS: Record<string, string[]> = {
   sidebar: ["navigateHome", "navigateLibrary"],
   mediaSession: ["previous", "togglePlay", "next", "shuffle", "repeat", "love"],
-  contextMenu: ["play", "playShuffled", "playNext", "addToQueue", "playLater", "preview", "addToPlaylist", "stash", "love", "unlove", "rate5", "rate4", "rate3", "rate2", "rate1", "rate0", "download", "unpin", "goToAlbum", "goToArtist", "snooze", "unsnooze", "pinToLibrary", "unpinFromLibrary", "ui.info", "removeFromQueue", "removeFromPlaylist", "ui.newPlaylist", "ui.renamePlaylist", "deletePlaylist", "restoreSavedQueue", "pinSavedQueue", "unpinSavedQueue", "saveQueueAsPlaylist", "deleteSavedQueue"],
 };
 
 export interface ActionContext {
@@ -154,7 +153,7 @@ export function describeActions(surface: string, target: ActionTarget, order: st
       })
     : applicable;
   // Like the core, a choose-and-order surface offers only what its order holds.
-  const filtered = sequence && (surface === "sidebar" || surface === "mediaSession" || surface === "contextMenu") ? sorted.filter((e) => sequence.includes(e.id)) : sorted;
+  const filtered = sequence && (surface === "sidebar" || surface === "mediaSession") ? sorted.filter((e) => sequence.includes(e.id)) : sorted;
   return filtered
     .filter((e) => {
       if (e.id === "preview") {

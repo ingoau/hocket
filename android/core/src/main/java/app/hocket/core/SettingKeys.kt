@@ -43,7 +43,8 @@ object SettingKeys {
     const val DISPLAY_ALBUM_TRACK_ARTISTS = "display.albumTrackArtists"
     const val DISPLAY_ACCENT = "display.accent"
     const val DISPLAY_DYNAMIC_COLOUR = "display.dynamicColour"
-    const val ACTIONS_ORDER_CONTEXT_MENU = "actions.order.contextMenu"
+    /** Item menus' customisation, `{ id: "shown" | "more" | "hidden" }` (synced); `{}` = the defaults. */
+    const val MENU_OVERRIDES = "menu.overrides"
     const val ACTIONS_ORDER_SIDEBAR = "actions.order.sidebar"
     const val ACTIONS_ORDER_MEDIA_SESSION = "actions.order.mediaSession"
     const val NAV_MOBILE_BAR = "nav.mobileBar"
@@ -152,6 +153,8 @@ object ActionIds {
     const val CLEAR_STASH = "clearStash"
     const val SNOOZE = "snooze"
     const val UNSNOOZE = "unsnooze"
+    const val ADD_TO_LIBRARY = "addToLibrary"
+    const val REMOVE_FROM_LIBRARY = "removeFromLibrary"
 
     fun rate(stars: Int) = "rate$stars"
 
@@ -160,10 +163,6 @@ object ActionIds {
         "navigateHome", "navigateLibrary", "navigateTracks", "navigateAlbums", "navigateArtists", "navigatePlaylists", "navigateGenres",
         "navigateRecent", "navigateFilters", "navigateDownloads", "navigateStats", "navigateSettings")
 
-    /** The registry's default context-menu order (surface `contextMenu`). */
-    val CONTEXT_MENU = listOf(PLAY, PLAY_SHUFFLED, PLAY_NEXT, ADD_TO_QUEUE, PLAY_LATER, PREVIEW, ADD_TO_PLAYLIST, STASH, LOVE, UNLOVE, rate(5), rate(4), rate(3), rate(2), rate(1), rate(0),
-        DOWNLOAD, UNPIN, GO_TO_ALBUM, GO_TO_ARTIST, SNOOZE, UNSNOOZE, PIN_TO_LIBRARY, UNPIN_FROM_LIBRARY, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, RESTORE_SAVED_QUEUE, PIN_SAVED_QUEUE, UNPIN_SAVED_QUEUE,
-        SAVE_QUEUE_AS_PLAYLIST, DELETE_SAVED_QUEUE, DELETE_PLAYLIST)
     /** Default media-session buttons. Stash is a choice, not part of this set. */
     val MEDIA_SESSION = listOf(PREVIOUS, TOGGLE_PLAY, NEXT, SHUFFLE, REPEAT, LOVE)
 
@@ -186,6 +185,18 @@ object ActionIds {
         val at = rest.indexOfLast { it in MEDIA_SESSION_TRANSPORT }.let { if (it < 0) 0 else it + 1 }
         return rest.toMutableList().apply { add(at, STASH) }
     }
+}
+
+/**
+ * Item menu rows (`Query.Menu`'s `MenuItem.id`) that aren't one action id: the star row, and the
+ * rows the app performs itself (listed in the query's `app_items` where the app can offer them).
+ */
+object MenuItemIds {
+    const val RATING = "rating"
+    const val SHARE = "share"
+    const val INFO = "info"
+    const val GENIUS = "genius"
+    const val LYRICS_TIMING = "lyricsTiming"
 }
 
 /**

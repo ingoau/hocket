@@ -159,6 +159,10 @@ object Commands {
         Command.MediaSessionCommand(CommandMediaSessionCommandInner(action, value))
     fun runAction(actionId: String, target: ActionTarget) = Command.RunAction(CommandRunActionInner(actionId, target))
     fun setActionOrder(surface: String, actionIds: List<String>) = Command.SetActionOrder(CommandSetActionOrderInner(surface, actionIds))
+    /** Where an item menu row goes (`menu.overrides`); its default tier clears the customisation. */
+    fun setMenuItem(id: String, tier: MenuTier) = Command.SetMenuItem(CommandSetMenuItemInner(id, tier))
+    /** Every item menu row back to its default place. */
+    fun resetMenuItems() = setSetting(SettingKeys.MENU_OVERRIDES, "{}")
     fun setSelection(target: ActionTarget) = Command.SetSelection(CommandSetSelectionInner(target))
     fun touch(target: ActionTarget) = Command.Touch(CommandTouchInner(target))
 
@@ -233,6 +237,14 @@ object Queries {
     fun filterPreview(filter: Filter) = Query.FilterPreview(QueryFilterPreviewInner(filter))
     fun setting(key: String) = Query.Setting(QuerySettingInner(key))
     fun actions(surface: String, target: ActionTarget) = Query.Actions(QueryActionsInner(surface, target))
+    /**
+     * An item menu for [target] opened on [screen]: [appItems] are the app-handled rows the app can
+     * offer there ([MenuItemIds]), [extras] how many rows of its own it puts at the top of the list.
+     */
+    fun menu(target: ActionTarget, screen: MenuScreen = MenuScreen.List, appItems: List<String> = emptyList(), extras: Int = 0) =
+        Query.Menu(QueryMenuInner(target, screen, appItems, extras.toUInt()))
+    /** Every customisable item menu row with its tier (the settings editor). */
+    fun menuItems() = Query.MenuItems
     /** [display]: only shown, so a cached copy a little larger does (see `Query::Artwork`). */
     fun artwork(id: String, size: Int, display: Boolean = false) = Query.Artwork(QueryArtworkInner(id, size.toUInt(), display))
     fun mediaSource(trackId: TrackId) = Query.MediaSource(QueryMediaSourceInner(trackId))

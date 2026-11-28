@@ -244,16 +244,18 @@ internal fun FullPlayer(
     /** Opens the song menu ([pull] when a swipe brings it up); false when there is no song. */
     val openMenu = { pull: app.hocket.ui.components.SheetPull? ->
         // The song menu is hosted at the app level, not in this (moving) sheet; the player adds
-        // the sleep timer as its extra (it has no other place in the player).
+        // the sleep timer as its extra (it has no other place in the player), and Lyrics timing
+        // (with lyrics) as the core's app item, placed and folded like the core's own rows.
         val sleep = client.sleepTimer.value
         val sleepState = sleep?.let { t -> t.endsAt?.let { resources.getString(R.string.sleep_active, formatClock((it - System.currentTimeMillis()).toLong().coerceAtLeast(0))) } ?: resources.getString(R.string.sleep_active_end_of_track) }
         track?.let {
             val timing = lyricsDoc?.let { doc ->
                 app.hocket.ui.components.SongMenuExtra(timingLabel, HocketIcons.Filled.Tune, onClick = { lyricsTiming = true },
-                    supporting = resources.getString(R.string.lyrics_offset_value, doc.offsetMs), testTag = "player.lyricsTiming")
+                    supporting = resources.getString(R.string.lyrics_offset_value, doc.offsetMs), testTag = "player.lyricsTiming", item = app.hocket.core.MenuItemIds.LYRICS_TIMING)
             }
             songMenu.open(it, extras = listOfNotNull(timing, app.hocket.ui.components.SongMenuExtra(sleepLabel, HocketIcons.Filled.Bedtime,
-                page = app.hocket.ui.components.MenuPage.Sleep, supporting = sleepState, highlighted = sleep != null, testTag = "player.sleep")), pull = pull)
+                page = app.hocket.ui.components.MenuPage.Sleep, supporting = sleepState, highlighted = sleep != null, testTag = "player.sleep")), pull = pull,
+                screen = app.hocket.core.api.MenuScreen.NowPlaying)
         } ?: false
     }
     // `swipe.playerUp` set to the device picker or the song menu: the swipe brings it up as a sheet

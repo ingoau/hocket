@@ -2,7 +2,7 @@
 // ids (aliases are normalised first). Actions that need UI — a dialog, a
 // navigation, a window — run here; everything else goes to the core through
 // Command.RunAction so the registry stays the single source of truth.
-import type { ActionTarget } from "@core/api";
+import type { ActionTarget, MenuScreen } from "@core/api";
 import { NAV_VIEWS, canonicalActionId } from "@shared/keymap";
 import { SK } from "@shared/settings-keys";
 import { t } from "@shared/strings";
@@ -15,6 +15,8 @@ import { refOf } from "../lib/track-ref";
 import type { TrackRef } from "@core/api";
 
 export interface ActionContext {
+  /** Where an item menu opens (the player, an album or artist page, an editable playlist); a list otherwise. */
+  screen?: MenuScreen;
   playlistId?: string;
   /** Row indices for PlaylistRemove. */
   indices?: number[];

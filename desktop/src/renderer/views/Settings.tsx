@@ -4,7 +4,7 @@
 // for sidebar / context menu / media session), keyboard shortcuts editor,
 // config backup, diagnostics, about.
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AccountKind, ActionDescriptor, ActionTarget, AudioSettings, EqBand, ReplayGainMode, Setting, TransitionMode, TransitionSettings } from "@core/api";
+import type { AccountKind, ActionDescriptor, ActionTarget, AudioSettings, MenuItemInfo, MenuSection, MenuTier, EqBand, ReplayGainMode, Setting, TransitionMode, TransitionSettings } from "@core/api";
 import { TransitionModeValues } from "@core/api";
 import { t, type StringId } from "@shared/strings";
 import { useApp, useSetting } from "../store/app";
@@ -702,7 +702,7 @@ function Customisation() {
     <>
       <div className="muted small" style={{ marginBottom: 12 }}>{t("settings.customiseHint")}</div>
       <OrderList surface="sidebar" anchor="sidebarItems" title={t("settings.sidebarItems")} />
-      <OrderList surface="contextMenu" anchor="contextMenuItems" title={t("settings.contextMenuItems")} />
+      <MenuItemsList />
       <OrderList surface="mediaSession" anchor="mediaSessionButtons" title={t("settings.mediaSessionButtons")} />
     </>
   );
@@ -765,9 +765,66 @@ function SwipeChoice({ anchor, settingKey, fallback, choices, title, testId }: {
   );
 }
 
+/** Each item menu row's icon in the settings list (the core's MenuItemInfo names only the row). */
+const MENU_ITEM_ICONS: Record<string, string> = {
+  rating: "star", love: "heart", addToPlaylist: "playlistAdd", stash: "stash", pinToLibrary: "pin", addToLibrary: "library",
+  restoreSavedQueue: "restore", pinSavedQueue: "pin", saveQueueAsPlaylist: "playlistAdd", goToAlbum: "album", goToArtist: "artist",
+  download: "download", share: "share", preview: "headphones", info: "info", genius: "external", lyricsTiming: "lyrics", snooze: "sleep",
+  removeFromQueue: "remove", removeFromPlaylist: "remove", deleteSavedQueue: "trash", deletePlaylist: "trash",
+};
+
+/**
+ * The item menus' rows (Query.MenuItems), grouped by section in menu order, each shown, under the
+ * phone's More, or hidden (Command.SetMenuItem; the synced `menu.overrides`). The play strip isn't
+ * listed: it is always there. Desktop shows every row that isn't hidden.
+ */
+function MenuItemsList() {
+  const version = useApp((s) => s.actionsVersion);
+  const set = useApp((s) => s.setSetting);
+  const { data } = useQuery(() => ({ type: "menuItems" }), "menuItems", [version], { static: true });
+  const groups = useMemo(() => {
+    const out: { section: MenuSection; items: MenuItemInfo[] }[] = [];
+    for (const it of data ?? []) {
+      const last = out[out.length - 1];
+      if (last?.section === it.section) last.items.push(it);
+      else out.push({ section: it.section, items: [it] });
+    }
+    return out;
+  }, [data]);
+  const changed = (data ?? []).some((it) => it.tier !== it.defaultTier);
+  return (
+    <div style={{ marginBottom: 20 }} id="setting-contextMenuItems" data-testid="menu-items">
+      <div className="row">
+        <h2 className="section-title grow" id="menu-items-title">{t("settings.contextMenuItems")}</h2>
+        <button type="button" className="btn sm ghost" disabled={!changed} onClick={() => set("menu.overrides", {})} data-testid="menu-items-reset">{t("settings.menuReset")}</button>
+      </div>
+      <div className="muted small" style={{ marginBottom: 8 }}>{t("settings.contextMenuItemsDesc")}</div>
+      {groups.map((g) => (
+        <section key={g.section} aria-labelledby={`menu-section-${g.section}`}>
+          <div className="muted small" id={`menu-section-${g.section}`} style={{ margin: "8px 0 4px" }}>{t(`settings.menuSection.${g.section}` as StringId)}</div>
+          <ul className="order-list plain-list" aria-labelledby={`menu-section-${g.section}`}>
+            {g.items.map((it) => {
+              const label = t(`menuItem.${it.id}` as StringId);
+              return (
+                <li key={it.id} className="order-item" data-testid={`menu-item-${it.id}`}>
+                  <Icon name={MENU_ITEM_ICONS[it.id] ?? "song"} size={14} />
+                  <span className="grow">{label}</span>
+                  <Select value={it.tier} aria-label={label} onChange={(e) => bridge().dispatch({ type: "setMenuItem", data: { id: it.id, tier: e.target.value as MenuTier } })} data-testid={`menu-tier-${it.id}`}>
+                    {it.choices.map((c) => <option key={c} value={c}>{t(`settings.menuTier.${c}`)}</option>)}
+                  </Select>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ))}
+    </div>
+  );
+}
+
 function OrderList({ surface, anchor, title }: { surface: string; anchor: string; title: string }) {
   const version = useApp((s) => s.actionsVersion);
-  const target: ActionTarget = surface === "contextMenu" ? { type: "tracks", data: { tracks: [] } } : { type: "none" };
+  const target: ActionTarget = { type: "none" };
   // The chosen ones, in order, from Query.Actions (an empty stored order = the default); the
   // switched-off rest of CUSTOMISABLE after them, described by the palette (which lists everything).
   const chosen = useQuery(() => ({ type: "actions", data: { surface, target } }), "actions", [surface, version], { static: true });

@@ -2,7 +2,7 @@
 // the splitter in the gutter between the two panes moves it; the toggle folds the sidebar to a rail), chrome is not selectable, nothing is underlined or
 // pointer-cursored, the UI font is 13px Geist (bundled), and focus rings
 // appear only for keyboard focus.
-import { completeSetup, expect, test, openPlace, playFirstAlbum } from "./fixtures";
+import { chooseOption, completeSetup, expect, test, openPlace, playFirstAlbum } from "./fixtures";
 
 /** The gutter between the sidebar pane and the content pane (panes.css --pane-gap). */
 const GAP = 8;
@@ -177,23 +177,41 @@ test.describe("window chrome", () => {
     await expect(genres).not.toBeChecked();
   });
 
-  test("switching a context menu item off keeps the actions its list can't show", async ({ hocket }) => {
+  test("the context menu's items are shown, under the phone's More or hidden, and reset", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);
     await playFirstAlbum(page);
-    // The list shows the actions for songs; Remove from queue is for queue rows, so it isn't listed.
     await page.getByTestId("nav-settings").click();
     await page.getByTestId("settings-nav-customisation").click();
-    const list = page.getByTestId("order-contextMenu");
-    await expect(list.getByRole("switch", { name: "Remove from queue" })).toHaveCount(0);
-    const item = list.getByRole("switch", { name: "Snooze", exact: true });
-    await expect(item).toBeChecked();
-    await item.click();
-    await expect(item).not.toBeChecked();
+    const list = page.getByTestId("menu-items");
+    // The play strip is always there; Rating and removing can't go under More.
+    await expect(list.getByTestId("menu-item-play")).toHaveCount(0);
+    const options = page.locator('.m3-select-menu [role="option"]');
+    const rating = list.getByTestId("menu-tier-rating");
+    await rating.click();
+    await expect(options).toHaveText(["Shown", "Hidden"]);
+    await page.keyboard.press("Escape");
+    const snooze = list.getByTestId("menu-tier-snooze");
+    await expect(snooze).toHaveAttribute("data-value", "more");
+    await snooze.click();
+    await expect(options).toHaveText(["Shown", "Under More (phone)", "Hidden"]);
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("menu-items-reset")).toBeDisabled();
+    // Under More is the phone's: this computer still shows Snooze. Hidden takes Stash out.
+    await chooseOption(list.getByTestId("menu-tier-stash"), "hidden");
     const menu = page.getByTestId("context-menu");
     await page.getByTestId("queue-row-rest").first().click({ button: "right" });
     await expect(menu).toBeVisible();
+    await expect(menu.locator('[data-action="snooze"]')).toBeVisible();
+    await expect(menu.locator('[data-action="stash"]')).toHaveCount(0);
     await expect(menu.getByRole("menuitem", { name: "Remove from queue" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    // Reset brings it back.
+    await page.getByTestId("menu-items-reset").click();
+    await expect(list.getByTestId("menu-tier-stash")).toHaveAttribute("data-value", "shown");
+    await page.getByTestId("queue-row-rest").first().click({ button: "right" });
+    await expect(menu.locator('[data-action="stash"]')).toBeVisible();
+    await page.keyboard.press("Escape");
   });
 
   test("settings stays pinned below the sidebar list, and a long server row never scrolls the settings page sideways", async ({ hocket }) => {

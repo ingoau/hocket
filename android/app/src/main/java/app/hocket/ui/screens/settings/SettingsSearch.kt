@@ -122,7 +122,7 @@ val SETTINGS_INDEX: List<SettingEntry> = listOf(
     SettingEntry("pebble.autoOpen", SettingsCategory.Pebble, R.string.pebble_auto_open, keywords = R.string.settings_search_kw_pebble),
     SettingEntry("pebble.closeWhenPausedMinutes", SettingsCategory.Pebble, R.string.pebble_close_when_paused, keywords = R.string.settings_search_kw_pebble),
     SettingEntry("customise.bottomBar", SettingsCategory.Customise, R.string.settings_bottom_bar, keywords = R.string.settings_search_kw_customise),
-    SettingEntry("customise.contextMenuSection", SettingsCategory.Customise, R.string.settings_context_menu, keywords = R.string.settings_search_kw_customise),
+    SettingEntry("customise.itemMenuSection", SettingsCategory.Customise, R.string.settings_item_menus, keywords = R.string.settings_search_kw_item_menu),
     SettingEntry("customise.mediaSessionSection", SettingsCategory.Customise, R.string.settings_media_buttons, keywords = R.string.settings_search_kw_media),
     SettingEntry("customise.swipe", SettingsCategory.Customise, R.string.settings_swipe_actions, keywords = R.string.settings_search_kw_customise),
     SettingEntry("customise.playerSwipeUp", SettingsCategory.Customise, R.string.settings_player_swipe_up, R.string.settings_player_swipe_up_body, R.string.settings_search_kw_player_swipe_up),

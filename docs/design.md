@@ -480,6 +480,15 @@ The levels only cost looks. What saves the most battery is on for everyone: prog
 
 Every user-visible action is a first-class object: id, label, icon, applicability predicate, handler, inverse. Menus, context menus, keyboard shortcuts, the command palette, media session buttons, remote actions and undo labels are all generated from it. Without this, each customisation setting is its own plumbing and undo has to be built per feature.
 
+### Item menus
+
+The song, album, artist, playlist and saved-queue menus are one layout on every platform, built by the core (`Query::Menu`, `crates/hocket-core/src/actions/menu.rs`). Each row has a section, which fixes its place: the play strip, rating and Love, organise (Add to playlist, Stash, Pin to Library, Add to library, saved-queue actions), go to (album, artist), keep (Download, Share), about (Preview, info, Open in Genius, Lyrics timing), Snooze, then removing and deleting. Pairs (Love, Download, Pin, Library, Snooze) and the six ratings are one row each. Share, info, Genius and Lyrics timing are the app's own, offered when the app says it can; Sleep timer, Start over and Select songs are screen extras the app puts first.
+
+- **Where it was opened** changes it: the player drops Preview, an album or artist page drops the row that goes to itself, and only a playlist you can edit offers removing a song from it.
+- **The phone folds.** At most six rows sit in the short list (screen extras count), the rest under More, chosen by each row's default tier and priority; Go to album and Go to artist are never folded by default. A menu of seven rows or fewer has no More, nor does one that would fold a single row. Removing and deleting are always last and always in view, after a gap.
+- **Desktop doesn't fold**: every row, a separator between sections.
+- **Customisation** is per row, not an order: Shown, Under More (the phone's) or Hidden, synced as `menu.overrides`, which stores only changes from the default. The play strip and screen extras aren't customisable; Rating, Love and removing are shown or hidden.
+
 
 ## Interface  
 *Status: decided*

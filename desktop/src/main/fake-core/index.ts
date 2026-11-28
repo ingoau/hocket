@@ -19,6 +19,7 @@ import { accountIdFor } from "../account-id";
 import { DEFAULT_KEYMAP, canonicalActionId } from "@shared/keymap";
 import { coverPng } from "../png";
 import { describeActions, shortcutDefaults, DEFAULT_ORDERS } from "./actions";
+import { menuItemsInfo, menuLayout, parseOverrides, withOverride } from "./menu";
 import { generateLibrary, summary, coverSeed, type FakeLibrary } from "./library";
 import { lyricsFor } from "./lyrics";
 import { Rng, hash32 } from "./random";
@@ -794,6 +795,8 @@ export class FakeCore implements CoreHandle {
         this.emit({ type: "shortcutsChanged", data: { shortcuts: this.shortcuts() } });
         return;
       case "setActionOrder": {
+        // Like the core: item menus have no order setting (menu.overrides instead).
+        if (cmd.data.surface === "contextMenu") return;
         let ids = cmd.data.action_ids.map(canonicalActionId);
         if (cmd.data.surface === "mediaSession") ids = showNewStash(this.actionOrders.get("mediaSession") ?? DEFAULT_ORDERS.mediaSession ?? [], ids);
         this.actionOrders.set(cmd.data.surface, ids);
@@ -801,6 +804,9 @@ export class FakeCore implements CoreHandle {
         this.emit({ type: "actionsChanged", data: { surface: cmd.data.surface } });
         return;
       }
+      case "setMenuItem":
+        this.setSettingValue("menu.overrides", withOverride(this.settings.get("menu.overrides")?.value, cmd.data.id, cmd.data.tier));
+        return;
       case "setSelection":
         this.selection = cmd.data.target;
         return;
@@ -2443,7 +2449,7 @@ export class FakeCore implements CoreHandle {
       ["display.playerRating", true, "accountSynced"],
       ["display.albumTrackArtists", false, "accountSynced"],
       ["playback.resumeAlbums", true, "accountSynced"],
-      ["actions.order.contextMenu", [], "accountSynced"],
+      ["menu.overrides", {}, "accountSynced"],
       ["actions.order.sidebar", [], "accountSynced"],
       ["actions.order.mediaSession", [], "accountSynced"],
       ["nav.mobileBar", [], "accountSynced"],
@@ -2530,6 +2536,7 @@ export class FakeCore implements CoreHandle {
       this.emitSavedQueues();
     }
     this.emit({ type: "settingChanged", data: { setting } });
+    if (key === "menu.overrides") this.emit({ type: "actionsChanged", data: { surface: "contextMenu" } });
     if (key.startsWith("battery.")) this.refreshSaver();
   }
 
@@ -3210,6 +3217,20 @@ export class FakeCore implements CoreHandle {
         return { type: "undo", data: this.undoState() };
       case "actions":
         return { type: "actions", data: this.actions(q.data.surface, q.data.target) };
+      case "menu":
+        return {
+          type: "menu",
+          data: menuLayout({
+            target: q.data.target,
+            screen: q.data.screen ?? "list",
+            appItems: q.data.app_items ?? [],
+            extras: q.data.extras ?? 0,
+            overrides: parseOverrides(this.settings.get("menu.overrides")?.value),
+            descriptors: this.actions("contextMenu", q.data.target),
+          }),
+        };
+      case "menuItems":
+        return { type: "menuItems", data: menuItemsInfo(parseOverrides(this.settings.get("menu.overrides")?.value)) };
       case "shortcuts":
         return { type: "shortcuts", data: this.shortcuts() };
       case "artwork":

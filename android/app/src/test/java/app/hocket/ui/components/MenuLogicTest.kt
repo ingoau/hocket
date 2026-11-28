@@ -2,6 +2,9 @@ package app.hocket.ui.components
 
 import app.hocket.core.queueViewOf
 import app.hocket.core.ActionIds
+import app.hocket.core.MenuItemIds
+import app.hocket.core.api.MenuItem
+import app.hocket.core.api.MenuSection
 import app.hocket.core.Commands
 import app.hocket.core.Queries
 import app.hocket.core.api.TrackRef
@@ -34,11 +37,24 @@ class MenuLogicTest {
     private fun playlist(id: String, name: String, songs: Int = 10, changed: Double? = null, smart: Boolean = false, mine: Boolean = true) =
         Playlist(id, "s", name, null, "me", false, songs.toUInt(), 0u, null, null, changed, smart, mine, OfflineState.None)
 
-    private val songActions = listOf(
-        ActionIds.PIN_TO_LIBRARY, ActionIds.UNPIN_FROM_LIBRARY, ActionIds.PLAY, ActionIds.PLAY_SHUFFLED, ActionIds.PLAY_NEXT, ActionIds.PLAY_LATER,
-        ActionIds.ADD_TO_PLAYLIST, ActionIds.LOVE, ActionIds.UNLOVE, ActionIds.rate(5), ActionIds.rate(0), ActionIds.DOWNLOAD, ActionIds.UNPIN,
-        ActionIds.GO_TO_ALBUM, ActionIds.GO_TO_ARTIST, ActionIds.REMOVE_FROM_PLAYLIST, ActionIds.SLEEP_TIMER, "somethingNew",
-    ).map { d(it, enabled = it != ActionIds.UNPIN_FROM_LIBRARY) }
+    /** A core menu row: [actions] its registry actions (none for an app item). */
+    private fun item(id: String, section: MenuSection, folded: Boolean = false, vararg actions: ActionDescriptor) = MenuItem(id, section, folded, actions.toList())
+    private fun row(id: String, section: MenuSection, folded: Boolean = false) = item(id, section, folded, d(id))
+
+    /** One song's menu as the core lays it out in a list (`a_song_keeps_both_go_to_rows_in_the_short_list`). */
+    private val song = CoreMenu(listOf(
+        row(ActionIds.PLAY, MenuSection.Play), row(ActionIds.PLAY_NEXT, MenuSection.Play), row(ActionIds.PLAY_LATER, MenuSection.Play),
+        item(MenuItemIds.RATING, MenuSection.Rate, false, *(5 downTo 0).map { d(ActionIds.rate(it)) }.toTypedArray()),
+        item(ActionIds.LOVE, MenuSection.Rate, false, d(ActionIds.LOVE), d(ActionIds.UNLOVE)),
+        row(ActionIds.ADD_TO_PLAYLIST, MenuSection.Organise), row(ActionIds.STASH, MenuSection.Organise),
+        item(ActionIds.PIN_TO_LIBRARY, MenuSection.Organise, true, d(ActionIds.PIN_TO_LIBRARY), d(ActionIds.UNPIN_FROM_LIBRARY, enabled = false)),
+        row(ActionIds.GO_TO_ALBUM, MenuSection.GoTo), row(ActionIds.GO_TO_ARTIST, MenuSection.GoTo),
+        item(ActionIds.DOWNLOAD, MenuSection.Keep, false, d(ActionIds.DOWNLOAD), d(ActionIds.UNPIN)),
+        item(MenuItemIds.SHARE, MenuSection.Keep), row(ActionIds.PREVIEW, MenuSection.About, true),
+        item(MenuItemIds.INFO, MenuSection.About, true), item(MenuItemIds.GENIUS, MenuSection.About, true),
+        item(ActionIds.SNOOZE, MenuSection.Tune, true, d(ActionIds.SNOOZE), d(ActionIds.UNSNOOZE)),
+        row(ActionIds.REMOVE_FROM_QUEUE, MenuSection.Danger),
+    ))
 
     @Test
     fun snoozeOnQueueRowsSnoozesTheirSongs() {
@@ -58,51 +74,79 @@ class MenuLogicTest {
 
     @Test
     fun snoozeSitsUnderMoreAndASnoozedSongOffersUnsnooze() {
-        val withSnooze = songActions + d(ActionIds.SNOOZE) + d(ActionIds.UNSNOOZE)
-        val fresh = menuLayout(withSnooze, MenuKind.Song, canGoToAlbum = true, canGoToArtist = true, hasInfo = true, snoozed = false)
+        val fresh = sheetLayout(song, canGoToAlbum = true, canGoToArtist = true, snoozed = false)
         assertTrue(fresh.more.any { it.key == ActionIds.SNOOZE })
         assertTrue(fresh.more.none { it.key == ActionIds.UNSNOOZE })
-        val snoozed = menuLayout(withSnooze, MenuKind.Song, canGoToAlbum = true, canGoToArtist = true, hasInfo = true, snoozed = true)
+        val snoozed = sheetLayout(song, canGoToAlbum = true, canGoToArtist = true, snoozed = true)
         assertTrue(snoozed.more.any { it.key == ActionIds.UNSNOOZE })
         assertTrue(snoozed.more.none { it.key == ActionIds.SNOOZE })
     }
 
     @Test
-    fun theSongMenuPlacesTheRegistryPerTheDesign() {
-        val l = menuLayout(songActions + d(ActionIds.REMOVE_FROM_QUEUE, enabled = false), MenuKind.Song, canGoToAlbum = true, canGoToArtist = true, hasInfo = true)
-        assertEquals(listOf(ActionIds.PLAY, ActionIds.PLAY_SHUFFLED, ActionIds.PLAY_NEXT, ActionIds.PLAY_LATER), l.play.map { it.id })
+    fun theSongMenuFollowsTheCoresRowsAndFolds() {
+        val l = sheetLayout(song, canGoToAlbum = true, canGoToArtist = true, snoozed = false)
+        assertEquals(listOf(ActionIds.PLAY, ActionIds.PLAY_NEXT, ActionIds.PLAY_LATER), l.play.map { it.id })
         assertTrue(l.love != null && l.rating)
-        assertEquals(listOf(ActionIds.ADD_TO_PLAYLIST, "download", "share", "genius", ActionIds.GO_TO_ALBUM), l.primary.map { it.key })
-        // Unplaced registry actions are not lost: they follow under More (ui-only ones it can't perform are not).
-        assertEquals(listOf("pin", ActionIds.GO_TO_ARTIST, "info", "somethingNew"), l.more.map { it.key })
-        // Context-only actions show where the core enables them.
-        assertEquals(listOf(ActionIds.REMOVE_FROM_PLAYLIST), l.destructive.map { it.key })
+        assertEquals(listOf(ActionIds.ADD_TO_PLAYLIST, ActionIds.STASH, ActionIds.GO_TO_ALBUM, ActionIds.GO_TO_ARTIST, "download", "share"), l.primary.map { it.key })
+        assertEquals(listOf("pin", ActionIds.PREVIEW, "info", "genius", ActionIds.SNOOZE), l.more.map { it.key })
+        // Removing is last and never under More.
+        assertEquals(listOf(ActionIds.REMOVE_FROM_QUEUE), l.danger.map { it.key })
         assertEquals(5, l.hidden)
+        // Nowhere to go: no go-to rows.
+        assertTrue(sheetLayout(song).primary.none { it is MenuEntry.GoTo })
     }
 
     @Test
-    fun anExtraStandsInForTheRegistryActionItReplacesAndExtrasSitInPlace() {
-        val remove = SongMenuExtra("Remove from Late night", app.hocket.ui.icons.HocketIcons.Filled.Remove, {}, destructive = true, testTag = "rm", replaces = ActionIds.REMOVE_FROM_PLAYLIST)
+    fun starsAndTheHeartOnlyWithTheirRows() {
+        // Rating switched off (or hidden by the user): the core leaves the row out, and so do the stars.
+        val l = sheetLayout(CoreMenu(song.items.filter { it.id != MenuItemIds.RATING && it.id != ActionIds.LOVE }))
+        assertTrue(!l.rating && l.love == null)
+    }
+
+    @Test
+    fun extrasTopTheListDestructiveOnesGoLastAndAppItemsSitWhereTheCorePutsThem() {
+        val remove = SongMenuExtra("Remove from Late night", app.hocket.ui.icons.HocketIcons.Filled.Remove, {}, destructive = true, testTag = "rm", replaces = ActionIds.REMOVE_FROM_QUEUE)
         val sleep = SongMenuExtra("Sleep timer", app.hocket.ui.icons.HocketIcons.Filled.Bedtime, {}, testTag = "sleep")
-        val l = menuLayout(songActions, MenuKind.Song, listOf(remove, sleep))
-        assertEquals(listOf(ActionIds.ADD_TO_PLAYLIST, "download", "share", "genius", "sleep"), l.primary.map { it.key })
-        assertEquals(listOf("rm"), l.destructive.map { it.key })
+        val timing = SongMenuExtra("Lyrics timing", app.hocket.ui.icons.HocketIcons.Filled.Tune, {}, testTag = "timing", item = MenuItemIds.LYRICS_TIMING)
+        val menu = CoreMenu(song.items.dropLast(2) + item(MenuItemIds.LYRICS_TIMING, MenuSection.About, true) + song.items.takeLast(2))
+        val extras = listOf(remove, sleep, timing)
+        val l = sheetLayout(menu, extras, canGoToAlbum = true, canGoToArtist = true, snoozed = false)
+        assertEquals("sleep", l.primary.first().key)
+        assertEquals(listOf("pin", ActionIds.PREVIEW, "info", "genius", "timing", ActionIds.SNOOZE), l.more.map { it.key })
+        // The extra stands in for the row it replaces.
+        assertEquals(listOf("rm"), l.danger.map { it.key })
+        // What the query is asked with: the extras that count, and the app items.
+        assertEquals(1, menuExtraCount(extras))
+        assertEquals(listOf(MenuItemIds.SHARE, MenuItemIds.INFO, MenuItemIds.GENIUS, MenuItemIds.LYRICS_TIMING), menuAppItems(MenuKind.Song, 1, hasInfo = true, extras))
+        assertEquals(listOf(MenuItemIds.SHARE), menuAppItems(MenuKind.Songs, 3, hasInfo = false))
+        assertEquals(emptyList<String>(), menuAppItems(MenuKind.Artist, 1, hasInfo = false))
     }
 
     @Test
-    fun theAlbumMenuHasStarsAndGoesToTheArtist() {
-        val l = menuLayout(songActions.filter { it.id != ActionIds.GO_TO_ALBUM && it.id != ActionIds.REMOVE_FROM_PLAYLIST && it.id != "somethingNew" }, MenuKind.Album, canGoToArtist = true, hasInfo = true)
-        assertTrue(l.rating)
-        assertEquals(listOf(ActionIds.ADD_TO_PLAYLIST, "download", "share", ActionIds.GO_TO_ARTIST), l.primary.map { it.key })
-        assertEquals(listOf("pin", "info"), l.more.map { it.key })
+    fun theHeaderLinksTheArtistAtItsStartAndTheAlbumAtItsEnd() {
+        val s = MenuSubject(MenuKind.Song, "Roygbiv", subtitle = "Boards of Canada · Music Has the Right", album = "Music Has the Right", artist = "Boards of Canada")
+        val (artist, album) = headerLinkRanges(s.subtitle!!, s, artist = true, album = true)
+        assertEquals(0 until 16, artist)
+        assertEquals(19 until s.subtitle!!.length, album)
+        assertEquals(null to null, headerLinkRanges(s.subtitle!!, s, artist = false, album = false))
+        // An album's menu has no album link (its name is the title).
+        val al = MenuSubject(MenuKind.Album, "Geogaddi", subtitle = "Boards of Canada · 2002", album = "Geogaddi", artist = "Boards of Canada")
+        assertEquals((0 until 16) to null, headerLinkRanges(al.subtitle!!, al, artist = true, album = true))
     }
 
     @Test
-    fun severalSongsKeepThePlayGroupStarsAndDownload() {
-        val l = menuLayout(songActions.filter { it.id != "somethingNew" }, MenuKind.Songs)
-        assertTrue(l.rating)
-        assertEquals(listOf(ActionIds.ADD_TO_PLAYLIST, "download", "share"), l.primary.map { it.key })
-        assertEquals(emptyList<String>(), l.more.map { it.key })
+    fun severalArtistsAreChoices() {
+        val s = MenuSubject(MenuKind.Song, "Song", artistId = "a1", artist = "A & B",
+            artists = listOf(app.hocket.ui.player.TrackArtist("a1", "A"), app.hocket.ui.player.TrackArtist("b1", "B"), app.hocket.ui.player.TrackArtist(null, "C")))
+        assertEquals(listOf("a1" to "A", "b1" to "B"), s.artistChoices)
+        assertEquals(listOf("a1" to "A & B"), MenuSubject(MenuKind.Song, "Song", artistId = "a1", artist = "A & B").artistChoices)
+    }
+
+    @Test
+    fun aMenuWithNothingInTheShortListPromotesMore() {
+        val l = sheetLayout(CoreMenu(listOf(row(ActionIds.RESTORE_SAVED_QUEUE, MenuSection.Organise, folded = true), row(ActionIds.DELETE_SAVED_QUEUE, MenuSection.Danger))))
+        assertEquals(listOf(ActionIds.RESTORE_SAVED_QUEUE), l.primary.map { it.key })
+        assertEquals(listOf(ActionIds.DELETE_SAVED_QUEUE), l.danger.map { it.key })
     }
 
     @Test
@@ -121,13 +165,6 @@ class MenuLogicTest {
         assertEquals("Roygbiv Boards of Canada", geniusAppQuery(" Roygbiv ", "Boards of Canada"))
         assertEquals("Roygbiv", geniusAppQuery("Roygbiv", " "))
         assertNull(geniusAppQuery("", "Boards of Canada"))
-    }
-
-    @Test
-    fun aMenuWithNothingInTheShortListPromotesMore() {
-        val l = menuLayout(listOf(d(ActionIds.RESTORE_SAVED_QUEUE), d(ActionIds.DELETE_SAVED_QUEUE, destructive = true)), MenuKind.Other)
-        assertEquals(listOf(ActionIds.RESTORE_SAVED_QUEUE), l.primary.map { it.key })
-        assertEquals(listOf(ActionIds.DELETE_SAVED_QUEUE), l.destructive.map { it.key })
     }
 
     @Test

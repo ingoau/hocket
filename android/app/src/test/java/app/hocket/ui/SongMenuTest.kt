@@ -17,6 +17,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -174,11 +175,9 @@ class SongMenuTest {
         assertTrue(present("rating"))
         assertTrue(!present("player.sleep"))
         val remove = "songMenu.action.${ActionIds.REMOVE_FROM_QUEUE}"
-        // The destructive row is under More.
-        assertTrue(!present(remove))
-        compose.onNodeWithTag("songMenu.more").performSemanticsAction(SemanticsActions.OnClick)
-        compose.waitUntil(5_000) { present(remove) }
-        assertTrue(top(remove) > top("songMenu.action.${ActionIds.PLAY_NEXT}"))
+        // The destructive row is last, and in view without More.
+        assertTrue(present(remove))
+        assertTrue(top(remove) > top("songMenu.more"))
         compose.onNodeWithTag(remove).performSemanticsAction(SemanticsActions.OnClick)
         compose.waitUntil(5_000) { !present("songMenu.header") }
         compose.waitUntil(5_000) { core.client.queue.value.let { it.historyEntries.size + it.groupEntries.size + it.restEntries.size } == before - 1 }
@@ -205,13 +204,47 @@ class SongMenuTest {
         assertTrue(present("rating"))
         assertTrue(present("songMenu.action.${ActionIds.PLAY_NEXT}"))
         assertTrue(!present("songMenu.action.${ActionIds.REMOVE_FROM_QUEUE}"))
-        // Go to album is in the short list; Go to artist under More.
-        assertTrue(present("songMenu.action.${ActionIds.GO_TO_ALBUM}"))
-        compose.onNodeWithTag("songMenu.more").performSemanticsAction(SemanticsActions.OnClick)
-        compose.waitUntil(5_000) { present("songMenu.action.${ActionIds.GO_TO_ARTIST}") }
+        // On the album's own page there's no Go to album; Go to artist is in the short list.
+        assertTrue(!present("songMenu.action.${ActionIds.GO_TO_ALBUM}"))
         compose.onNodeWithTag("songMenu.action.${ActionIds.GO_TO_ARTIST}").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { !present("songMenu.header") || present("songMenu.artists.0") }
+        // A song of several artists asks which first.
+        if (present("songMenu.artists.0")) compose.onNodeWithTag("songMenu.artists.0").performSemanticsAction(SemanticsActions.OnClick)
         compose.waitUntil(5_000) { !present("songMenu.header") }
         assertEquals(listOf("artist:${track.artistId}"), opened)
+    }
+
+    /** A song of several artists: Go to artist names them all and asks which; the header's artist does the same. */
+    @Test
+    fun severalArtistsAreChosenFromASubPage() {
+        val core = TestCore(startPlaying = false)
+        val track = core.fake.library.tracks.first { t -> t.artists.orEmpty().count { it.id != null } > 1 }
+        val second = track.artists!![1]
+        val opened = mutableListOf<String>()
+        core.start()
+        compose.setThemedContent(core) {
+            androidx.compose.runtime.CompositionLocalProvider(LocalDetailNavigator provides DetailNavigator({ opened += "album:$it" }, { opened += "artist:$it" })) {
+                app.hocket.ui.screens.detail.AlbumDetailScreen(androidx.navigation.compose.rememberNavController(), track.albumId!!)
+            }
+        }
+        val dots = androidx.compose.ui.test.hasContentDescription("More options for ${track.title}")
+        compose.waitUntil(5_000) { compose.onAllNodes(androidx.compose.ui.test.hasScrollToNodeAction()).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitForIdle()
+        compose.onAllNodes(androidx.compose.ui.test.hasScrollToNodeAction())[0].performScrollToNode(dots)
+        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("More options for ${track.title}").fetchSemanticsNodes().isNotEmpty() }
+        compose.onAllNodesWithContentDescription("More options for ${track.title}")[0].performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { present("songMenu.header") }
+        compose.waitForIdle()
+        val row = compose.onNodeWithTag("songMenu.action.${ActionIds.GO_TO_ARTIST}").fetchSemanticsNode().config
+        val words = row.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Text).orEmpty().joinToString("") { it.text }
+        assertTrue(words, words.contains(track.artists!![0].name + ", " + second.name))
+        // The header's artist is a link too; its album isn't, on the album's own page.
+        assertTrue(present("songMenu.header.artist") && !present("songMenu.header.album"))
+        compose.onNodeWithTag("songMenu.action.${ActionIds.GO_TO_ARTIST}").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { present("songMenu.artists.1") }
+        compose.onNodeWithTag("songMenu.artists.1").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { !present("songMenu.header") }
+        assertEquals(listOf("artist:${second.id}"), opened)
     }
 
     /**

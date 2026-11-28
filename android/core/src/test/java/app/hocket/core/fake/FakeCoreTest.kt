@@ -8,6 +8,7 @@ import app.hocket.core.Commands
 import app.hocket.core.QueueWindows
 import app.hocket.core.SettingKeys
 import app.hocket.core.Queries
+import app.hocket.core.MenuItemIds
 import app.hocket.core.api.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -405,10 +406,29 @@ class FakeCoreTest {
     @Test
     fun actionsAreOrderedPerCustomisation() = runTest {
         val core = core()
-        core.dispatchAndWait(Commands.setActionOrder("contextMenu", listOf("love", "play")))
-        val actions = (core.query(Queries.actions("contextMenu", Commands.tracks((listOf("t1")).map { TrackRef("fake-server", it) }))) as QueryResult.Actions).data
+        core.dispatchAndWait(Commands.setActionOrder("sidebar", listOf("love", "play")))
+        val actions = (core.query(Queries.actions("sidebar", Commands.tracks((listOf("t1")).map { TrackRef("fake-server", it) }))) as QueryResult.Actions).data
         assertEquals("love", actions[0].id)
         assertEquals("play", actions[1].id)
+    }
+
+    @Test
+    fun itemMenusFoldAsTheCoresAndTakeTheUsersOverrides() = runTest {
+        val core = core()
+        val song = Commands.tracks(listOf(TrackRef("fake-server", "t1")))
+        suspend fun menu() = (core.query(Queries.menu(song, appItems = listOf(MenuItemIds.SHARE, MenuItemIds.INFO, MenuItemIds.GENIUS))) as QueryResult.Menu).data.items
+        fun List<app.hocket.core.api.MenuItem>.shown() = filter { it.section != MenuSection.Play && it.section != MenuSection.Rate && it.section != MenuSection.Danger && !it.folded }.map { it.id }
+        assertEquals(listOf("addToPlaylist", "stash", "goToAlbum", "goToArtist", "download", "share"), menu().shown())
+        assertTrue(menu().any { it.id == MenuItemIds.RATING })
+        core.dispatchAndWait(Commands.setMenuItem(MenuItemIds.RATING, MenuTier.Hidden))
+        core.dispatchAndWait(Commands.setMenuItem(MenuItemIds.GENIUS, MenuTier.Shown))
+        assertTrue(menu().none { it.id == MenuItemIds.RATING })
+        assertTrue("genius" in menu().shown())
+        val info = (core.query(Queries.menuItems()) as QueryResult.MenuItems).data
+        assertEquals(MenuTier.Shown, info.first { it.id == MenuItemIds.GENIUS }.tier)
+        assertTrue(info.none { it.id == ActionIds.PLAY })
+        core.dispatchAndWait(Commands.resetMenuItems())
+        assertTrue(menu().any { it.id == MenuItemIds.RATING })
     }
 
     private fun <T> kotlinx.coroutines.test.TestScope.async(block: suspend () -> T): kotlinx.coroutines.Deferred<T> =

@@ -88,6 +88,7 @@ import app.hocket.core.Commands
 import app.hocket.core.SettingKeys
 import app.hocket.core.Queries
 import app.hocket.core.api.Album
+import app.hocket.core.api.MenuScreen
 import app.hocket.core.api.Artist
 import app.hocket.core.api.ReleaseKind
 import app.hocket.core.byReleaseKind
@@ -452,7 +453,7 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
         },
         heroFooter = notes?.let { text -> { DetailNotes(text, PaddingValues(horizontal = 18.dp, vertical = 14.dp)) } },
         overlay = {
-            SelectionDrawer(Modifier.matchParentSize(), kinds = paneSelectionKinds(embedded),
+            SelectionDrawer(Modifier.matchParentSize(), kinds = paneSelectionKinds(embedded), screen = MenuScreen.AlbumPage,
                 onSelectAll = tracks?.takeIf { it.isNotEmpty() }?.let { list -> { client.selectTracks(list.map { it.ref }) } })
             // Opens on the song that's playing when it's this album's, else past an intro.
             AlbumPreviewOverlay(preview, previewTracks, a.coverArt, a.artist,
@@ -466,7 +467,7 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
         else itemsIndexed(list, key = { _, t -> t.id }, contentType = { _, _ -> "track" }) { i, t ->
             val playing = nowPlaying?.track?.id == t.id
             val resumeHere = offer?.takeIf { it.trackId == t.id && !playing }
-            TrackRow(t.toSummary(), onClick = { client.dispatch(Commands.playContext(context, startIndex = i)) }, onMore = { songMenu.open(t.toSummary()) }, showArtwork = false,
+            TrackRow(t.toSummary(), onClick = { client.dispatch(Commands.playContext(context, startIndex = i)) }, onMore = { songMenu.open(t.toSummary(), screen = MenuScreen.AlbumPage) }, showArtwork = false,
                 leading = {
                     Box(Modifier.width(40.dp), contentAlignment = Alignment.Center) {
                         val number = (t.trackNumber?.toInt() ?: (i + 1)).toString()
@@ -505,7 +506,7 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
         }
     }
     if (albumSheet) ActionSheet(
-        target, a.name, a.artist, onDismiss = { albumSheet = false }, onGoToArtist = a.artistId?.let { aid -> { nav.navigate(Route.Artist(aid)) } },
+        target, a.name, a.artist, onDismiss = { albumSheet = false }, onGoToArtist = { aid -> nav.navigate(Route.Artist(aid)) }, screen = MenuScreen.AlbumPage,
         extras = if (offer == null) emptyList() else listOf(app.hocket.ui.components.SongMenuExtra(
             stringResource(R.string.action_start_over), HocketIcons.Filled.RestartAlt, onClick = { albumSheet = false; startOver() }, testTag = "album.startOver",
         )),
@@ -648,7 +649,7 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
     val playTop = { i: Int -> top?.let { list -> client.dispatch(Commands.playTracks(list.map { it.ref }, i, ar.name)) } }
     // [swipe] off where the rows page sideways (the page's shelf), so a horizontal drag scrolls it.
     val topRow = @Composable { i: Int, t: Track, segment: Pair<Int, Int>, swipe: Boolean, modifier: Modifier ->
-        TrackRow(t.toSummary(), onClick = { playTop(i) }, onMore = { songMenu.open(t.toSummary()) }, nowPlaying = nowPlaying?.track?.id == t.id, segment = segment, rank = i + 1,
+        TrackRow(t.toSummary(), onClick = { playTop(i) }, onMore = { songMenu.open(t.toSummary(), screen = MenuScreen.ArtistPage) }, nowPlaying = nowPlaying?.track?.id == t.id, segment = segment, rank = i + 1,
             subtitle = listOfNotNull(t.album, formatClock(t.durationMs.toLong())).joinToString(dot), showDuration = false, nowPlayingMark = false,
             swipe = if (swipe) app.hocket.ui.components.SwipeSurface.List else null, modifier = modifier)
     }
@@ -981,7 +982,9 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
             val t = e.track
             ReorderableItem(reorderable, key = e.key, enabled = editable) { dragging ->
                 TrackRow(t.toSummary(), onClick = { client.dispatch(Commands.playContext(context, startIndex = i)) }, onMore = {
-                    // The playlist's own extra: remove this entry (by its position).
+                    // The playlist's own extra: remove this entry (by its position, right for a song
+                    // listed twice), standing in for the core's Remove from playlist, which this
+                    // menu (opened as a plain list) never offers.
                     val extras = if (editable) listOf(app.hocket.ui.components.SongMenuExtra(resources.getString(R.string.menu_remove_from, p.name), HocketIcons.Filled.PlaylistRemove,
                         onClick = { client.dispatch(Commands.playlistRemove(p.id, listOf(i))) }, destructive = true, testTag = "songMenu.removeFromPlaylist",
                         replaces = ActionIds.REMOVE_FROM_PLAYLIST)) else emptyList()
