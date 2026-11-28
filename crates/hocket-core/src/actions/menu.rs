@@ -84,7 +84,14 @@ static DEFS: &[Def] = &[
         A(&["rate5", "rate4", "rate3", "rate2", "rate1", "rate0"]),
     ),
     def("love", Rate, S, 0, false, A(&["love", "unlove"])),
-    def("addToPlaylist", Organise, S, 80, false, A(&["addToPlaylist"])),
+    def(
+        "addToPlaylist",
+        Organise,
+        S,
+        80,
+        false,
+        A(&["addToPlaylist"]),
+    ),
     def("stash", Organise, M, 60, false, A(&["stash"])),
     def(
         "pinToLibrary",
@@ -447,10 +454,7 @@ mod tests {
     fn a_song_keeps_both_go_to_rows_in_the_short_list() {
         let (shown, more, m) = layout(&tracks(&["a"]), MenuScreen::List, SONG_APPS, 0, json!({}));
         assert_eq!(shown, ["addToPlaylist", "goToAlbum", "goToArtist"]);
-        assert_eq!(
-            more,
-            ["stash", "pinToLibrary", "download", "share", "info"]
-        );
+        assert_eq!(more, ["stash", "pinToLibrary", "download", "share", "info"]);
         // One song has no Shuffle; the stars wait until the user adds them.
         let ids: Vec<&str> = m.items.iter().map(|i| i.id.as_str()).collect();
         assert!(ids.starts_with(&["play", "playNext", "addToQueue", "playLater", "love"]));
@@ -470,10 +474,7 @@ mod tests {
             json!({}),
         );
         assert_eq!(shown, ["addToPlaylist", "goToAlbum", "goToArtist"]);
-        assert_eq!(
-            more,
-            ["stash", "pinToLibrary", "download", "share", "info"]
-        );
+        assert_eq!(more, ["stash", "pinToLibrary", "download", "share", "info"]);
         // Added by the user, the lyrics tools come back.
         let (_, more, _) = layout(
             &tracks(&["a"]),
@@ -561,10 +562,7 @@ mod tests {
         // With Start over on top it folds the rows that default to More.
         let (shown, more, _) = layout(&album, MenuScreen::List, &["share", "info"], 1, json!({}));
         assert_eq!(shown, ["addToPlaylist", "goToArtist"]);
-        assert_eq!(
-            more,
-            ["stash", "pinToLibrary", "download", "share", "info"]
-        );
+        assert_eq!(more, ["stash", "pinToLibrary", "download", "share", "info"]);
     }
 
     #[test]
@@ -577,7 +575,10 @@ mod tests {
             json!({"genius": "shown", "stash": "more", "rating": "shown", "share": "hidden"}),
         );
         // Genius is the user's, so it stays; the defaults fill the rest by priority.
-        assert_eq!(shown, ["addToPlaylist", "goToAlbum", "goToArtist", "genius"]);
+        assert_eq!(
+            shown,
+            ["addToPlaylist", "goToAlbum", "goToArtist", "genius"]
+        );
         assert_eq!(more, ["stash", "pinToLibrary", "download", "info"]);
         assert!(m.items.iter().any(|i| i.id == "rating"));
         assert!(m.items.iter().all(|i| i.id != "share"));
@@ -618,7 +619,10 @@ mod tests {
             (MenuTier::Hidden, MenuTier::Shown, true)
         );
         let r = info.iter().find(|i| i.id == "rating").unwrap();
-        assert_eq!((r.default_tier, r.tier), (MenuTier::Hidden, MenuTier::Hidden));
+        assert_eq!(
+            (r.default_tier, r.tier),
+            (MenuTier::Hidden, MenuTier::Hidden)
+        );
     }
 
     #[test]
