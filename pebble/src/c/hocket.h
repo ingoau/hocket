@@ -8,7 +8,7 @@
 #endif
 
 // Bumped on any incompatible change to the messages below. The phone checks it on Hello.
-#define HOCKET_PROTO 1
+#define HOCKET_PROTO 2
 
 // -- Message types (MESSAGE_KEY_Type) ------------------------------------------------------------
 
@@ -68,7 +68,8 @@ enum {
   RowCurrent = 1 << 1,    // the playing item (queue)
   RowSearch = 1 << 2,     // starts dictation, then opens "search:<text>"
   RowTrack = 1 << 3,      // a track: holding offers Play next / Add to queue
-  RowHeader = 1 << 4,     // not selectable
+  RowHeader = 1 << 4,     // a section heading: not selectable, skipped over
+  RowUnavailable = 1 << 5,// a song that can't play offline here: dimmed, and refused
 };
 
 // -- Settings ------------------------------------------------------------------------------------
@@ -105,10 +106,13 @@ typedef enum {
   ItemSearch = 14,
   ItemLyrics = 15,
   ItemStash = 16,
+  ItemQueues = 17,
+  ItemSnooze = 18,
+  ItemOffline = 19,
   ItemCount,
 } MenuItemId;
 
-#define MAX_MENU_ITEMS 17
+#define MAX_MENU_ITEMS 20
 
 typedef struct {
   bool touch_navigation;

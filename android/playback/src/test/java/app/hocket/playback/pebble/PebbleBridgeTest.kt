@@ -1,6 +1,23 @@
 package app.hocket.playback.pebble
 
 import app.hocket.core.api.TrackRef
+import app.hocket.core.SettingKeys
+import app.hocket.core.api.Album
+import app.hocket.core.api.CommandAddToQueueInner
+import app.hocket.core.api.CommandPlayLaterInner
+import app.hocket.core.api.CommandPlayNextInner
+import app.hocket.core.api.EventNetworkChangedInner
+import app.hocket.core.api.EventQueueChangedInner
+import app.hocket.core.api.NetworkKind
+import app.hocket.core.api.NetworkState
+import app.hocket.core.api.OfflineState
+import app.hocket.core.api.QueueEntry
+import app.hocket.core.api.QueueItem
+import app.hocket.core.api.QueueSource
+import app.hocket.core.api.QueueView
+import app.hocket.core.api.Track
+import app.hocket.core.api.TrackPage
+import app.hocket.core.api.TrackSummary
 
 import android.os.SystemClock
 import android.app.Application
@@ -250,4 +267,137 @@ class PebbleBridgeTest {
         runCurrent()
         assertEquals(listOf<Command>(Command.StashAdd(CommandStashAddInner(listOf(TrackRef("", "t1"))))), dispatched)
     }
+
+    // -- queue, accounts and offline ------------------------------------------------------------
+
+    /** A core that answers queries from [answer] and records what is dispatched. */
+    private class ScriptedCore(val answer: (Query) -> QueryResult?) : CoreHandle {
+        val dispatched = mutableListOf<Command>()
+        override val kind = CoreKind.Fake
+        override fun dispatch(command: Command) { dispatched += command }
+        override suspend fun query(query: Query): QueryResult = answer(query) ?: error("unexpected $query")
+        override val events = MutableSharedFlow<Event>()
+        override fun close() = Unit
+    }
+
+    private fun TestScope.bridge(core: ScriptedCore) = PebbleBridge(
+        ApplicationProvider.getApplicationContext(),
+        core = { core },
+        serverId = { "acct-1" },
+        scope = backgroundScope,
+        transmit = { sent += it; Delivery.Sent },
+    )
+
+    private fun summary(id: String, source: String = "src-1", offline: OfflineState = OfflineState.None) =
+        TrackSummary(id = id, serverId = source, title = "Song $id", artist = "Artist", durationMs = 1000u, rating = 0u, loved = false, offline = offline)
+
+    private fun entry(i: Int, group: Boolean = false) =
+        QueueEntry(QueueItem("k$i", TrackRef("src-1", "t$i"), QueueSource.Inserted), summary("t$i"), inGroup = group)
+
+    /** A queue of [total] entries, [history] behind the current one, [group] in the group; the core's window holds [window] rows from 0. */
+    private fun queue(total: Int, history: Int, group: Int, window: Int) = QueueView(
+        contextLabel = "Night Drives",
+        entries = (0 until window).map { entry(it, group = it in history + 1..history + group) },
+        windowStart = 0u,
+        total = total.toUInt(),
+        historyCount = history.toUInt(),
+        currentIndex = history.toUInt(),
+        groupCount = group.toUInt(),
+        totalUpcoming = (total - history - 1).toUInt(),
+        current = entry(history),
+        shuffle = false,
+        repeat = RepeatMode.Off,
+        autoplay = false,
+    )
+
+    private fun setting(key: String, value: String) =
+        Event.SettingChanged(EventSettingChangedInner(Setting(key, value, SettingScope.DeviceLocal, 0.0)))
+
+    @Test
+    fun holdingAQueueRowMovesItsEntryInsteadOfAddingACopy() = runTest {
+        val core = ScriptedCore { null }
+        val b = bridge(core)
+        b.onEvent(Event.QueueChanged(EventQueueChangedInner(queue(total = 6, history = 1, group = 1, window = 6))))
+        val row = PebbleProtocol.queueRowId("k4")
+        assertEquals(Command.AddToQueue(CommandAddToQueueInner(emptyList(), listOf("k4"))), b.queueCommand(next = false, "queue", row))
+        assertEquals(Command.PlayNext(CommandPlayNextInner(emptyList(), listOf("k4"))), b.queueCommand(next = true, "queue", row))
+        // With the Queue section off there is no group: Add to queue goes to the end, as the phone's does.
+        b.onEvent(setting(SettingKeys.QUEUE_SECTION, "false"))
+        assertEquals(Command.PlayLater(CommandPlayLaterInner(emptyList(), listOf("k4"))), b.queueCommand(next = false, "queue", row))
+    }
+
+    @Test
+    fun theWholeQueueIsListedWithSectionsNotJustTheCoresWindow() = runTest {
+        val ranges = mutableListOf<Query.QueueRange>()
+        val long = queue(total = 40, history = 2, group = 2, window = 10)
+        val core = ScriptedCore { q ->
+            if (q is Query.QueueRange) {
+                ranges += q
+                val start = q.data.start.toInt()
+                QueryResult.Queue(long.copy(entries = (start until start + q.data.count.toInt()).map { entry(it) }, windowStart = start.toUInt()))
+            } else null
+        }
+        val b = bridge(core)
+        b.onEvent(Event.QueueChanged(EventQueueChangedInner(long)))
+        val (total, first, _) = b.list("queue", 0)
+        // History(2) + Now playing(1) + group(2) + rest(35), each section under a heading.
+        assertEquals(2 + 1 + 2 + 35 + 4, total)
+        assertEquals(listOf("History", "Song t0", "Song t1", "Now playing", "Song t2", "Next in queue", "Song t3", "Song t4", "Next from: Night Drives", "Song t5", "Song t6", "Song t7"), first.map { it.title })
+        assertEquals(PebbleProtocol.RowFlag.HEADER, first[0].flags)
+        assertEquals(true, first[4].flags and PebbleProtocol.RowFlag.CURRENT != 0)
+        assertEquals(emptyList<Query.QueueRange>(), ranges)
+        // Rows past the window are paged in, and act like any other.
+        val (_, last, _) = b.list("queue", 36)
+        assertEquals((32..39).map { "Song t$it" }, last.map { it.title })
+        assertEquals(1, ranges.size)
+        b.onMessage(cmd(PebbleProtocol.Cmd.ACTIVATE, "queue", last.last().id))
+        runCurrent()
+        assertEquals(listOf<Command>(Commands.jumpToQueueItem("k39")), core.dispatched)
+    }
+
+    @Test
+    fun anAlbumPlaysFromTheAccountItIsIn() = runTest {
+        val album = Album(id = "al1", serverId = "acct-2", name = "Second Account Album", songCount = 1u, durationMs = 1000u, rating = 0u, loved = false, playCount = 0u, isCompilation = false, offline = OfflineState.None)
+        val core = ScriptedCore { q -> if (q is Query.Album) QueryResult.AlbumDetail(album) else null }
+        val b = bridge(core)
+        b.onMessage(cmd(PebbleProtocol.Cmd.ACTIVATE, "album:al1", "play"))
+        runCurrent()
+        assertEquals(listOf<Command>(Commands.playContext(Commands.albumContext("acct-2", "al1", "Second Account Album"))), core.dispatched)
+    }
+
+    @Test
+    fun aTrackRowKeepsItsAccountAndIsMarkedWhenOfflineCantPlayIt() = runTest {
+        val tracks = listOf(track("a", "src-2", OfflineState.Downloaded), track("b", "src-2", OfflineState.None))
+        val core = ScriptedCore { q -> if (q is Query.Tracks) QueryResult.Tracks(TrackPage(tracks, 0u, 2u)) else null }
+        val b = bridge(core)
+        var (_, rows, _) = b.list("offline", 0)
+        assertEquals(listOf(0, 0), rows.map { it.flags and PebbleProtocol.RowFlag.UNAVAILABLE })
+        assertEquals(Command.AddToQueue(CommandAddToQueueInner(listOf(TrackRef("src-2", "b")))), b.queueCommand(next = false, "offline", rows[1].id))
+        // Offline, and this phone would play it: the song that needs the network is marked.
+        b.onEvent(Event.NetworkChanged(EventNetworkChangedInner(NetworkState(NetworkKind.Offline, metered = false))))
+        rows = b.list("offline", 0).second
+        assertEquals(listOf(0, PebbleProtocol.RowFlag.UNAVAILABLE), rows.map { it.flags and PebbleProtocol.RowFlag.UNAVAILABLE })
+    }
+
+    @Test
+    fun aQueueEntryThatFailedToPlayOnceIsNotRefused() = runTest {
+        val q = queue(total = 3, history = 0, group = 0, window = 3)
+        val failed = q.copy(entries = q.entries.mapIndexed { i, e -> if (i == 1) e.copy(item = e.item.copy(unavailable = true)) else e })
+        val b = bridge(ScriptedCore { null })
+        b.onEvent(Event.QueueChanged(EventQueueChangedInner(failed)))
+        val rows = b.list("queue", 0).second.filter { it.flags and PebbleProtocol.RowFlag.HEADER == 0 }
+        assertEquals(listOf(0, 0, 0), rows.map { it.flags and PebbleProtocol.RowFlag.UNAVAILABLE })
+    }
+
+    private fun track(id: String, source: String, offline: OfflineState) = Track(
+        id = id, serverId = source, title = "Song $id", durationMs = 1000u, rating = 0u, loved = false, playCount = 0u, offline = offline, explicit = false,
+    )
+
+    private fun cmd(cmd: Int, path: String, item: String) = mapOf(
+        Key.TYPE to PebbleDictionaryItem.UInt8(Type.CMD.toUByte()),
+        Key.CMD to PebbleDictionaryItem.UInt8(cmd.toUByte()),
+        Key.PATH to PebbleDictionaryItem.Text(path),
+        Key.ITEM to PebbleDictionaryItem.Text(item),
+    )
 }
+

@@ -56,44 +56,73 @@ static bool prv_is_list_window(Window *w);
 
 #ifdef HOCKET_DEMO
 // Sample rows so the emulator shows lists without a phone.
+typedef struct {
+  uint8_t flags;
+  const char *id, *title, *sub;
+} DemoRow;
+
+static void prv_demo_fill(List *l, const DemoRow *rows, int n) {
+  l->count = l->total = n;
+  for (int i = 0; i < n; i++) {
+    l->rows[i] = (Row){.flags = rows[i].flags};
+    strncpy(l->rows[i].id, rows[i].id, sizeof(l->rows[i].id) - 1);
+    strncpy(l->rows[i].title, rows[i].title, sizeof(l->rows[i].title) - 1);
+    strncpy(l->rows[i].sub, rows[i].sub, sizeof(l->rows[i].sub) - 1);
+  }
+}
+
 static void prv_demo_page(List *l, uint16_t offset) {
-  static const char *const LIBRARY[][2] = {
-    {"playlists", "Playlists"}, {"albums", "Albums"}, {"artists", "Artists"},
-    {"recent", "Recently played"}, {"downloads", "Downloads"}, {"search", "Search"},
+  static const DemoRow LIBRARY[] = {
+    {RowBrowsable, "playlists", "Playlists", ""}, {RowBrowsable, "albums", "Albums", ""},
+    {RowBrowsable, "artists", "Artists", ""}, {RowBrowsable, "recent", "Recently played", ""},
+    {RowBrowsable, "offline", "Available offline", ""}, {RowBrowsable, "downloads", "Downloads", ""},
+    {RowSearch, "search", "Search", ""},
   };
-  static const char *const QUEUE[][2] = {
-    {"Track One", "The Example Band"}, {"Track Two", "The Example Band"}, {"Signal Fires", "The Example Band"},
-    {"Track Four", "The Example Band"}, {"Track Five", "The Example Band"}, {"Track Six", "The Example Band"},
-    {"Track Seven", "The Example Band"}, {"Track Eight", "The Example Band"},
+  static const DemoRow QUEUE[] = {
+    {RowHeader, "", "History", ""},
+    {RowTrack, "0", "Track One", "The Example Band"}, {RowTrack, "1", "Track Two", "The Example Band"},
+    {RowHeader, "", "Now playing", ""},
+    {RowTrack | RowCurrent, "2", "Signal Fires", "The Example Band"},
+    {RowHeader, "", "Next in queue", ""},
+    {RowTrack, "3", "Paper Moons", "Lowland Choir"}, {RowTrack, "4", "Glass Harbour", "Fen & Field"},
+    {RowHeader, "", "Next from: Night Drives", ""},
+    {RowTrack, "5", "Track Four", "The Example Band"}, {RowTrack, "6", "Track Five", "The Example Band"},
+    {RowTrack, "7", "Track Six", "The Example Band"},
+  };
+  static const DemoRow ALBUM_OFFLINE[] = {
+    {0, "play", "Play", ""}, {0, "shuffle", "Shuffle", ""},
+    {RowTrack, "t:0", "Track One", "4:25"}, {RowTrack | RowUnavailable, "t:1", "Track Two", "3:58"},
+    {RowTrack, "t:2", "Signal Fires", "5:12"}, {RowTrack | RowUnavailable, "t:3", "Track Four", "4:01"},
+    {RowTrack | RowUnavailable, "t:4", "Track Five", "3:33"}, {RowTrack, "t:5", "Track Six", "4:47"},
+  };
+  static const DemoRow OFFLINE[] = {
+    {RowTrack, "track:1a2b:1", "Glass Harbour", "Fen & Field"}, {RowTrack, "track:1a2b:2", "Paper Moons", "Lowland Choir"},
+    {RowTrack, "track:1a2b:3", "Signal Fires", "The Example Band"}, {RowTrack, "track:1a2b:4", "Track One", "The Example Band"},
+    {RowTrack, "track:1a2b:5", "Track Two", "The Example Band"},
+  };
+  static const DemoRow DEVICES[] = {
+    {0, "desk", "Desk", "Playing"}, {0, "self", "This phone", "Stop casting"},
+    {0, "cast:1", "Living Room speaker", "Casting"}, {0, "cast:2", "Kitchen display", "Google Nest Hub"},
+  };
+  static const DemoRow QUEUES[] = {
+    {RowCurrent, "sq:1", "Night Drives", "Playing"}, {0, "sq:2", "Morning run", "Pinned · 42 songs"},
+    {0, "sq:3", "Signal Fires", "12 songs"}, {0, "sq:4", "Focus", "87 songs"},
+  };
+  static const DemoRow SNOOZE[] = {
+    {0, "snooze:day", "1 day", ""}, {0, "snooze:threeDays", "3 days", ""}, {0, "snooze:week", "1 week", ""},
+    {0, "snooze:month", "1 month", ""}, {0, "snooze:indefinite", "Indefinitely", ""},
   };
   l->base = 0;
   l->have_total = true;
-  if (!strcmp(l->path, "library")) {
-    l->count = l->total = ARRAY_LENGTH(LIBRARY);
-    for (int i = 0; i < l->count; i++) {
-      l->rows[i] = (Row){.flags = !strcmp(LIBRARY[i][0], "search") ? RowSearch : RowBrowsable};
-      strcpy(l->rows[i].id, LIBRARY[i][0]);
-      strcpy(l->rows[i].title, LIBRARY[i][1]);
-    }
-  } else if (!strcmp(l->path, "queue")) {
-    l->count = l->total = ARRAY_LENGTH(QUEUE);
-    for (int i = 0; i < l->count; i++) {
-      l->rows[i] = (Row){.flags = RowTrack | (i == 2 ? RowCurrent : 0)};
-      snprintf(l->rows[i].id, sizeof(l->rows[i].id), "%d", i);
-      strcpy(l->rows[i].title, QUEUE[i][0]);
-      strcpy(l->rows[i].sub, i == 2 ? "Now playing" : QUEUE[i][1]);
-    }
-  } else {
-    l->count = l->total = 2 + 6;
-    l->rows[0] = (Row){.id = "play", .title = "Play"};
-    l->rows[1] = (Row){.id = "shuffle", .title = "Shuffle"};
-    for (int i = 2; i < l->count; i++) {
-      l->rows[i] = (Row){.flags = RowTrack};
-      snprintf(l->rows[i].id, sizeof(l->rows[i].id), "t:%d", i - 2);
-      strcpy(l->rows[i].title, QUEUE[i - 2][0]);
-      strcpy(l->rows[i].sub, "4:25");
-    }
-  }
+#define DEMO(rows) prv_demo_fill(l, rows, ARRAY_LENGTH(rows))
+  if (!strcmp(l->path, "library")) DEMO(LIBRARY);
+  else if (!strcmp(l->path, "queue")) DEMO(QUEUE);
+  else if (!strcmp(l->path, "offline")) DEMO(OFFLINE);
+  else if (!strcmp(l->path, "devices")) DEMO(DEVICES);
+  else if (!strcmp(l->path, "queues")) DEMO(QUEUES);
+  else if (!strcmp(l->path, "snooze")) DEMO(SNOOZE);
+  else DEMO(ALBUM_OFFLINE);
+#undef DEMO
   menu_layer_reload_data(l->menu);
   for (int i = 0; i < l->count; i++) {
     if (l->rows[i].flags & RowCurrent) menu_layer_set_selected_index(l->menu, MenuIndex(0, i), MenuRowAlignCenter, false);
@@ -212,13 +241,22 @@ void list_handle_page(DictionaryIterator *iter) {
   if (n) prv_parse_rows(p, end, l->rows + at, n);
   const bool first = offset == 0 && menu_layer_get_selected_index(l->menu).row == 0;
   menu_layer_reload_data(l->menu);
-  // Open the queue on the playing row.
+  // Open the queue on the playing row; otherwise not on a heading.
   if (first) {
-    for (int i = 0; i < l->count; i++) {
-      if (l->rows[i].flags & RowCurrent) {
-        menu_layer_set_selected_index(l->menu, MenuIndex(0, l->base + i), MenuRowAlignCenter, false);
-        break;
-      }
+    int at = -1;
+    for (int i = 0; i < l->count && at < 0; i++) {
+      if (l->rows[i].flags & RowCurrent) at = i;
+    }
+    for (int i = 0; at < 0 && i < l->count; i++) {
+      if (!(l->rows[i].flags & RowHeader)) at = i;
+    }
+    if (at > 0) menu_layer_set_selected_index(l->menu, MenuIndex(0, l->base + at), MenuRowAlignCenter, false);
+  } else {
+    // The selection moved onto a row before its page came, and it turned out a heading: step on.
+    const uint16_t sel = menu_layer_get_selected_index(l->menu).row;
+    if (prv_cached(l, sel) && (l->rows[sel - l->base].flags & RowHeader)) {
+      const bool down = sel + 1 < l->total;
+      menu_layer_set_selected_index(l->menu, MenuIndex(0, down ? sel + 1 : (sel ? sel - 1 : 0)), MenuRowAlignNone, false);
     }
   }
 }
@@ -286,10 +324,27 @@ static void prv_draw_row(GContext *ctx, const Layer *cell, MenuIndex *index, voi
   }
   Row *r = &l->rows[index->row - l->base];
   if (r->flags & RowHeader) {
+#if defined(PBL_ROUND)
+    // The basic header is left-aligned, which the round screen's edge cuts off: centred instead.
+    const GRect b = layer_get_bounds(cell);
+    graphics_context_set_text_color(ctx, menu_cell_layer_is_highlighted(cell) ? GColorWhite : GColorBlack);
+    graphics_draw_text(ctx, r->title, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), GRect(8, (b.size.h - 18) / 2, b.size.w - 16, 18),
+                       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+#else
     menu_cell_basic_header_draw(ctx, cell, r->title);
+#endif
     return;
   }
-  menu_cell_basic_draw(ctx, cell, r->title, r->sub[0] ? r->sub : NULL, NULL);
+  const char *sub = r->sub[0] ? r->sub : NULL;
+  if (r->flags & RowUnavailable) {
+    // Dimmed, like the phone's rows offline; black and white says it instead.
+#ifdef PBL_COLOR
+    if (!menu_cell_layer_is_highlighted(cell)) graphics_context_set_text_color(ctx, GColorLightGray);
+#else
+    sub = "Not downloaded";
+#endif
+  }
+  menu_cell_basic_draw(ctx, cell, r->title, sub, NULL);
 }
 
 static int16_t prv_row_height(MenuLayer *menu, MenuIndex *index, void *ctx) {
@@ -301,6 +356,17 @@ static int16_t prv_row_height(MenuLayer *menu, MenuIndex *index, void *ctx) {
   }
   return PBL_IF_ROUND_ELSE(menu_layer_is_index_selected(menu, index) ? MENU_CELL_ROUND_FOCUSED_TALL_CELL_HEIGHT
                                                                      : MENU_CELL_ROUND_UNFOCUSED_TALL_CELL_HEIGHT, 56);
+}
+
+// Headings aren't selectable: moving onto one goes on past it (or stays put at either end).
+static void prv_selection_will_change(MenuLayer *menu, MenuIndex *new_index, MenuIndex old_index, void *ctx) {
+  List *l = ctx;
+  if (l->kind != ListRemote || !l->have_total) return;
+  const int step = new_index->row >= old_index.row ? 1 : -1;
+  int row = new_index->row;
+  while (row >= 0 && row < l->total && prv_cached(l, row) && (l->rows[row - l->base].flags & RowHeader)) row += step;
+  if (row < 0 || row >= l->total) row = old_index.row;
+  new_index->row = row;
 }
 
 static void prv_selection_changed(MenuLayer *menu, MenuIndex new_index, MenuIndex old_index, void *ctx) {
@@ -317,6 +383,10 @@ static void prv_hold_row(List *l, uint16_t row) {
   if (l->kind != ListRemote || !prv_cached(l, row)) return;
   Row *r = &l->rows[row - l->base];
   if (r->flags & (RowHeader | RowSearch)) return;
+  if (r->flags & RowUnavailable) {
+    show_notice("Not available offline");
+    return;
+  }
   if (!(r->flags & RowTrack) && strncmp(r->id, "album:", 6) && strncmp(r->id, "playlist:", 9)) return;
   list_push_hold(l->path, r->id, r->title);
 }
@@ -347,6 +417,10 @@ static void prv_select(MenuLayer *menu, MenuIndex *index, void *ctx) {
   if (!prv_cached(l, index->row)) return;
   Row *r = &l->rows[index->row - l->base];
   if (r->flags & RowHeader) return;
+  if (r->flags & RowUnavailable) {
+    show_notice("Not available offline");
+    return;
+  }
   if (r->flags & RowSearch) {
     list_start_search();
   } else if (r->flags & RowBrowsable) {
@@ -419,6 +493,7 @@ static void prv_load(Window *window) {
     .select_click = prv_select,
     .select_long_click = prv_long_select,
     .selection_changed = prv_selection_changed,
+    .selection_will_change = prv_selection_will_change,
   });
 #ifdef PBL_COLOR
   menu_layer_set_highlight_colors(l->menu, GColorRed, GColorWhite);

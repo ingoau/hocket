@@ -20,9 +20,13 @@ We cannot replace the system music app; this is a separate "Hocket" watchapp in 
 
 `api.rs` did not change: rating, love, shuffle, repeat, seek, handoff, search, lyrics and library queries already existed.
 
-**Protocol** (`pebble/src/c/hocket.h`, mirrored by `PebbleProtocol.kt`; bump `HOCKET_PROTO` on any incompatible change). Phone → watch: Now (state), List (one page of ≤ 12 packed rows), Art (chunks), Settings (a small blob the watch persists), HelloReply, Notice. Watch → phone: Hello (protocol + build), Cmd (command, argument, list path and row id), ListReq (path + offset), ArtReq. Lists are addressed by path: `queue`, `library`, `playlists`, `albums`, `artists`, `recent`, `downloads`, `devices`, `lyrics`, `album:<id>`, `playlist:<id>`, `artist:<id>`, `search:<text>`, `goAlbum`, `goArtist`; a browsable row's id is itself a path. The phone pushes Now (debounced) and Settings only while the watchapp is open.
+**Protocol** (`pebble/src/c/hocket.h`, mirrored by `PebbleProtocol.kt`; bump `HOCKET_PROTO` on any incompatible change). Phone → watch: Now (state), List (one page of ≤ 12 packed rows), Art (chunks), Settings (a small blob the watch persists), HelloReply, Notice. Watch → phone: Hello (protocol + build), Cmd (command, argument, list path and row id), ListReq (path + offset), ArtReq. Lists are addressed by path: `queue`, `queues`, `library`, `playlists`, `albums`, `artists`, `recent`, `offline`, `downloads`, `devices`, `snooze`, `lyrics`, `album:<id>`, `playlist:<id>`, `artist:<id>`, `search:<text>`, `goAlbum`, `goArtist`; a browsable row's id is itself a path. Row flags: browsable, current, search, track, header (a section heading the selection skips over) and unavailable (below). The phone pushes Now (debounced) and Settings only while the watchapp is open.
 
 **Link behaviour.** Now goes out when something the watch draws changes, on a seek or a stall (the stamp drifting 1.5 s from the last one sent), and otherwise once a minute while playing as a safety net; the watch interpolates position in between. Settings go out only when the blob differs from the one the watch last took. The phone answers Hello off the watch's message (its ack is not held up by the three replies), sends a message the watch nacked or did not answer again after 250 ms and 500 ms, counts a Now as pushed only once delivered, and stops pushing when the watchapp turns out to be closed (until the next Hello). The watch says Hello again (5 s, doubling to 60 s) until a HelloReply arrives, so a phone service that was still starting cannot leave it on "Open Hocket". An art transfer with a missing chunk is dropped rather than shown with a blank band; the request's retry fetches it again. The watch's inbox is 4 KB with art, 2 KB without (a list page is under 1.8 KB). Inbox handlers keep their stack small: the app stack is 2 KB on all but Time 2 and Round 2.
+
+**Accounts.** Lists span every account, so each row carries what names its item: an album, playlist or artist is looked up by id and played from the account it is in (the phone's own detail screens do the same), and a track row is `track:<tag>:<id>`, where the tag is 4 hex digits of the source's SHA-256 that the phone maps back against the accounts and the sources it has listed (an id too long for that goes as a hash the phone remembers). A pinned download names only its id, so it plays from the first account, as the phone's pins do.
+
+**Offline.** Offline (no network, or offline mode), a song that is neither downloaded nor cached and would play on this phone is sent with the unavailable flag, as the phone's rows dim it: the watch shows it dimmed ("Not downloaded" on black and white) and says "Not available offline" instead of playing or queueing it. While another device plays, nothing is marked: the tap goes to that device, which may well have it.
 
 **Logs.** The phone side logs the link (`PebbleLog`, tag `kotlin/Pebble`) into the core's capture, so the developer diagnostics page (shake, or Settings → Developer) has it next to the core's lines for the last hour. It logs the open and close of the watchapp, Hello with both versions, sends that were never delivered (with the last reason), failed lists, queries and art, and the listener's binding (a watch message nacked because the playback service never bound). Every message in each direction is logged at debug, which is kept only in developer mode. Search text is never logged (`search:…`). The lines don't go to logcat, which the bundle also reads, so they aren't duplicated there. The watchapp itself logs nothing.
 
@@ -99,6 +103,8 @@ Go to artist
 Play on…
 ```
 
+Snooze, Queues and Available offline can be added too (Settings).
+
 - Picking an action applies it and returns to Now Playing. Exceptions that open their own screen first: Rating (star picker, then Now Playing), Go to album / artist, Play on….
 - **Timeout:** after 5 s without a button press the menu returns to Now Playing; any press restarts it. Opening Queue or Library cancels it.
 - Back from the menu exits the app (quick double back). Holding back exits as everywhere.
@@ -111,11 +117,12 @@ Play on…
 Press and hold on Now Playing (touch mode), or the lower half of the menu (buttons-only):
 
 - Rate (1–5 stars), Love and Stash (stashes the playing track, then back to Now Playing with a short "Stashed")
+- Snooze: 1 day, 3 days, 1 week, 1 month or Indefinitely, as the phone's song menu; back to Now Playing with "Snoozed for 1 week"
 - Shuffle, Repeat (off / all / one)
 - Go to album, Go to artist
-- Play on… (Connect handoff)
+- Play on…: Hocket Connect devices (a handoff), then this phone's Cast receivers (while casting, "This phone" stops it). Opening it runs an active Cast scan for 15 s, waiting up to 2 s for a first receiver, as the phone's device sheet scans while open.
 
-Contents and order configurable. Lyrics can be added (off by default).
+Contents and order configurable. Lyrics and Queues can be added (off by default).
 
 
 ## Lyrics  
@@ -133,13 +140,17 @@ The phone sends the lines as the list `lyrics` (row id = start in ms with the tr
 ## Queue  
 *Status: decided*
 
-Current track at the top, upcoming below; scrolling up reveals recent history (the last few tracks). Selecting a track jumps to it; holding offers Play next / Add to queue.
+Laid out as on the phone and desktop: **History** (the last 8 played, revealed by scrolling up), **Now playing**, **Next in queue** (the group) and **Next from: <context>** (or **Later**) for the rest, each under a heading the selection skips. It opens on the current track. The whole queue is listed, not just the core's window: rows past it are paged in with `Query::QueueRange`, as the phone does on scroll.
+
+Selecting a track jumps to it. Holding offers Play next / Add to queue, which move the entry by its key rather than adding the song again. Everywhere, Add to queue is the phone's: the end of the Next in queue group, or the end of the list with the Queue section setting off.
+
+**Queues** (a menu item, off by default) lists the saved queues as the phone's queue switcher does, the playing one marked; selecting one restores it.
 
 
 ## Library  
 *Status: decided*
 
-Sections (contents and order configurable): Playlists, Albums, Artists (artist → Play, Shuffle, then albums → tracks), Recently played (tracks), Downloads (the pinned albums, playlists and tracks, so it works offline), and Voice search.
+Sections (contents and order configurable): Playlists, Albums, Artists (artist → Play, Shuffle, then albums → tracks), Recently played (tracks), Available offline (every downloaded or fully cached song, the phone's "Available offline" filter), Downloads (the pinned albums, playlists and tracks), and Voice search.
 
 - **Track:** select plays it now; hold for Play next / Add to queue.
 - **Album and playlist screens are the same:** **Play** and **Shuffle** at the top, then the tracks.
@@ -154,7 +165,7 @@ A Pebble page in the Android app's Settings. Keys are `pebble.*` in the core set
 - Touch navigation: On / Off (default Off)
 - Buttons-only mode (Time 2)
 - Gestures: swipe up / down / left / right and press-and-hold, each one of Queue, Library, Actions, Back, Lyrics, Nothing. Defaults as in Now Playing. The back button always goes back, so no assignment can trap you.
-- Buttons-only menu: items and order. Items can be screens (Now Playing, Queue, Library, Lyrics), actions (Love, Stash, Rating, Shuffle, Repeat, Go to album / artist, Play on…), or shortcuts (Playlists, Albums, Artists, Downloads, Search).
+- Buttons-only menu: items and order. Items can be screens (Now Playing, Queue, Queues, Library, Lyrics), actions (Love, Stash, Snooze, Rating, Shuffle, Repeat, Go to album / artist, Play on…), or shortcuts (Playlists, Albums, Artists, Available offline, Downloads, Search).
 - Actions menu: items and order
 - Library sections: items and order
 - Menu timeout: Off / 3 / 5 / 10 s (default 5)
@@ -187,7 +198,7 @@ PebbleKit 2 works only with Core's phone app. A PebbleKit Classic fallback (for 
 3. Queue and library, including album / playlist screens and the Downloads filter.
 4. Voice search, album art, auto-open, settings page, install flow and version check, CI job for the `.pbw`.
 
-Testing: `HOCKET_DEMO=1 pebble build` gives the emulator sample state for screenshots (`docs/screenshots/pebble/`), and `PebbleProtocolTest` covers the byte layouts. Automated emulator screenshot tests per platform are still to do.
+Testing: `HOCKET_DEMO=1 pebble build` gives the emulator sample state for screenshots (`docs/screenshots/pebble/`); add `HOCKET_DEMO_BUTTONS=1` to put a touch watch in buttons-only mode with Snooze, Queues and Available offline in the menu, so `pebble emu-button` reaches every screen; and `PebbleProtocolTest` covers the byte layouts. Automated emulator screenshot tests per platform are still to do.
 
 
 ## Open  
