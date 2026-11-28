@@ -31,6 +31,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.Velocity
 import app.hocket.ui.components.DrawerHandle
@@ -318,7 +319,16 @@ fun StashSheet(onDismiss: () -> Unit, modifier: Modifier = Modifier, navigator: 
             }
         }.invokeOnCompletion { onDismiss() }
     }
-    fun settleTo(value: StashAt) { scope.launch { state.animateTo(value, spec) } }
+    val listState = rememberLazyListState()
+    // To its rest at the buttons with the list back at its top, where they are.
+    fun settleTo(value: StashAt) {
+        scope.launch { state.animateTo(value, spec) }
+        if (value == StashAt.Peek) scope.launch { listState.animateScrollToItem(0) }
+    }
+    // Each time it comes down to its rest (or away), the menu goes back to its first page: a
+    // sub-page (Share, Snooze) has no play buttons to rest on, and would hold on to back.
+    var menuResets by remember { mutableIntStateOf(0) }
+    LaunchedEffect(state) { snapshotFlow { state.settledValue != StashAt.Open }.collect { if (it) menuResets++ } }
     // Swiped off the bottom edge: closed.
     LaunchedEffect(state) {
         var risen = false
@@ -396,7 +406,6 @@ fun StashSheet(onDismiss: () -> Unit, modifier: Modifier = Modifier, navigator: 
             )
         }
     }
-    val listState = rememberLazyListState()
     val velocityThreshold = with(density) { 125.dp.toPx() }
     /** Settles a release of [velocity] (px/s, down positive): a flick goes on to the next anchor its way, else the nearest. */
     suspend fun settle(velocity: Float) {
@@ -431,6 +440,16 @@ fun StashSheet(onDismiss: () -> Unit, modifier: Modifier = Modifier, navigator: 
     }
     val fling = AnchoredDraggableDefaults.flingBehavior(state, positionalThreshold = { d -> d * 0.5f }, animationSpec = spec)
     val closeLabel = stringResource(R.string.action_close)
+    // A screen reader gets no rest at the buttons: the menu below the screen's edge would take its
+    // focus there, out of sight and out of the list's reach.
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val a11y = remember(context) { context.getSystemService(android.view.accessibility.AccessibilityManager::class.java) }
+    var touchExploration by remember(a11y) { mutableStateOf(a11y?.isTouchExplorationEnabled == true) }
+    DisposableEffect(a11y) {
+        val listener = android.view.accessibility.AccessibilityManager.TouchExplorationStateChangeListener { touchExploration = it }
+        a11y?.addTouchExplorationStateChangeListener(listener)
+        onDispose { a11y?.removeTouchExplorationStateChangeListener(listener) }
+    }
     CompositionLocalProvider(LocalAppSnackbar provides snackbar, LocalDetailNavigator provides songNavigator) {
     BoxWithConstraints(modifier.fillMaxSize()) {
         val pageH = constraints.maxHeight
@@ -446,13 +465,13 @@ fun StashSheet(onDismiss: () -> Unit, modifier: Modifier = Modifier, navigator: 
         // Where it rests: open (as tall as it all is, up to under the status bar), and, when the songs
         // and buttons fit with more menu below, at the buttons: they sit at the screen's foot and the
         // rest of the menu is a drag (or the handle) away. A long stash just opens, at its top.
-        LaunchedEffect(pageH, sheetH, playFoot, navBottom) {
+        LaunchedEffect(pageH, sheetH, playFoot, navBottom, touchExploration) {
             if (sheetH <= 0) return@LaunchedEffect
             val full = sheetH >= pageH - topRoom - 1
             if (playFoot < 0 && !full) return@LaunchedEffect
             val open = (pageH - sheetH).toFloat()
             val peek = (pageH - playFoot - margin - navBottom).toFloat()
-            val withPeek = playFoot > 0 && peek - open > 1f
+            val withPeek = playFoot > 0 && peek - open > 1f && !touchExploration
             state.updateAnchors(DraggableAnchors {
                 StashAt.Hidden at pageH.toFloat()
                 if (withPeek) StashAt.Peek at peek
@@ -494,6 +513,7 @@ fun StashSheet(onDismiss: () -> Unit, modifier: Modifier = Modifier, navigator: 
                 .onGloballyPositioned { sheetAt[0] = it }
                 .nestedScroll(followDrag)
                 .anchoredDraggable(state, Orientation.Vertical, enabled = !closing, flingBehavior = fling)
+                .semantics { paneTitle = title }
                 .testTag("stash.sheet"),
             shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
             color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -545,6 +565,9 @@ fun StashSheet(onDismiss: () -> Unit, modifier: Modifier = Modifier, navigator: 
                 // one song's own Download toggle changes the pins, which mustn't reset the menu or
                 // stop a preview). Add to stash makes no sense here: an extra stands in for it (or,
                 // for the whole stash, Clear does).
+                // Scrolled out of the list (it grew, say, on another device), the buttons are no
+                // longer where it rests: no rest at them until they're measured again.
+                DisposableEffect(Unit) { onDispose { playFoot = 0 } }
                 key(acting.map { it.entryId }) {
                     MenuSheet(
                         subject, target, actions.filter { it.id != ActionIds.STASH },
@@ -558,6 +581,7 @@ fun StashSheet(onDismiss: () -> Unit, modifier: Modifier = Modifier, navigator: 
                         embedded = true,
                         showHeader = false,
                         onPlay = ::playAction,
+                        resetKey = menuResets,
                         playGroupModifier = Modifier.onGloballyPositioned { c ->
                             val sheet = sheetAt[0]
                             if (sheet != null && sheet.isAttached && c.isAttached && listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0) {

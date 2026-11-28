@@ -573,7 +573,9 @@ private fun MainShell(snackbar: SnackbarHostState) {
             // bar and rail) leaves the accessibility tree, as a modal would: TalkBack must not wander
             // into content nobody can see.
             val covered by remember(sheet) { derivedStateOf { sheet.coverProgress >= 0.6f } }
-            val hiddenWhenCovered = if (covered) Modifier.clearAndSetSemantics { } else Modifier
+            // The open stash drawer covers it all (the player too), as a modal would.
+            val hiddenWhenCovered = if (covered || stashOpen) Modifier.clearAndSetSemantics { } else Modifier
+            val hiddenUnderStash = if (stashOpen) Modifier.clearAndSetSemantics { } else Modifier
             // A selection on the pages (not the queue's, inside the player): its drawer takes the
             // bottom of the screen, so the bar, the mini player and the stash chip step down out of
             // its way as it rises, and come back as it leaves. 0 to 1, read in layout and draw only.
@@ -797,7 +799,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
             // The mini player's part of the entrance: up from below the bar, last of all. (At the
             // sheet's own zIndex, which only orders it among this Box's siblings from here: above
             // the bottom scrim, below the bar.)
-            Box(Modifier.fillMaxSize().zIndex(10f).graphicsLayer {
+            Box(Modifier.fillMaxSize().zIndex(10f).then(hiddenUnderStash).graphicsLayer {
                 val e = entrancePart(entrance(), ShellEntrance.MINI_START_MS, ShellEntrance.MINI_END_MS)
                 if (e < 1f) {
                     alpha = e
@@ -880,7 +882,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                 }
             }
             // Over the now playing sheet (z 10) and the bar (z 20).
-            OverChromeSlot(overChrome, Modifier.zIndex(21f))
+            OverChromeSlot(overChrome, Modifier.zIndex(21f).then(hiddenUnderStash))
             val sheetRising by remember(sheet) { derivedStateOf { sheet.progress > 1f / 3f } }
             if (stashAlone) {
                 // Above the mini player (or the bar when nothing plays) at the end edge, leaving with
