@@ -141,14 +141,30 @@
   display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; flex: 0 0 auto;
   border-radius: 50%; background: var(--selection); color: var(--accent-text);
 }
-.home-section .scroller {
-  gap: 6px; padding: 6px 4px 12px; margin: -6px -4px 0; scroll-snap-type: x proximity; scroll-padding-inline: 4px;
+/* A shelf runs out under the page's gutters to the pane's edges, so tiles slide under the pane's
+   edge rather than being cut at the gutter; the padding keeps hover lifts and focus rings in. No
+   scroll snapping: Shelf pages it to whole tiles, and a trackpad scrolls freely. */
+.shelf { --shelf-tile: 172px; }
+.shelf > .scroller {
+  gap: 6px; padding: 6px var(--page-gutter) 12px; margin: -6px calc(-1 * var(--page-gutter)) 0;
+  scroll-padding-inline: var(--page-gutter); overscroll-behavior-x: contain;
 }
 /* The carousel's scrollbar stays out of the way until the pointer is over it. */
-.home-section .scroller::-webkit-scrollbar { height: 8px; }
-.home-section .scroller::-webkit-scrollbar-thumb { background: transparent; background-clip: padding-box; border: 2px solid transparent; }
-.home-section .scroller:hover::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--fg) 18%, transparent); background-clip: padding-box; }
-.home-section .scroller .tile { width: 172px; scroll-snap-align: start; }
+.shelf > .scroller::-webkit-scrollbar { height: 8px; }
+.shelf > .scroller::-webkit-scrollbar-thumb { background: transparent; background-clip: padding-box; border: 2px solid transparent; }
+.shelf > .scroller:hover::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--fg) 18%, transparent); background-clip: padding-box; }
+.shelf > .scroller > .tile { width: var(--shelf-tile); }
+/* Back and next over the row's ends, centred on the artwork, while the pointer is on the row. */
+.shelf-arrow {
+  position: absolute; z-index: 2; top: calc(6px + var(--shelf-tile) / 2); width: 40px; height: 40px; margin-top: -20px; padding: 0;
+  display: grid; place-items: center; border: 0; border-radius: 50%; background: var(--bg-elev); color: var(--fg); box-shadow: var(--shadow-2);
+  opacity: 0; transition: opacity var(--dur-short) var(--ease-emphasized), transform var(--dur-short) var(--ease-emphasized);
+}
+.shelf-arrow.back { left: calc(8px - var(--page-gutter)); }
+.shelf-arrow.next { right: calc(8px - var(--page-gutter)); }
+.shelf:hover .shelf-arrow:not(.spent) { opacity: 1; }
+.shelf-arrow:hover { transform: scale(1.06); }
+.shelf-arrow.spent { visibility: hidden; transition: opacity var(--dur-short) var(--ease-emphasized), visibility 0s var(--dur-short); }
 
 /* ---- Detail pages (album, artist, playlist) -------------------------------- */
 /* The page scrolls as a whole: the hero, the actions under it, then sections. */
@@ -290,8 +306,9 @@
   :is(.group-row .tile, .genre-row > li, .group-songs > li) { width: auto; }
   .view-header .actions { margin-left: 0; }
   /* The carousels wrap into the same fluid grid as the library pages, so rows fill the width. */
-  .home-section .scroller { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); margin: 0; padding: 0; }
-  .home-section .scroller .tile { width: auto; }
+  .shelf > .scroller { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); margin: 0; padding: 0; }
+  .shelf > .scroller > .tile { width: auto; }
+  .shelf-arrow { display: none; }
   .genre-grid { --tile-w: 160px; }
 }
 
@@ -342,7 +359,7 @@
 .search-kind-count { font-variant-numeric: tabular-nums; font-weight: 500; opacity: 0.8; }
 .search-section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .search-nothing, .search-asking, .search-lyrics-note { margin: 0; }
-.search-lyrics-note { padding: 0 var(--page-pad) 12px; }
+.search-lyrics-note { margin: -6px 0 10px var(--page-title-inset); }
 .lyric-hits { display: flex; flex-direction: column; gap: 2px; }
 .lyric-hit { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; text-align: left; padding: 8px 12px; border: 0; border-radius: var(--shape-md); background: transparent; color: inherit; font: inherit; }
 .lyric-hit:hover { background: var(--bg-hover); }

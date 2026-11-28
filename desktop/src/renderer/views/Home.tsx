@@ -10,6 +10,7 @@ import { bridge } from "../core/bridge";
 import { EmptyState } from "../components/EmptyState";
 import { openContextMenu, openItemsMenu } from "../components/ContextMenu";
 import { Tile, TileList } from "../components/Tile";
+import { Shelf } from "../components/Shelf";
 import { Artwork } from "../components/Artwork";
 import { Icon } from "../components/Icon";
 import { BrandMark } from "../components/BrandMark";
@@ -189,7 +190,7 @@ function SectionItems({ items, style, label }: { items: Item[]; style: SectionSt
       <Tile key={it.key} title={it.title} subtitle={it.subtitle} coverArt={it.coverArt} round={it.round} onOpen={it.open} onPlay={it.play} onContextMenu={it.menu} dragTarget={it.dragTarget} testId="home-item" />
     ),
   );
-  return <TileList label={label} className={style === "grid" ? "grid" : "scroller"}>{tiles}</TileList>;
+  return style === "grid" ? <TileList label={label} className="grid">{tiles}</TileList> : <Shelf label={label}>{tiles}</Shelf>;
 }
 
 function ListeningTile({ totalMs, byWeekday, onOpen }: { totalMs: number; byWeekday: number[]; onOpen: () => void }) {
@@ -318,7 +319,7 @@ function toSummary(tr: { id: string; serverId: string; title: string; artist?: s
   return tr as TrackSummary;
 }
 
-function playContext(serverId: string, kind: { type: "album" | "artist" | "playlist"; data: { id: string } }, label: string, shuffle = false): void {
+export function playContext(serverId: string, kind: { type: "album" | "artist" | "playlist"; data: { id: string } }, label: string, shuffle = false): void {
   bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: kind as never, label, sort: "default", tracks: [] }, shuffle, saveOutgoing: true } } });
 }
 
