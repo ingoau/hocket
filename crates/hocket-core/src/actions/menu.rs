@@ -213,15 +213,15 @@ pub fn registry_ids() -> Vec<&'static str> {
 }
 
 /// The `menu.overrides` setting: `{ id: "shown" | "more" | "hidden" }`.
+///
+/// Checks the shape only. A row this build doesn't know, or a tier it doesn't
+/// allow there, may come from a newer device: refusing it would drop the whole
+/// map, so [`parse_overrides`] skips such entries and [`with_override`] keeps them.
 pub fn overrides_valid(v: &Value) -> Result<(), String> {
     let map = v.as_object().ok_or("expected an object")?;
     for (id, tier) in map {
-        let d = find(id).ok_or_else(|| format!("unknown menu item {id}"))?;
-        let tier: MenuTier = serde_json::from_value(tier.clone())
+        serde_json::from_value::<MenuTier>(tier.clone())
             .map_err(|_| format!("{id}: expected shown, more or hidden"))?;
-        if !choices(d).contains(&tier) {
-            return Err(format!("{id} can't be {}", tier_str(tier)));
-        }
     }
     Ok(())
 }
@@ -343,7 +343,11 @@ pub fn menu_layout(registry: &ActionRegistry, req: &MenuRequest, state: &StateVi
     let foldable = |d: &Def| !matches!(d.section, Play | Rate | Danger);
     let extras = req.extras as usize;
     let listed = rows.iter().filter(|(d, ..)| foldable(d)).count();
-    let mut folded = vec![false; rows.len()];
+    // A row the user put under More stays there, however short the menu.
+    let mut folded: Vec<bool> = rows
+        .iter()
+        .map(|(d, _, t)| foldable(d) && *t == Some(MenuTier::More))
+        .collect();
     if listed + extras > NO_FOLD_MAX {
         // Rows the user put in the menu always stay; the defaults fill what's
         // left of the short list by priority.
@@ -373,9 +377,12 @@ pub fn menu_layout(registry: &ActionRegistry, req: &MenuRequest, state: &StateVi
                 folded[i] = true;
             }
         }
-        // A More holding one row is a tap for nothing.
-        if folded.iter().filter(|f| **f).count() == 1 {
-            folded.iter_mut().for_each(|f| *f = false);
+        // A More holding one row is a tap for nothing, unless the user put it there.
+        let alone: Vec<usize> = (0..rows.len()).filter(|&i| folded[i]).collect();
+        if let [i] = alone[..] {
+            if rows[i].2 != Some(MenuTier::More) {
+                folded[i] = false;
+            }
         }
     }
 
@@ -622,11 +629,20 @@ mod tests {
     #[test]
     fn the_setting_takes_only_known_rows_and_their_tiers() {
         assert!(overrides_valid(&json!({"genius": "shown", "love": "hidden"})).is_ok());
-        assert!(overrides_valid(&json!({"nope": "shown"})).is_err());
-        assert!(overrides_valid(&json!({"rating": "more"})).is_err());
-        assert!(overrides_valid(&json!({"play": "hidden"})).is_err());
-        assert!(overrides_valid(&json!({"deletePlaylist": "more"})).is_err());
         assert!(overrides_valid(&json!([])).is_err());
+        assert!(overrides_valid(&json!({"genius": "folded"})).is_err());
+        // A newer device's row, or a tier this build doesn't allow there, is
+        // kept in the setting and skipped when read.
+        let newer = json!({"nope": "shown", "rating": "more", "play": "hidden", "genius": "shown"});
+        assert!(overrides_valid(&newer).is_ok());
+        assert_eq!(
+            parse_overrides(&newer).into_iter().collect::<Vec<_>>(),
+            [("genius".to_string(), MenuTier::Shown)]
+        );
+        assert_eq!(
+            with_override(&newer, "genius", MenuTier::More).unwrap(),
+            json!({"nope": "shown", "rating": "more", "play": "hidden"})
+        );
         let v = with_override(&json!({}), "genius", MenuTier::Shown).unwrap();
         assert_eq!(v, json!({"genius": "shown"}));
         assert_eq!(
@@ -650,5 +666,59 @@ mod tests {
         assert!(more.is_empty());
         assert!(shown.starts_with(&["restoreSavedQueue".to_string(), "pinSavedQueue".to_string()]));
         assert_eq!(m.items.last().unwrap().id, "deleteSavedQueue");
+    }
+
+    #[test]
+    fn under_more_is_kept_in_short_menus_and_alone() {
+        // Several songs fold nothing by default, but a row the user put under More stays there.
+        let (shown, more, _) = layout(
+            &tracks(&["a", "b"]),
+            MenuScreen::List,
+            &["share"],
+            0,
+            json!({"snooze": "more"}),
+        );
+        assert_eq!(shown, ["addToPlaylist", "stash", "download", "share"]);
+        assert_eq!(more, ["snooze"]);
+    }
+
+    #[test]
+    fn seven_rows_fold_nothing() {
+        // A song with three folded rows hidden: seven rows, so even Song info shows.
+        let (shown, more, _) = layout(
+            &tracks(&["a"]),
+            MenuScreen::List,
+            &["share", "info"],
+            0,
+            json!({"pinToLibrary": "hidden", "preview": "hidden", "snooze": "hidden"}),
+        );
+        // Seven rows: nothing folds at all.
+        assert!(more.is_empty());
+        assert_eq!(shown.last().unwrap(), "info");
+    }
+
+    #[test]
+    fn promoted_rows_stay_and_push_defaults_down() {
+        let (shown, more, _) = layout(
+            &tracks(&["a"]),
+            MenuScreen::List,
+            SONG_APPS,
+            2,
+            json!({"preview": "shown", "info": "shown", "genius": "shown", "snooze": "shown"}),
+        );
+        // Room is 6 - 2 extras - 4 promoted = 0: every default short-list row folds.
+        assert_eq!(shown, ["preview", "info", "genius", "snooze"]);
+        assert_eq!(
+            more,
+            [
+                "addToPlaylist",
+                "stash",
+                "pinToLibrary",
+                "goToAlbum",
+                "goToArtist",
+                "download",
+                "share"
+            ]
+        );
     }
 }
