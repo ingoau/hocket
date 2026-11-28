@@ -920,6 +920,7 @@ async fn pins_download_through_the_job_queue() {
         .query(Query::Artwork {
             id: "al-al0".into(),
             size: 640,
+            display: false,
         })
         .await
     {
@@ -987,6 +988,36 @@ async fn downloads_keep_their_covers_for_offline() {
         "{:?}",
         t.server.calls()
     );
+    // Online, a display ask takes a kept copy up to 4× its size instead of
+    // a fetch; an ask that reads the pixels gets its exact size.
+    for (size, kept) in [(160, 320), (640, 1280), (64, 64)] {
+        match t
+            .query(Query::Artwork {
+                id: "al-al0".into(),
+                size,
+                display: true,
+            })
+            .await
+        {
+            QueryResult::Path(Some(p)) => {
+                assert!(p.ends_with(&format!("al-al0_{kept}.img")), "{size}: {p}")
+            }
+            other => panic!("{size}: {other:?}"),
+        }
+    }
+    assert_eq!(t.server.calls_to("getCoverArt"), 3);
+    match t
+        .query(Query::Artwork {
+            id: "al-al0".into(),
+            size: 640,
+            display: false,
+        })
+        .await
+    {
+        QueryResult::Path(Some(p)) => assert!(p.ends_with("al-al0_640.img"), "{p}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(t.server.calls_to("getCoverArt"), 4);
     t.server.set_offline(true);
     t.run(Command::SetNetworkState {
         state: NetworkState {
@@ -1003,6 +1034,7 @@ async fn downloads_keep_their_covers_for_offline() {
             .query(Query::Artwork {
                 id: "al-al0".into(),
                 size,
+                display: false,
             })
             .await
         {
@@ -1014,6 +1046,7 @@ async fn downloads_keep_their_covers_for_offline() {
         .query(Query::Artwork {
             id: "al-al0".into(),
             size: 1280,
+            display: false,
         })
         .await
     {

@@ -462,7 +462,7 @@ fn a_v10_database_is_restored_once() {
     assert_eq!(stash[0].track, TrackRef::new(a(), "t2"));
     let snoozes: Vec<Snooze> = db.saved_state_get("snooze:ident").unwrap().unwrap();
     assert_eq!(snoozes[0].track, TrackRef::new(b(), "x9"));
-    let resumes: Vec<AlbumResumeEntry> = db.saved_state_get("album-resume:ident").unwrap().unwrap();
+    let resumes: Vec<AlbumResumeEntry> = db.album_resumes_get("ident").unwrap();
     assert_eq!(resumes[0].source, a());
     drop(downloads);
     drop(db);

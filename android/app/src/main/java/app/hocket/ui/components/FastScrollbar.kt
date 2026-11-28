@@ -57,14 +57,14 @@ import kotlin.math.roundToInt
  */
 @Composable
 fun FastScrollbar(state: LazyListState, modifier: Modifier = Modifier, top: Dp = 0.dp, bottom: Dp = 0.dp) {
-    val geometry = remember(state) { { listGeometry(state) } }
+    val geometry = remember(state) { val median = MedianSize(); { listGeometry(state, median) } }
     FastScrollbar(geometry, state.isScrollInProgress, { unit, offset -> state.requestScrollToItem(unit, offset) }, modifier, top, bottom)
 }
 
 /** [FastScrollbar] for a vertical grid: it moves a row at a time, the way the grid lays out. */
 @Composable
 fun FastScrollbar(state: LazyGridState, modifier: Modifier = Modifier, top: Dp = 0.dp, bottom: Dp = 0.dp) {
-    val geometry = remember(state) { { gridGeometry(state) } }
+    val geometry = remember(state) { val median = MedianSize(); { gridGeometry(state, median) } }
     FastScrollbar(geometry, state.isScrollInProgress, { index, offset -> state.requestScrollToItem(index, offset) }, modifier, top, bottom)
 }
 
@@ -100,7 +100,7 @@ internal class ScrollGeometry(
     }
 }
 
-internal fun listGeometry(state: LazyListState): ScrollGeometry? {
+internal fun listGeometry(state: LazyListState, median: MedianSize = MedianSize()): ScrollGeometry? {
     val info = state.layoutInfo
     val items = info.visibleItemsInfo
     val total = info.totalItemsCount
@@ -111,17 +111,18 @@ internal fun listGeometry(state: LazyListState): ScrollGeometry? {
     val contentEnd = info.viewportEndOffset - info.afterContentPadding
     val hiddenBelow = ((last.offset + last.size - contentEnd).toFloat() / last.size.coerceAtLeast(1)).coerceIn(0f, 1f)
     val below = if (!state.canScrollForward) 0f else (total - 1 - last.index) + hiddenBelow
-    return ScrollGeometry(above, below, median(items.map { it.size }), total, info.viewportSize.height,
+    median.begin()
+    for (item in items) median.add(item.size)
+    return ScrollGeometry(above, below, median.value(), total, info.viewportSize.height,
         index = { it }, sizeOf = { unit -> items.firstOrNull { it.index == unit }?.size })
 }
 
-internal fun gridGeometry(state: LazyGridState): ScrollGeometry? {
+internal fun gridGeometry(state: LazyGridState, median: MedianSize = MedianSize()): ScrollGeometry? {
     val info = state.layoutInfo
     val items = info.visibleItemsInfo
     val total = info.totalItemsCount
     if (items.isEmpty() || total == 0) return null
     val columns = info.maxSpan.coerceAtLeast(1)
-    val rows = items.groupBy { it.row }
     val first = items.firstOrNull { it.index == state.firstVisibleItemIndex } ?: items.first()
     val last = items.last()
     val above = if (!state.canScrollBackward) 0f else first.index.toFloat() / columns + (state.firstVisibleItemScrollOffset.toFloat() / first.size.height.coerceAtLeast(1)).coerceIn(0f, 1f)
@@ -129,11 +130,48 @@ internal fun gridGeometry(state: LazyGridState): ScrollGeometry? {
     val hiddenBelow = ((last.offset.y + last.size.height - contentEnd).toFloat() / last.size.height.coerceAtLeast(1)).coerceIn(0f, 1f)
     val below = if (!state.canScrollForward) 0f else (total - 1 - last.index).toFloat() / columns + hiddenBelow
     val totalRows = (total + columns - 1) / columns
-    return ScrollGeometry(above, below, median(rows.values.map { row -> row.maxOf { it.size.height } }), totalRows, info.viewportSize.height,
+    // Each row's height (its tallest item); the visible items come row by row.
+    median.begin()
+    var row = items.first().row
+    var rowHeight = 0
+    for (item in items) {
+        if (item.row != row) {
+            median.add(rowHeight)
+            row = item.row
+            rowHeight = 0
+        }
+        rowHeight = maxOf(rowHeight, item.size.height)
+    }
+    median.add(rowHeight)
+    return ScrollGeometry(above, below, median.value(), totalRows, info.viewportSize.height,
         index = { (it * columns).coerceAtMost(total - 1) }, sizeOf = { unit -> items.firstOrNull { it.index == unit * columns }?.size?.height })
 }
 
-private fun median(sizes: List<Int>): Int = sizes.sorted().let { if (it.isEmpty()) 0 else it[it.size / 2] }
+/**
+ * The median of the sizes on screen, kept from the last layout: frame after frame of a scroll the
+ * same sizes are on screen (rows the same height), so they're sorted again only when they change.
+ * Fill it with [begin] and [add], then read [value].
+ */
+internal class MedianSize {
+    private var sizes = IntArray(16)
+    private var count = 0
+    private var last = IntArray(0)
+    private var median = 0
+
+    fun begin() { count = 0 }
+
+    fun add(size: Int) {
+        if (count == sizes.size) sizes = sizes.copyOf(count * 2)
+        sizes[count++] = size
+    }
+
+    fun value(): Int {
+        if (count == last.size && (0 until count).all { sizes[it] == last[it] }) return median
+        last = sizes.copyOf(count)
+        median = if (count == 0) 0 else last.sortedArray()[count / 2]
+        return median
+    }
+}
 
 @Composable
 private fun FastScrollbar(

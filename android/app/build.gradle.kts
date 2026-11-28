@@ -95,6 +95,12 @@ kotlin {
     }
 }
 
+// Types the Compose compiler can't see are immutable (another module's, Kotlin's collections),
+// taken as stable so composables taking them skip (compose_stability.conf).
+composeCompiler {
+    stabilityConfigurationFiles.add(layout.projectDirectory.file("compose_stability.conf"))
+}
+
 dependencies {
     implementation(project(":core"))
     implementation(project(":playback"))

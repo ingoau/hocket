@@ -36,6 +36,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.system.exitProcess
 
 /**
@@ -140,10 +142,12 @@ object CoreHost {
         _credentialsReplayed.value = false
         replayJob?.cancel()
         // UNDISPATCHED: the collector is subscribed before Start is dispatched, so the first
-        // `Started` cannot slip past it.
-        replayJob = scope.launch(start = CoroutineStart.UNDISPATCHED) { replayCredentials(core, store) }
+        // `Started` cannot slip past it. Both collectors run inline on whichever thread delivers
+        // events (Unconfined: the event pump's worker for the native core) and hop to Default only for the few events they act on, so position ticks
+        // and progress never wake a pool thread here.
+        replayJob = scope.launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) { replayCredentials(core, store, Dispatchers.Default) }
         ytmJsJob?.cancel()
-        ytmJsJob = scope.launch(start = CoroutineStart.UNDISPATCHED) { serveYtmJs(core, app) }
+        ytmJsJob = scope.launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) { serveYtmJs(core, app) }
         start(core)
         _handle.value = core
         return core
@@ -166,11 +170,12 @@ object CoreHost {
             dispatch = core::dispatch,
         )
         try {
+            // [scope] (Default) runs the handling; the collector itself may be Unconfined.
             core.events.collect { event ->
                 if (event is Event.YtmJsRequest) scope.launch { host.handle(event.data.request_id, event.data.request) }
             }
         } finally {
-            withContext(NonCancellable) { host.close() }
+            withContext(NonCancellable + Dispatchers.Default) { host.close() }
         }
     }
 
@@ -218,11 +223,15 @@ object CoreHost {
      * is not replayed either. `AccountsChanged` prunes logins for servers that were
      * removed and confirms a pending setup login (saved only once the server is reachable with it);
      * `Error{auth}` drops a pending login, or removes the stored one the server now refuses.
+     *
+     * Events are collected in the caller's context; the ones acted on are handled in [work] (the
+     * keystore is slow), so the service can collect inline on the core's event thread.
      */
-    suspend fun replayCredentials(core: CoreHandle, store: ServerCredentialStore) {
+    suspend fun replayCredentials(core: CoreHandle, store: ServerCredentialStore, work: CoroutineContext = EmptyCoroutineContext) {
         var replayed = false
         core.events.collect { event ->
-            when (event) {
+            if (!replayActsOn(event)) return@collect
+            withContext<Unit>(work) { when (event) {
                 is Event.Started -> {
                     val known = event.data.snapshot.accounts
                     lastServers = known
@@ -286,8 +295,15 @@ object CoreHost {
                 // The core dropped a YouTube Music sign-in: a sign-in still held for it is void too.
                 is Event.YtmSignInExpired -> if (pendingLogin?.let { YtmLogin.isYtm(it) } == true) pendingLogin = null
                 else -> Unit
-            }
+            } }
         }
+    }
+
+    /** The events [replayCredentials] handles; everything else is skipped without leaving the collector's thread. */
+    private fun replayActsOn(event: Event): Boolean = when (event) {
+        is Event.Started, is Event.Snapshot, is Event.AccountsChanged, is Event.CredentialsSynced, is Event.YtmSignInExpired -> true
+        is Event.Error -> event.data.kind == ErrorKind.Auth
+        else -> false
     }
 
     private fun matches(server: AccountInfo, c: ServerCredential) =

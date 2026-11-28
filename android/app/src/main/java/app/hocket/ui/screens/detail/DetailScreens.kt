@@ -48,6 +48,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import app.hocket.core.api.EventLibraryChangedInner
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -283,6 +285,60 @@ internal fun Modifier.segmentItem(index: Int): Modifier = contentMaxWidth().padd
 /** How long an album page stays resumed and on screen before its first track is primed. */
 internal const val PRIME_DWELL_MS = 2_000L
 
+/** `LibraryChanged` for a refreshed cached top-songs answer; its ids are the artists'. */
+private const val TOP_SONGS = "artistTopSongs"
+
+/**
+ * Tables a detail page doesn't show: Home's live shelves, the play log (a play changes `tracks` too)
+ * and top songs (an artist's page watches those itself).
+ */
+private val DETAIL_IGNORED = setOf("home", "play_history", TOP_SONGS)
+
+/**
+ * Whether a `LibraryChanged` can change what a detail page shows. Tables in [ignored] never do. A
+ * change to `tracks` (or [TOP_SONGS]) alone that names its items, which is what a play and a
+ * stream-cache fill or eviction send, does only when [shown] holds one of them. Anything else,
+ * "everything" (no tables) included, does.
+ */
+private fun touches(change: EventLibraryChangedInner, ignored: Set<String>, shown: (String) -> Boolean): Boolean {
+    if (change.tables.isEmpty()) return true
+    val tables = change.tables.filter { it !in ignored }
+    if (tables.isEmpty()) return false
+    if (change.ids.isNotEmpty() && tables.all { it == "tracks" || it == TOP_SONGS }) return change.ids.any(shown)
+    return true
+}
+
+/**
+ * [app.hocket.core.client.CoreClient.libraryGeneration] for one page ([key]): it moves only for the
+ * changes [relevant] keeps, or for any once the client's log has lost track of them, so a page keyed
+ * on it refetches on what can change it rather than on every play, cache fill or Home refresh.
+ * Watched while started, like `collectAsStateWithLifecycle`; what changed while stopped is judged
+ * on return.
+ */
+@Composable
+private fun rememberLibraryGeneration(key: Any?, relevant: (EventLibraryChangedInner) -> Boolean): Int {
+    val client = LocalCoreClient.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val keep by rememberUpdatedState(relevant)
+    val watch = remember(client, key) { LibraryWatch(client.libraryGeneration.value) }
+    LaunchedEffect(watch, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            client.libraryGeneration.collect { now ->
+                if (now == watch.seen) return@collect
+                val changes = client.libraryChanges(after = watch.seen, upTo = now)
+                watch.seen = now
+                if (changes == null || changes.any(keep)) watch.generation.intValue++
+            }
+        }
+    }
+    return watch.generation.intValue
+}
+
+/** [rememberLibraryGeneration]'s state: the client generation judged so far, and the page's own. */
+private class LibraryWatch(var seen: Int) {
+    val generation = mutableIntStateOf(0)
+}
+
 /**
  * The album primer: once per visit, when the page has been resumed (on screen, app in front) for
  * [PRIME_DWELL_MS] without a break, ask the core to prime the album's first seconds so pressing
@@ -308,7 +364,6 @@ fun PrimeAlbumOnDwell(albumId: String) {
 fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = false) {
     val client = LocalCoreClient.current
     PrimeAlbumOnDwell(id)
-    val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     val shareKey = ArtworkShare.album(id)
     val flyingCover = flyingCoverArt(shareKey)
     // Start from the last answer for this album: a pop back here (or a second visit) has the header
@@ -322,6 +377,9 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
     // Set once the core answered without the album, or couldn't answer: the page says so.
     var unavailable by remember(id) { mutableStateOf<DetailUnavailable?>(null) }
     var attempt by remember(id) { mutableIntStateOf(0) }
+    val libraryGen = rememberLibraryGeneration(id) { change ->
+        touches(change, DETAIL_IGNORED) { item -> item == id || tracks?.any { it.id == item } != false || more.any { it.id == item } }
+    }
     LaunchedEffect(id, libraryGen, attempt) {
         val res = client.query(Queries.album(id))
         val a = (res as? QueryResult.AlbumDetail)?.data
@@ -522,7 +580,6 @@ private val ArtistViewSaver = androidx.compose.runtime.saveable.Saver<ArtistView
 @Composable
 fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = false) {
     val client = LocalCoreClient.current
-    val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     val server by client.server.collectAsStateWithLifecycle()
     val shareKey = ArtworkShare.artist(id)
     val flyingCover = flyingCoverArt(shareKey)
@@ -536,9 +593,19 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
     // albums below never jump when the songs arrive.
     var top by rememberCachedState<List<Track>?>(listOf("detail.artistTop", id)) { null }
     var about by rememberCachedState<String?>(listOf("detail.artistAbout", id)) { null }
+    // The header and the releases show no track's plays or cache state: a change naming only
+    // tracks (a play, a cache fill) leaves them as they are.
+    val infoGen = rememberLibraryGeneration(id) { change ->
+        touches(change, DETAIL_IGNORED) { item -> item == id || albums.any { it.id == item } || featured.any { it.id == item } }
+    }
+    // The top songs: their own refresh, any of them changing, and any play (with no server answer
+    // the core ranks them by local plays).
+    val topGen = rememberLibraryGeneration(id) { change ->
+        touches(change, setOf("home")) { item -> item == id || top?.any { it.id == item } != false }
+    }
     // The artist and its albums come from the local mirror: show them as soon as they are read.
     // They used to wait for the top songs too, which on a first visit means a server round trip.
-    LaunchedEffect(id, libraryGen, server?.id) {
+    LaunchedEffect(id, infoGen, server?.id) {
         val detail = client.query(Queries.artist(id)) as? QueryResult.ArtistDetail
         val ar = detail?.data
         val al = server?.id?.let { sid -> (client.query(Queries.albums("", Page(0u, 200u), app.hocket.core.api.SortOrder.Year, artistId = id)) as? QueryResult.Albums)?.data?.items }
@@ -550,7 +617,7 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
         missing = detail != null && artist == null
     }
     // Cached by the core (and refreshed behind the page), so usually as quick as the rest.
-    LaunchedEffect(id, libraryGen) {
+    LaunchedEffect(id, topGen) {
         val t = (client.query(Queries.artistTopSongs(id, ARTIST_TOP_SONGS)) as? QueryResult.TrackList)?.data
         top = t ?: top ?: emptyList()
     }
@@ -761,7 +828,6 @@ internal fun playlistEntries(tracks: List<Track>): List<PlaylistEntry> {
 @Composable
 fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = false) {
     val client = LocalCoreClient.current
-    val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     val shareKey = ArtworkShare.playlist(id)
     val flyingCover = flyingCoverArt(shareKey)
     var playlist by rememberCachedState<Playlist?>(listOf("detail.playlist", id)) { null }
@@ -775,6 +841,10 @@ fun PlaylistDetailScreen(nav: NavHostController, id: String, embedded: Boolean =
     // A page of tracks failed (after retries) with no whole list to show: the page says so, rather
     // than showing a playlist cut short.
     var incomplete by remember(id) { mutableStateOf(false) }
+    // A smart playlist's rules may follow plays of songs it doesn't hold yet: any track change counts.
+    val libraryGen = rememberLibraryGeneration(id) { change ->
+        touches(change, DETAIL_IGNORED) { item -> item == id || playlist?.isSmart != false || entries?.any { it.track.id == item } != false }
+    }
     LaunchedEffect(id, libraryGen, attempt) {
         val startedAt = commits
         val res = client.query(Queries.playlist(id))
@@ -972,9 +1042,11 @@ fun GenreDetailScreen(nav: NavHostController, name: String, embedded: Boolean = 
     val client = LocalCoreClient.current
     val server by client.server.collectAsStateWithLifecycle()
     val serverId = server?.id ?: return
-    val libraryGen by client.libraryGeneration.collectAsStateWithLifecycle()
     var albums by rememberCachedState<List<Album>?>(listOf("detail.genreAlbums", serverId, name)) { null }
     var tracks by rememberCachedState<List<Track>?>(listOf("detail.genreTracks", serverId, name)) { null }
+    val libraryGen = rememberLibraryGeneration(name) { change ->
+        touches(change, DETAIL_IGNORED) { item -> tracks?.any { it.id == item } != false || albums?.any { it.id == item } != false }
+    }
     LaunchedEffect(name, libraryGen) {
         val al = (client.query(Queries.albums("", Page(0u, 200u), app.hocket.core.api.SortOrder.Year, genre = name)) as? QueryResult.Albums)?.data?.items
         val t = (client.query(Queries.tracks("", Page(0u, 500u), app.hocket.core.api.SortOrder.Title, filter = app.hocket.core.api.FilterNode.Rule(app.hocket.core.api.FilterRule(app.hocket.core.api.FilterField.Genre, app.hocket.core.api.FilterOp.Is, app.hocket.core.api.FilterValue.Text(name))))) as? QueryResult.Tracks)?.data?.items

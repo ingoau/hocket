@@ -45,6 +45,17 @@ class ReportUploadService : Service() {
     private var bound = false
     private var foreground = false
     private var following: kotlinx.coroutines.Job? = null
+    /** The percentage the notification last showed (null: not known yet); posted again only when it changes. */
+    private var posted: Int? = null
+    private var hasPosted = false
+    /** Opens the app; made once, the same for every update. */
+    private val open by lazy {
+        PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+    }
 
     /** Holds the playback service, and with it the core: its idle stop only counts unbound apps. */
     private val coreConnection = object : ServiceConnection {
@@ -57,12 +68,18 @@ class ReportUploadService : Service() {
     override fun onCreate() {
         super.onCreate()
         bound = runCatching { bindService(PlaybackServiceConnection.bindIntent(this), coreConnection, Context.BIND_AUTO_CREATE) }.getOrDefault(false)
+        // The channel, once for the service's life (the notification is updated about once a second).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL, getString(R.string.report_upload_channel), NotificationManager.IMPORTANCE_LOW))
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (!foreground) {
             foreground = try {
                 ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(null), if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0)
+                posted = null
+                hasPosted = true
                 true
             } catch (e: Exception) {
                 // ForegroundServiceStartNotAllowedException (API 31+) and the like: the upload carries on while the app lives.
@@ -84,10 +101,17 @@ class ReportUploadService : Service() {
                     finish()
                     return@collect
                 }
+                val shown = status?.let { percent(it) }
+                // Unchanged (the same whole percent): nothing to post (nor to wait out).
+                if (hasPosted && shown == posted) return@collect
                 val manager = NotificationManagerCompat.from(this@ReportUploadService)
                 // Without the permission (API 33+) the system shows the service's own entry instead.
                 if (foreground && manager.areNotificationsEnabled()) {
-                    try { manager.notify(NOTIFICATION_ID, notification(status)) } catch (e: SecurityException) { Log.w(TAG, "couldn't update the notification") }
+                    try {
+                        manager.notify(NOTIFICATION_ID, notification(shown))
+                        posted = shown
+                        hasPosted = true
+                    } catch (e: SecurityException) { Log.w(TAG, "couldn't update the notification") }
                 }
                 // At most about once a second: the core reports far more often than that.
                 delay(UPDATE_MS)
@@ -114,17 +138,8 @@ class ReportUploadService : Service() {
         super.onDestroy()
     }
 
-    private fun notification(status: ReportUploadStatus?): android.app.Notification {
-        val manager = getSystemService(NotificationManager::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            manager.createNotificationChannel(NotificationChannel(CHANNEL, getString(R.string.report_upload_channel), NotificationManager.IMPORTANCE_LOW))
-        }
-        val open = PendingIntent.getActivity(
-            this, 0,
-            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
-        val percent = status?.let { percent(it) }
+    /** The notification at [percent] done (null while the size is not known yet). */
+    private fun notification(percent: Int?): android.app.Notification {
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.media3_notification_small_icon)
             .setContentTitle(if (percent != null) getString(R.string.report_upload_progress, percent) else getString(R.string.report_upload_starting))

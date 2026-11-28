@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * The real core: a UniFFI [HocketCore] talked to in JSON strings of the typeshare types.
@@ -27,16 +28,26 @@ import kotlinx.coroutines.launch
  * been built for this ABI.
  *
  * Events: the core calls [EventListener.onEvent] synchronously on its actor thread, so nothing there
- * may block or throw. Decoded events go into an unbounded [Channel] (never blocks, never drops) and a
- * pump coroutine forwards them into the shared [events] flow with a suspending `emit`, so a slow
- * subscriber (the main thread mid-composition) applies back-pressure to the pump, not to the core,
- * and `Started` / `ServersChanged` / `Backend` can never be dropped.
+ * may block or throw. The raw JSON goes into an unbounded [Channel] (never blocks, never drops) and a
+ * pump coroutine on [Dispatchers.Default] decodes it and forwards the event into the shared [events]
+ * flow with a suspending `emit`, so neither decoding nor a slow subscriber (the main thread
+ * mid-composition) holds up the core, and `Started` / `ServersChanged` / `Backend` can never be
+ * dropped. Query results are decoded on [Dispatchers.Default] too, never on the caller's (often Main).
  */
 class NativeCore private constructor(private val core: HocketCore) : CoreHandle, CoreStreams {
     override val kind: CoreKind = CoreKind.Native
 
     private val pumpScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val pump = EventPump(pumpScope)
+    private val pump = EventPump<String>(pumpScope) { json ->
+        // Log only the event type: a decode failure's message quotes the JSON, which for
+        // `Backend.Load` holds the stream URL with its auth token.
+        try {
+            HocketJson.decodeEvent(json)
+        } catch (t: Throwable) {
+            Log.w(TAG, undecodable(json, t))
+            null
+        }
+    }
     override val events: SharedFlow<Event> = pump.events
 
     init {
@@ -44,19 +55,11 @@ class NativeCore private constructor(private val core: HocketCore) : CoreHandle,
             override fun onEvent(eventJson: String) {
                 // Anything escaping here surfaces in Rust as a callback failure (the crate contains
                 // it, but the event would still be lost and the failure logged as a panic); catch
-                // everything, including errors, and log only the event type: a decode failure's
-                // message quotes the JSON, which for `Backend.Load` holds the stream URL with its
-                // auth token.
-                val event = try {
-                    HocketJson.decodeEvent(eventJson)
-                } catch (t: Throwable) {
-                    Log.w(TAG, undecodable(eventJson, t))
-                    return
-                }
+                // everything, including errors. Decoding happens on the pump, off the actor thread.
                 try {
-                    pump.offer(event)
+                    pump.offer(eventJson)
                 } catch (t: Throwable) {
-                    Log.w(TAG, "Dropping event ${event::class.simpleName}: ${t.javaClass.simpleName}")
+                    Log.w(TAG, "Dropping event ${eventType(eventJson)}: ${t.javaClass.simpleName}")
                 }
             }
         })
@@ -70,8 +73,12 @@ class NativeCore private constructor(private val core: HocketCore) : CoreHandle,
         }
     }
 
-    override suspend fun query(query: Query): QueryResult =
-        HocketJson.decodeQueryResult(core.query(HocketJson.encodeQuery(query)))
+    override suspend fun query(query: Query): QueryResult {
+        val json = core.query(HocketJson.encodeQuery(query))
+        // A page of tracks or a detail answer is a sizeable decode: keep it off the caller's
+        // dispatcher, which for the UI's client is Main.
+        return withContext(Dispatchers.Default) { HocketJson.decodeQueryResult(json) }
+    }
 
     // -- CoreStreams: blocking, for ExoPlayer's loader threads ------------------------------------
 
@@ -188,21 +195,22 @@ class NativeCore private constructor(private val core: HocketCore) : CoreHandle,
 
 /**
  * The hand-off from the core's actor thread to [events]: [offer] never blocks and never drops (an
- * unbounded channel), and one coroutine forwards in order with a suspending `emit`, so a slow
- * subscriber holds up this pump rather than the core, and nothing (`Started`, `ServersChanged`,
- * `Backend`) is lost to back-pressure. Like any [SharedFlow] it replays nothing to late subscribers.
+ * unbounded channel), and one coroutine (on [scope]'s dispatcher) [decode]s and forwards in order with
+ * a suspending `emit`, so decoding and a slow subscriber hold up this pump rather than the core, and
+ * nothing (`Started`, `ServersChanged`, `Backend`) is lost to back-pressure. [decode] returns null for
+ * a raw event to skip and must not throw. Like any [SharedFlow] it replays nothing to late subscribers.
  */
-internal class EventPump(scope: CoroutineScope) {
-    private val inbox = Channel<Event>(Channel.UNLIMITED)
+internal class EventPump<T : Any>(scope: CoroutineScope, private val decode: (T) -> Event?) {
+    private val inbox = Channel<T>(Channel.UNLIMITED)
     private val _events = MutableSharedFlow<Event>(extraBufferCapacity = 256)
     val events: SharedFlow<Event> = _events.asSharedFlow()
 
     init {
-        scope.launch { for (event in inbox) _events.emit(event) }
+        scope.launch { for (raw in inbox) decode(raw)?.let { _events.emit(it) } }
     }
 
     /** From any thread; false only once [close]d. */
-    fun offer(event: Event): Boolean = inbox.trySend(event).isSuccess
+    fun offer(raw: T): Boolean = inbox.trySend(raw).isSuccess
 
     fun close() {
         inbox.close()

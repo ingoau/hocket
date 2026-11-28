@@ -229,13 +229,16 @@ mod mdns_impl {
                 .name("hocket-mdns".into())
                 .spawn(move || {
                     let mut names: HashMap<String, DeviceId> = HashMap::new();
-                    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-                        let ev = match rx.recv_timeout(std::time::Duration::from_millis(500)) {
-                            Ok(ev) => ev,
-                            Err(_) if rx.is_disconnected() => break,
-                            Err(_) => continue,
-                        };
+                    // Blocks until the next event: `stop` ends the browse, which sends
+                    // `SearchStopped` and drops the sender (so does the daemon shutting
+                    // down). The flag only keeps an event already queued from being
+                    // forwarded after that.
+                    while let Ok(ev) = rx.recv() {
+                        if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
+                        }
                         match ev {
+                            ServiceEvent::SearchStopped(_) => break,
                             ServiceEvent::ServiceResolved(info) => {
                                 if let Some(advert) = advert_from(&info) {
                                     if advert.device_id == self_id {

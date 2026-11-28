@@ -172,13 +172,11 @@ impl StreamResampler {
                 let from = (first as u64 - self.base) as usize * ch;
                 let frames = &self.buf[from..from + taps * ch];
                 if ch == 2 {
-                    let (mut l, mut rr) = (0f32, 0f32);
-                    for (f, w) in frames.as_chunks::<2>().0.iter().zip(row) {
-                        l += f[0] * w;
-                        rr += f[1] * w;
-                    }
+                    let (l, rr) = dot_stereo(frames, row);
                     self.acc[0] = l;
                     self.acc[1] = rr;
+                } else if ch == 1 {
+                    self.acc[0] = dot_mono(frames, row);
                 } else {
                     for (f, w) in frames.chunks_exact(ch).zip(row) {
                         for (a, s) in self.acc.iter_mut().zip(f) {
@@ -226,6 +224,49 @@ impl StreamResampler {
             self.base += drop as u64;
         }
     }
+}
+
+/// Frames per block of the dot products below: that many independent sums per channel, so the
+/// adds don't wait on each other and the compiler can keep them in SIMD registers (NEON, SSE).
+const LANES: usize = 8;
+
+/// `Σ frames[k] × row[k]` per channel of interleaved stereo `frames`, in [`LANES`] partial sums each.
+#[inline]
+fn dot_stereo(frames: &[f32], row: &[f32]) -> (f32, f32) {
+    let (mut al, mut ar) = ([0f32; LANES], [0f32; LANES]);
+    let (blocks, rest) = frames.as_chunks::<{ 2 * LANES }>();
+    let (rows, row_rest) = row.as_chunks::<LANES>();
+    for (f, w) in blocks.iter().zip(rows) {
+        for k in 0..LANES {
+            al[k] += f[2 * k] * w[k];
+            ar[k] += f[2 * k + 1] * w[k];
+        }
+    }
+    let mut l = al.iter().sum::<f32>();
+    let mut r = ar.iter().sum::<f32>();
+    for (f, w) in rest.as_chunks::<2>().0.iter().zip(row_rest) {
+        l += f[0] * w;
+        r += f[1] * w;
+    }
+    (l, r)
+}
+
+/// `Σ frames[k] × row[k]`, in [`LANES`] partial sums.
+#[inline]
+fn dot_mono(frames: &[f32], row: &[f32]) -> f32 {
+    let mut acc = [0f32; LANES];
+    let (blocks, rest) = frames.as_chunks::<LANES>();
+    let (rows, row_rest) = row.as_chunks::<LANES>();
+    for (f, w) in blocks.iter().zip(rows) {
+        for k in 0..LANES {
+            acc[k] += f[k] * w[k];
+        }
+    }
+    let mut sum = acc.iter().sum::<f32>();
+    for (f, w) in rest.iter().zip(row_rest) {
+        sum += f * w;
+    }
+    sum
 }
 
 pub(crate) fn gcd(a: u64, b: u64) -> u64 {
@@ -435,5 +476,22 @@ mod tests {
             "{}",
             r.buf.len()
         );
+    }
+
+    /// Timing only: `cargo test --release -p hocket-android resampler_speed -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn resampler_speed() {
+        for (i, o, ch) in [
+            (44_100, 48_000, 2),
+            (96_000, 48_000, 2),
+            (44_100, 48_000, 1),
+        ] {
+            let input = sine(i as usize * 60, ch, i as f64, 440.0, 0);
+            let start = std::time::Instant::now();
+            let out = std::hint::black_box(convert(i, o, ch, &input, &[]));
+            let took = start.elapsed();
+            println!("{i} -> {o} ×{ch}: 60 s in {took:?} ({} samples)", out.len());
+        }
     }
 }

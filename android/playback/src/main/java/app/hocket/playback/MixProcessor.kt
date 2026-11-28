@@ -77,7 +77,7 @@ interface MixListener {
 
 /**
  * The mixing logic of [MixProcessor], free of Media3 so JVM tests can drive it. Works on interleaved
- * floats in direct buffers ([work] in, [output] out).
+ * floats in direct buffers ([work] in, [processed] out).
  *
  * - Each item's frames run through the DSP chain at the item's gain ([MixControl.Item.gainDb]); a
  *   new item ([startItem]) snaps the gain at its first frame, which is how ReplayGain switches at the
@@ -118,8 +118,14 @@ class TransitionMixer(
     var work: ByteBuffer = floatBuffer(4096)
         private set
 
-    /** Output floats of the last [process], from index 0. */
-    var output: ByteBuffer = floatBuffer(4096)
+    /** Output floats while a mix runs, from index 0. */
+    private var output: ByteBuffer = floatBuffer(4096)
+
+    /**
+     * Output floats of the last [process], from index 0: [work] itself when no mix ran (the chain
+     * works in place, so there is nothing to copy), else the mix's own buffer.
+     */
+    var processed: ByteBuffer = work
         private set
 
     val mixing: Boolean get() = mix != null
@@ -219,7 +225,7 @@ class TransitionMixer(
         return true
     }
 
-    /** Process [frames] input frames from [work]; returns the frames written to [output]. */
+    /** Process [frames] input frames from [work]; returns the frames written to [processed]. */
     fun process(frames: Int): Int {
         val ch = channels.coerceAtLeast(1)
         applySettings()
@@ -229,15 +235,15 @@ class TransitionMixer(
         val m = mix
         if (m == null) {
             if (chain != 0L && n > 0) dsp.chainProcess(chain, work, n * ch)
-            ensureOutput(n * ch)
-            copy(work, 0, output, 0, n * ch)
+            processed = work
             return n
         }
         var out = 0
         if (!m.prefixDone) {
             m.prefixDone = true
             ensureOutput((m.prefixFrames + n) * ch)
-            for (i in 0 until m.prefixFrames * ch) output.putFloat(i * 4, m.tail.samples[i])
+            // Every access to these buffers is absolute, so their position is 0: the view starts at index 0.
+            output.asFloatBuffer().put(m.tail.samples, 0, m.prefixFrames * ch)
             m.tailPos = m.prefixFrames
             out = m.prefixFrames
         } else {
@@ -261,6 +267,7 @@ class TransitionMixer(
             out += b
         }
         if (m.tailPos >= m.tail.frames) endMix()
+        processed = output
         return out
     }
 
@@ -312,8 +319,21 @@ class TransitionMixer(
 
         fun floatBuffer(samples: Int): ByteBuffer = ByteBuffer.allocateDirect(samples.coerceAtLeast(1) * 4).order(ByteOrder.nativeOrder())
 
+        /** [samples] floats from [from] into [to], as bytes (bit-exact); neither buffer's position moves. */
         fun copy(from: ByteBuffer, fromSample: Int, to: ByteBuffer, toSample: Int, samples: Int) {
-            for (i in 0 until samples) to.putFloat((toSample + i) * 4, from.getFloat((fromSample + i) * 4))
+            if (samples <= 0) return
+            if (from === to) {
+                // Within one buffer (only ever towards the front): forwards, a sample at a time, as
+                // a bulk put of overlapping ranges isn't promised to be.
+                for (i in 0 until samples) to.putFloat((toSample + i) * 4, from.getFloat((fromSample + i) * 4))
+                return
+            }
+            val src = from.duplicate()
+            src.limit((fromSample + samples) * 4)
+            src.position(fromSample * 4)
+            val dst = to.duplicate()
+            dst.position(toSample * 4)
+            dst.put(src)
         }
     }
 }
@@ -419,7 +439,12 @@ class MixProcessor(
         val samples = frames * format.channelCount
         val work = mixer.ensureWork(samples)
         val start = inputBuffer.position()
-        if (float) {
+        if (float && inputBuffer.order() == ByteOrder.nativeOrder()) {
+            // The same layout as [work]: the bytes as they are.
+            val bytes = inputBuffer.duplicate()
+            bytes.limit(start + samples * 4)
+            work.duplicate().put(bytes)
+        } else if (float) {
             for (i in 0 until samples) work.putFloat(i * 4, inputBuffer.getFloat(start + i * 4))
         } else {
             for (i in 0 until samples) work.putFloat(i * 4, inputBuffer.getShort(start + i * 2) / 32768f)
@@ -429,7 +454,7 @@ class MixProcessor(
         var n = frames
         if (!pass) {
             n = mixer.process(frames)
-            src = mixer.output
+            src = mixer.processed
         }
         if (rate.resampling) {
             n = rate.process(src, n)
@@ -452,7 +477,11 @@ class MixProcessor(
         val samples = frames * channels
         val out = replaceOutputBuffer(samples * if (float) 4 else 2)
         if (float) {
-            for (i in 0 until samples) out.putFloat(src.getFloat(i * 4))
+            // Native order on both sides: the bytes as they are.
+            val bytes = src.duplicate()
+            bytes.limit(samples * 4)
+            bytes.position(0)
+            out.put(bytes)
         } else {
             for (i in 0 until samples) out.putShort(toPcm16(src.getFloat(i * 4)))
         }

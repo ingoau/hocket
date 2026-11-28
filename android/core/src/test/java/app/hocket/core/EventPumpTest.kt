@@ -26,7 +26,7 @@ class EventPumpTest {
     @Test
     fun aBurstIsDeliveredCompleteAndInOrderToASlowSubscriber() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val pump = EventPump(scope)
+        val pump = EventPump<Event>(scope) { it }
         val n = 3_000
         val collected = scope.async(start = CoroutineStart.UNDISPATCHED) { pump.events.take(n).toList() }
         // A slow subscriber on top (the main thread mid-composition) must not cost anything either.

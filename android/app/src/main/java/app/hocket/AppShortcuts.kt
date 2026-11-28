@@ -48,6 +48,8 @@ object AppShortcuts {
     const val EXTRA_TOKEN = "app.hocket.extra.SHORTCUT_TOKEN"
     private const val PREFS = "hocket-shortcuts"
     private const val KEY_TOKEN = "token"
+    /** A digest of what was last published ([publish]). */
+    private const val KEY_PUBLISHED = "published"
 
     val DEFAULT = listOf(AppShortcut.Resume, AppShortcut.ShuffleLoved, AppShortcut.Search)
 
@@ -87,17 +89,35 @@ object AppShortcuts {
         return AppShortcut.entries.firstOrNull { it.id == id }
     }
 
-    /** Replaces the dynamic shortcuts with [shortcuts], in order. Pinned copies keep working. */
+    /**
+     * Replaces the dynamic shortcuts with [shortcuts], in order. Pinned copies keep working. Runs at
+     * every process start: when the launcher already has just these (the same ids, labels, which
+     * follow the language, icons, intents and this install of the app), it leaves them be.
+     */
     fun publish(context: Context, shortcuts: List<AppShortcut>) {
-        val infos = shortcuts.take(ShortcutManagerCompat.getMaxShortcutCountPerActivity(context).coerceAtLeast(1)).mapIndexed { rank, s ->
+        val chosen = shortcuts.take(ShortcutManagerCompat.getMaxShortcutCountPerActivity(context).coerceAtLeast(1))
+        val labels = chosen.map { context.getString(it.label) }
+        // An update (or a reinstall) can move the icons' resources: it publishes afresh.
+        val installed = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime }.getOrDefault(0L)
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(chosen.indices.joinToString("\n", postfix = "\n$installed\n${token(context)}") { "${chosen[it].id}\t${labels[it]}\t${chosen[it].icon}" }.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        // (Checked against the launcher too, in case something else cleared them.)
+        val live = runCatching { ShortcutManagerCompat.getDynamicShortcuts(context).map { it.id }.toSet() }.getOrNull()
+        if (prefs.getString(KEY_PUBLISHED, null) == digest && live == chosen.map { it.id }.toSet()) return
+        val infos = chosen.mapIndexed { rank, s ->
             ShortcutInfoCompat.Builder(context, s.id)
-                .setShortLabel(context.getString(s.label))
+                .setShortLabel(labels[rank])
                 .setIcon(IconCompat.createWithResource(context, s.icon))
                 .setIntent(intent(context, s))
                 .setRank(rank)
                 .build()
         }
-        runCatching { ShortcutManagerCompat.setDynamicShortcuts(context, infos) }
+        // (False when rate limited: then it's tried again next time.)
+        if (runCatching { ShortcutManagerCompat.setDynamicShortcuts(context, infos) }.getOrDefault(false)) {
+            prefs.edit().putString(KEY_PUBLISHED, digest).apply()
+        }
     }
 }
 

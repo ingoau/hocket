@@ -45,6 +45,7 @@ import app.hocket.core.api.BackendReportTransitionStartedInner
 import app.hocket.core.api.BackendReportTransitionedToNextInner
 import app.hocket.core.api.Command
 import app.hocket.core.api.MediaSource as CoreMediaSource
+import app.hocket.core.api.NetworkKind
 import app.hocket.core.api.Query
 import app.hocket.core.api.QueryResult
 import app.hocket.core.api.QueueView
@@ -123,7 +124,8 @@ import kotlin.math.roundToInt
  *   change, which is how the core's burst fetch finishing a track, or an eviction, shows up; a "no"
  *   wins over the resolve-time flag) the wake lock alone does ([C.WAKE_MODE_LOCAL], [wakeModeFor]):
  *   the high-performance Wi-Fi lock keeps the Wi-Fi radio out of power save, which costs battery for
- *   nothing when no byte comes over the network.
+ *   nothing when no byte comes over the network. The same goes for a stream while the default
+ *   network is mobile data ([onNetworkKindChanged]): its bytes don't come over Wi-Fi either.
  * - `Paused` is reported only when the player no longer means to play (`playWhenReady` false: a
  *   pause, becoming noisy, a lasting focus loss). A stall with `playWhenReady` still set (an empty
  *   buffer, a load being retried, an error being recovered from) is `Buffering`, never `Paused`: the
@@ -227,10 +229,11 @@ class ExoBackend(
          */
         /**
          * The wake mode for the current item and the one after it (null: none) by whether each is on
-         * the device: [C.WAKE_MODE_LOCAL] when every one is, else [C.WAKE_MODE_NETWORK].
+         * the device: [C.WAKE_MODE_LOCAL] when every one is, or when the default network is
+         * [cellular] (a Wi-Fi lock carries no byte then), else [C.WAKE_MODE_NETWORK].
          */
-        internal fun wakeModeFor(current: Boolean, next: Boolean?): Int =
-            if (current && next != false) C.WAKE_MODE_LOCAL else C.WAKE_MODE_NETWORK
+        internal fun wakeModeFor(current: Boolean, next: Boolean?, cellular: Boolean = false): Int =
+            if (cellular || (current && next != false)) C.WAKE_MODE_LOCAL else C.WAKE_MODE_NETWORK
 
         internal fun stall(playWhenReady: Boolean, playbackState: Int): Stall = when {
             !playWhenReady -> if (playbackState == Player.STATE_IDLE || playbackState == Player.STATE_ENDED) Stall.Nothing else Stall.Paused
@@ -336,6 +339,8 @@ class ExoBackend(
     /** Connectivity as the service last reported it; a retry waits while this is false. */
     @Volatile
     private var online = true
+    /** The default network is mobile data ([onNetworkKindChanged]): streams need no Wi-Fi lock. */
+    private var cellular = false
     /** The wake mode set on the main player ([updateWakeMode]). */
     internal var wakeMode = C.WAKE_MODE_NETWORK
         private set
@@ -585,6 +590,16 @@ class ExoBackend(
         recoveryJob?.cancel()
         recoveryAttempts = 0
         attemptRecovery(key)
+    }
+
+    /**
+     * The default network's kind as the service sees it: on mobile data the wake mode drops the
+     * Wi-Fi lock ([wakeModeFor]); on anything else (Wi-Fi, Ethernet, unknown, offline) it is what
+     * the items need.
+     */
+    fun onNetworkKindChanged(kind: NetworkKind) {
+        cellular = kind == NetworkKind.Cellular
+        updateWakeMode()
     }
 
     /**
@@ -1367,7 +1382,7 @@ class ExoBackend(
         val index = player.currentMediaItemIndex
         if (player.mediaItemCount == 0 || index !in 0 until player.mediaItemCount) return
         val next = (index + 1).takeIf { it < player.mediaItemCount }?.let { isLocal(player.getMediaItemAt(it)) }
-        val mode = wakeModeFor(isLocal(player.getMediaItemAt(index)), next)
+        val mode = wakeModeFor(isLocal(player.getMediaItemAt(index)), next, cellular)
         if (mode == wakeMode) return
         PlaybackLog.i("wake mode ${if (mode == C.WAKE_MODE_LOCAL) "local (no Wi-Fi lock)" else "network"}")
         wakeMode = mode

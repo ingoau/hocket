@@ -92,6 +92,7 @@ import kotlinx.coroutines.flow.collectLatest
 import androidx.compose.ui.layout.onSizeChanged
 import app.hocket.core.client.CoreClient
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.delay
 import kotlin.math.abs
 
 /**
@@ -278,14 +279,16 @@ private fun SkipButton(onClick: () -> Unit, label: String, icon: ImageVector, co
  * back to the old one. Elapsed and remaining time sit underneath, with [centre] (a status line)
  * between them.
  *
- * [position] is read in the draw phase only; the rest of the bar changes once a second at most.
+ * [position] is read in the draw phase only; the rest of the bar changes once a second at most
+ * (its accessibility node and the times, each in its own scope). While not [shown] (composed under
+ * something that hides it) the wave stands still and the thumb steps.
  *
  * Accessibility: one adjustable node, "Playback position, 1 minute 32 seconds of 3 minutes 32
  * seconds", with a range in whole seconds (so it changes at most once a second, never per frame)
  * and `setProgress` for the screen reader's adjust gestures.
  */
 @Composable
-fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek: (Long) -> Unit, modifier: Modifier = Modifier, stillWave: Boolean = false, advancing: Boolean = playing, centre: (@Composable () -> Unit)? = null, timesFold: () -> Float = { 0f }) {
+fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek: (Long) -> Unit, modifier: Modifier = Modifier, stillWave: Boolean = false, advancing: Boolean = playing, centre: (@Composable () -> Unit)? = null, timesFold: () -> Float = { 0f }, shown: Boolean = true) {
     val density = LocalDensity.current
     val haptics = LocalHapticFeedback.current
     val currentPosition by rememberUpdatedState(position)
@@ -298,8 +301,9 @@ fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek
     // couple of pixels (a short track), the bar runs on at real speed towards where the next tick
     // will be ([advancing]: playing), so it neither steps nor trails the lyrics by a tick; paused, it
     // eases back the little it ran ahead. On a long track it steps (a pixel or less) and nothing
-    // animates between ticks.
+    // animates between ticks; nor while the bar isn't [shown].
     val currentAdvancing by rememberUpdatedState(advancing)
+    val currentShown by rememberUpdatedState(shown)
     var widthPx by remember { mutableIntStateOf(0) }
     val smoothed = remember { Animatable(position().toFloat()) }
     LaunchedEffect(Unit) {
@@ -309,7 +313,7 @@ fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek
             val tickPx = if (duration > 0) widthPx * tick.toFloat() / duration else 0f
             val gap = ms - smoothed.value
             when {
-                tickPx <= SMOOTH_STEP_PX || abs(gap) > 2f * tick -> smoothed.snapTo(ms.toFloat())
+                tickPx <= SMOOTH_STEP_PX || abs(gap) > 2f * tick || !currentShown -> smoothed.snapTo(ms.toFloat())
                 currentAdvancing -> {
                     val target = (ms + tick).coerceAtMost(duration).toFloat()
                     val runMs = (target - smoothed.value).toInt()
@@ -330,27 +334,26 @@ fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek
     }
     val seek: (Long) -> Unit = { ms -> pending = ms; onSeek(ms) }
     val amplitude by animateFloatAsState(if (playing && dragFraction == null) 1f else 0f, tween(400), label = "waveAmplitude")
-    val label = stringResource(R.string.player_seek_a11y)
-    val resources = androidx.compose.ui.platform.LocalResources.current
-    // Whole seconds: the semantics and the labels move once a second at most.
+    // The wave travels only where that can be seen: not with battery saver's still wave, not while
+    // the bar isn't [shown], and not once it has lain flat (paused, or dragging) for
+    // [WAVE_FLAT_SETTLE_MS]. Stopping it resets its phase, which only an unseen or flat wave hides.
+    val flat by remember { derivedStateOf { amplitude == 0f } }
+    var flatSettled by remember { mutableStateOf(false) }
+    LaunchedEffect(flat) {
+        flatSettled = false
+        if (flat) {
+            delay(WAVE_FLAT_SETTLE_MS)
+            flatSettled = true
+        }
+    }
+    val travelling = !stillWave && shown && !(flat && flatSettled)
+    // Whole seconds: the semantics and the labels move once a second at most (and recompose only
+    // themselves).
     val positionS by remember { derivedStateOf { (shownMs() / 1000).coerceAtLeast(0) } }
-    val durationS = (durationMs / 1000).coerceAtLeast(0)
-    val state = remember(positionS, durationS) { Spoken.position(resources, positionS * 1000, durationS * 1000) }
     val active = MaterialTheme.colorScheme.primary
     val track = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
     Column(modifier.fillMaxWidth()) {
-    Box(
-        Modifier.fillMaxWidth().testTag("player.seekBar").clearAndSetSemantics {
-            contentDescription = label
-            stateDescription = state
-            progressBarRangeInfo = ProgressBarRangeInfo(positionS.toFloat().coerceAtMost(durationS.toFloat()), 0f..durationS.toFloat().coerceAtLeast(1f), steps = 0)
-            setProgress(label) { value ->
-                if (durationMs <= 0) return@setProgress false
-                seek((value.coerceIn(0f, durationS.toFloat()) * 1000).toLong())
-                true
-            }
-        },
-    ) {
+    SeekSemantics({ positionS }, durationMs, seek) {
         Box(
             Modifier
                 .fillMaxWidth()
@@ -409,13 +412,39 @@ fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek
                 gapSize = 8.dp,
                 amplitude = { amplitude },
                 wavelength = 32.dp,
-                // Battery saver: the wave keeps its shape but stops travelling (no frame per vsync).
-                waveSpeed = if (stillWave) 0.dp else 32.dp,
+                // Battery saver: the wave keeps its shape but stops travelling (no frame per vsync);
+                // so does a wave that can't be seen to travel ([travelling]).
+                waveSpeed = if (travelling) 32.dp else 0.dp,
             )
         }
     }
-    SeekTimes(positionS * 1000, durationMs, centre, timesFold)
+    SeekTimes({ positionS * 1000 }, durationMs, centre, timesFold)
     }
+}
+
+/**
+ * The seek bar's one accessibility node, round [content]: its own scope, so the position's whole
+ * seconds ([positionS]) recompose only this and not the bar.
+ */
+@Composable
+private fun SeekSemantics(positionS: () -> Long, durationMs: Long, seek: (Long) -> Unit, content: @Composable () -> Unit) {
+    val label = stringResource(R.string.player_seek_a11y)
+    val resources = androidx.compose.ui.platform.LocalResources.current
+    val position = positionS()
+    val durationS = (durationMs / 1000).coerceAtLeast(0)
+    val state = remember(position, durationS) { Spoken.position(resources, position * 1000, durationS * 1000) }
+    Box(
+        Modifier.fillMaxWidth().testTag("player.seekBar").clearAndSetSemantics {
+            contentDescription = label
+            stateDescription = state
+            progressBarRangeInfo = ProgressBarRangeInfo(position.toFloat().coerceAtMost(durationS.toFloat()), 0f..durationS.toFloat().coerceAtLeast(1f), steps = 0)
+            setProgress(label) { value ->
+                if (durationMs <= 0) return@setProgress false
+                seek((value.coerceIn(0f, durationS.toFloat()) * 1000).toLong())
+                true
+            }
+        },
+    ) { content() }
 }
 
 /**
@@ -423,7 +452,8 @@ fun WavySeekBar(position: () -> Long, durationMs: Long, playing: Boolean, onSeek
  * The times are read by the seek bar's own node, so they stay out of the accessibility tree.
  */
 @Composable
-private fun SeekTimes(positionMs: Long, durationMs: Long, centre: (@Composable () -> Unit)?, fold: () -> Float) {
+private fun SeekTimes(position: () -> Long, durationMs: Long, centre: (@Composable () -> Unit)?, fold: () -> Float) {
+    val positionMs = position()
     val style = MaterialTheme.typography.labelMedium
     val color = MaterialTheme.colorScheme.onSurfaceVariant
     val remaining = stringResource(R.string.player_remaining, formatClock((durationMs - positionMs).coerceAtLeast(0)))
@@ -464,6 +494,13 @@ private const val SEEK_HOLD_MS = 2_500L
 
 /** A progress tick that moves the seek bar's thumb further than this eases there instead of stepping. */
 private const val SMOOTH_STEP_PX = 2f
+
+/**
+ * How long the seek bar's wave lies flat before it stops travelling: Material's indicator eases its
+ * own amplitude after ours (500 ms a step, and it may finish the step it is in first), so by then it
+ * is flat too.
+ */
+private const val WAVE_FLAT_SETTLE_MS = 1_200L
 
 /** How long the seek bar takes to settle back onto a paused position it had run ahead of. */
 private const val SEEK_SETTLE_MS = 150

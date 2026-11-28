@@ -129,7 +129,13 @@ class PlaybackService : MediaLibraryService() {
         val player = CoreSessionPlayer(Looper.getMainLooper(), ::dispatch, media = browser, artwork = { t -> t.coverArt?.let { ArtworkProvider.uri(this, it) } }, sessionArtwork = { ArtworkProvider.fileUri(this, it) })
         bridge = MediaSessionBridge(this, player, ::dispatch, launch, browser, scope, ExternalControl(this), ::holdForResumption)
         addSession(bridge.session)
-        network = NetworkMonitor(this, ::dispatch, onConnectivity = { online -> main.post { backend.onConnectivityChanged(online) } })
+        network = NetworkMonitor(
+            this,
+            ::dispatch,
+            onConnectivity = { online -> main.post { backend.onConnectivityChanged(online) } },
+            // Posted before onDestroy but run after: the player is released.
+            onKind = { kind -> main.post { if (scope.isActive) backend.onNetworkKindChanged(kind) } },
+        )
         battery = BatterySaverMonitor(this, ::dispatch)
         pebble = PebbleBridge(this, { core }, { serverId }, scope)
         // Subscribed before the snapshot is requested, so its `Started` cannot be missed. Collected
@@ -212,15 +218,18 @@ class PlaybackService : MediaLibraryService() {
 
     private fun startCast() {
         val provider = CastDevices.provider ?: return
-        val controller = runCatching {
-            provider.create(this, scope, ::dispatch, object : CastListener {
+        runCatching {
+            val listener = object : CastListener {
                 override fun onSessionStarted(renderer: Renderer) = main.post { castTo(renderer) }.let { }
                 override fun onSessionEnded(error: String?, stoppedHere: Boolean, reconnecting: Boolean) =
                     main.post { castEnded(error, stoppedHere, reconnecting) }.let { }
-            })
-        }.onFailure { PlaybackLog.w("cast unavailable: ${it.message}") }.getOrNull()
-        cast = controller
-        CastDevices.attach(controller)
+            }
+            // Ready a moment later, on main and only while the service lives: until then nothing casts.
+            provider.create(this, scope, ::dispatch, listener) { controller ->
+                cast = controller
+                CastDevices.attach(controller)
+            }
+        }.onFailure { PlaybackLog.w("cast unavailable: ${it.message}") }
     }
 
     /**

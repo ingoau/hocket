@@ -237,6 +237,9 @@ pub(crate) struct Actor {
     pub library_records: Vec<crate::library::LibraryRecord>,
     /// Track and position the next local load should land on (album resume).
     pub pending_resume_at: Option<(TrackRef, Ms)>,
+    /// An album resume write failed: the next one rewrites the whole set, so a lost row
+    /// heals as the old whole-list save did.
+    pub album_resume_resave: bool,
     /// When the oldest offered album resume point expires (re-announced from the tick).
     pub album_resume_expires_at: Option<crate::api::EpochMs>,
     /// The last `TransportChanged`, `MediaSession` and `DevicesChanged`
@@ -595,6 +598,7 @@ impl Actor {
             album_resumes: vec![],
             library_records: vec![],
             pending_resume_at: None,
+            album_resume_resave: false,
             album_resume_expires_at: None,
             emitted_transport: None,
             emitted_media_session: None,

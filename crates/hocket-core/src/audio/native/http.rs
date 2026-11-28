@@ -81,9 +81,11 @@ impl Default for ReqwestFetcher {
         // Audio bytes as the server has them: ranges count those. A dead
         // host fails fast instead of waiting out the OS connect timeout, and
         // a redirect never carries the Subsonic token to another host (as
-        // the core's own clients).
+        // the core's own clients). HTTP/1.1 only, like the stream reader's
+        // upstream: each read has a connection to itself.
         Self::new(
             reqwest::Client::builder()
+                .http1_only()
                 .no_gzip()
                 .no_brotli()
                 .connect_timeout(std::time::Duration::from_secs(15))

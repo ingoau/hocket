@@ -233,7 +233,8 @@ object Queries {
     fun filterPreview(filter: Filter) = Query.FilterPreview(QueryFilterPreviewInner(filter))
     fun setting(key: String) = Query.Setting(QuerySettingInner(key))
     fun actions(surface: String, target: ActionTarget) = Query.Actions(QueryActionsInner(surface, target))
-    fun artwork(id: String, size: Int) = Query.Artwork(QueryArtworkInner(id, size.toUInt()))
+    /** [display]: only shown, so a cached copy a little larger does (see `Query::Artwork`). */
+    fun artwork(id: String, size: Int, display: Boolean = false) = Query.Artwork(QueryArtworkInner(id, size.toUInt(), display))
     fun mediaSource(trackId: TrackId) = Query.MediaSource(QueryMediaSourceInner(trackId))
     fun configDocument(includeSecrets: Boolean) = Query.ConfigDocument(QueryConfigDocumentInner(includeSecrets))
     fun createShare(ids: List<String>) = Query.CreateShare(QueryCreateShareInner(ids))

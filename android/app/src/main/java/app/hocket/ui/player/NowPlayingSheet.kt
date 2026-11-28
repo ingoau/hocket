@@ -586,6 +586,9 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         val flying by remember(state, panelMode) { derivedStateOf { shownMode() == PlayerMode.Artwork && state.progress.let { it > FLY_EPSILON && it < 1f - FLY_EPSILON } } }
         // Whether the full player's backdrop shows at all ([backgroundAlpha] is 0 up to 0.1).
         val backdropShown by remember(state) { derivedStateOf { backgroundAlpha(state.progress) > 0f } }
+        // Whether the full player's controls show at all ([controlsAlpha] is 0 up to 0.15): while
+        // they don't, the seek bar's wave and the title's marquee hold still.
+        val controlsShown by remember(state) { derivedStateOf { controlsAlpha(state.progress) > 0f } }
 
         // Scrim behind the sheet (a pointer affordance only: the collapse button and the sheet's
         // collapse/dismiss actions are the accessible way out).
@@ -867,7 +870,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                             Modifier
                                 .fillMaxSize()
                                 .graphicsLayer {
-                                    alpha = ((state.progress - 0.15f) * 4f).coerceIn(0f, 1f)
+                                    alpha = controlsAlpha(state.progress)
                                     // Over an immersive artwork in flight the controls are wiped with its
                                     // continuation (below), so they never sit on the bare backdrop.
                                     compositingStrategy = if (artworkLayout != null && flying) CompositingStrategy.Offscreen else CompositingStrategy.Auto
@@ -905,6 +908,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                                 headerAlpha = { HeroGeometry.headerAlpha(state.progress) },
                                 swipeUp = queuePull,
                                 swipeUpAction = swipeUp,
+                                shown = { controlsShown },
                             )
                         }
                     }
@@ -1015,6 +1019,9 @@ private const val FLY_EPSILON = 0.002f
 
 /** The backdrop's opacity for a sheet progress (Metrolist). */
 private fun backgroundAlpha(p: Float): Float = (1.4f * sqrt((p.coerceAtLeast(0.1f) - 0.1f))).coerceIn(0f, 1f)
+
+/** The full player's controls' opacity for a sheet progress: nothing up to 0.15, then quickly opaque. */
+private fun controlsAlpha(p: Float): Float = ((p - 0.15f) * 4f).coerceIn(0f, 1f)
 
 /** A moving sheet's top corners (Material's extra-large shape, as a bottom sheet being dragged keeps). */
 private val SHEET_CORNER = 20.dp

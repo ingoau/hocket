@@ -1,6 +1,7 @@
 package app.hocket
 
 import android.content.Context
+import com.google.mlkit.common.sdkinternal.MlKitContext
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
@@ -17,8 +18,12 @@ internal object SetupScanner {
     fun scan(context: Context, onResult: (String) -> Unit, onError: () -> Unit) {
         val options = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
         // getClient and startScan throw rather than fail the task when ML Kit can't set itself up;
-        // that is a failed scan, not a crash.
-        val scan = runCatching { GmsBarcodeScanning.getClient(context, options).startScan() }
+        // that is a failed scan, not a crash. ML Kit is set up here, on the first scan, not at every
+        // process start (the manifest removes its init provider).
+        val scan = runCatching {
+            MlKitContext.initializeIfNeeded(context)
+            GmsBarcodeScanning.getClient(context, options).startScan()
+        }
             .getOrElse { e ->
                 android.util.Log.w("SetupScanner", "code scanner failed to start", e)
                 onError()

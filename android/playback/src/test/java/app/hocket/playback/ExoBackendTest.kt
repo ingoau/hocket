@@ -109,6 +109,13 @@ class ExoBackendTest {
         assertEquals(androidx.media3.common.C.WAKE_MODE_NETWORK, ExoBackend.wakeModeFor(false, true))
     }
 
+    @Test
+    fun wakeModeForDropsTheWifiLockOnMobileData() {
+        assertEquals(androidx.media3.common.C.WAKE_MODE_LOCAL, ExoBackend.wakeModeFor(false, false, cellular = true))
+        assertEquals(androidx.media3.common.C.WAKE_MODE_LOCAL, ExoBackend.wakeModeFor(true, false, cellular = true))
+        assertEquals(androidx.media3.common.C.WAKE_MODE_NETWORK, ExoBackend.wakeModeFor(false, null, cellular = false))
+    }
+
     @Before
     fun setUp() {
         backend = ExoBackend(ApplicationProvider.getApplicationContext(), scope, { dispatched += it })

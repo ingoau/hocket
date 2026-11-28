@@ -61,6 +61,11 @@ pub enum JobError {
 
 pub type JobResult<T> = Result<T, JobError>;
 
+/// How long the scheduler sleeps unwoken (see [`JobQueue::start`]).
+const SCHEDULER_FALLBACK: std::time::Duration = std::time::Duration::from_secs(60);
+/// How soon it tries again after a pass failed on the database.
+const SCHEDULER_RETRY: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// What a job is asked to do.
 #[derive(Debug, Clone)]
 pub struct JobSpec {
@@ -640,16 +645,25 @@ impl JobQueue {
     // -- scheduling ---------------------------------------------------------
 
     /// Spawn the scheduler loop on the runtime. Returns immediately.
+    ///
+    /// It sleeps until woken: every change that can let a job start (a submit, a recover, a
+    /// registration, a retry or resume, a hold changing, a job finishing and freeing its slot)
+    /// notifies it, and nothing becomes runnable by time alone. The long fallback is only a
+    /// safety net; a pass that failed on the database is retried soon.
     pub fn start(&self, handle: &tokio::runtime::Handle) {
         let q = self.clone();
         handle.spawn(async move {
             loop {
-                if let Err(e) = q.schedule_once() {
-                    tracing::error!(error = %e, "job scheduler");
-                }
+                let wait = match q.schedule_once() {
+                    Ok(()) => SCHEDULER_FALLBACK,
+                    Err(e) => {
+                        tracing::error!(error = %e, "job scheduler");
+                        SCHEDULER_RETRY
+                    }
+                };
                 tokio::select! {
                     _ = q.inner.notify.notified() => {}
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {}
+                    _ = tokio::time::sleep(wait) => {}
                 }
             }
         });
@@ -1412,6 +1426,41 @@ mod tests {
         q.run_until_idle().await.unwrap();
         assert_eq!(q.job(&good).unwrap().unwrap().state, JobState::Done);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_scheduler_starts_jobs_when_woken_not_by_polling() {
+        let q = queue();
+        q.register(JobKind::Download, 1, item_runner(20));
+        q.set_hold(JobKind::BulkRating, Some(JobWait::Offline));
+        q.register(JobKind::BulkRating, 1, item_runner(0));
+        q.start(&tokio::runtime::Handle::current());
+        let t0 = tokio::time::Instant::now();
+        // Three jobs for one slot: each waits for the one before to finish.
+        let ids: Vec<_> = (0..3)
+            .map(|i| {
+                q.submit(JobSpec::new(JobKind::Download, format!("dl {i}")).items(vec!["a".into()]))
+                    .unwrap()
+            })
+            .collect();
+        let held = q
+            .submit(JobSpec::new(JobKind::BulkRating, "held").items(vec!["r".into()]))
+            .unwrap();
+        let state = |id: &str| q.job(id).unwrap().unwrap().state;
+        while ids.iter().any(|id| state(id) != JobState::Done) {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert_eq!(state(&held), JobState::Queued);
+        q.set_hold(JobKind::BulkRating, None);
+        while state(&held) != JobState::Done {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        // Virtual time: the 60 s fallback never had to fire.
+        assert!(
+            t0.elapsed() < std::time::Duration::from_secs(1),
+            "{:?}",
+            t0.elapsed()
+        );
     }
 
     #[tokio::test]

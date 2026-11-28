@@ -36,13 +36,19 @@ use crate::util::Clock;
 
 /// The fixed artwork sizes. Requests snap up to the nearest.
 pub const IMAGE_SIZES: [u32; 5] = [64, 160, 320, 640, 1280];
+/// How many times the asked size a cached copy may be to stand in for a
+/// display-only ask (`Query::Artwork { display }`): scaled down on screen it
+/// looks the same, and decoding it costs little more.
+pub const DISPLAY_LARGER_MAX: u32 = 4;
 /// The sizes a download keeps its covers at, so downloaded music shows art
 /// offline in the places each platform draws it (Android: rows, grids, the
 /// mini and full player; desktop: rows, grids, the player).
 pub fn download_cover_sizes(platform: crate::api::Platform) -> &'static [u32] {
     use crate::api::Platform;
     match platform {
-        Platform::Android => &[64, 160, 320, 640],
+        // No 64: rows show the 160 one scaled down (a display ask takes a
+        // larger copy). 320 stays, as the player reads that one's pixels.
+        Platform::Android => &[160, 320, 640],
         Platform::Linux | Platform::MacOs | Platform::Windows => &[64, 320, 1280],
         Platform::Coordinator => &[],
     }
@@ -166,6 +172,13 @@ struct Inner {
     /// it is stale, a fetch under budget once those are set aside skips the
     /// eviction scan.
     kept_bytes: parking_lot::Mutex<Option<(f64, f64)>>,
+    /// Bytes of every cached image, counted once ([`Caches::images_bytes`])
+    /// and kept up as covers come and go, so a fetch's budget check needs
+    /// no scan. Rows that go another way (a vanished file, a mirror reset)
+    /// leave it high, which only brings the next scan, which recounts.
+    /// Held while a fetch adds its row and while a scan counts and evicts,
+    /// so a count never misses a row added meanwhile.
+    image_bytes: parking_lot::Mutex<Option<f64>>,
 }
 
 type ArtFetch = futures::future::BoxFuture<'static, Result<Option<PathBuf>, Arc<CacheError>>>;
@@ -189,6 +202,7 @@ impl Caches {
                 keeping_covers: Default::default(),
                 keeping_lyrics: Default::default(),
                 kept_bytes: Default::default(),
+                image_bytes: Default::default(),
             }),
         }
     }
@@ -340,6 +354,7 @@ impl Caches {
             Err(e) => return Err(e.into()),
         };
         let now = self.now();
+        let mut image_bytes = self.inner.image_bytes.lock();
         self.inner.db.with_conn(|c| {
             c.execute(
                 "INSERT INTO image_cache(server_id, image_id, size, path, bytes, content_type, fetched_at, last_used_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
@@ -348,21 +363,33 @@ impl Caches {
             )?;
             Ok(())
         })?;
+        // A row replaced counts twice: high, which is safe.
+        if let Some(total) = image_bytes.as_mut() {
+            *total += out.bytes as f64;
+        }
+        drop(image_bytes);
         self.enforce_image_budget()?;
         Ok(Some(dest))
     }
 
-    /// Data saver: the cached file for [image_id] at the smallest size at
-    /// least [size] (it scales down cleanly), so a cover already on the
-    /// device is not fetched again at another size.
+    /// The cached file for [image_id] at the smallest size at least [size]
+    /// and at most [max_times] that (it scales down cleanly), so a cover
+    /// already on the device is not fetched again at another size: any
+    /// larger one under data saver, a little larger for display.
     pub fn artwork_cached_larger(
         &self,
         server_id: &str,
         image_id: &str,
         size: u32,
+        max_times: u32,
     ) -> DbResult<Option<PathBuf>> {
         let size = snap_size(size);
-        for s in IMAGE_SIZES.iter().copied().filter(|s| *s >= size) {
+        let max = size.saturating_mul(max_times);
+        for s in IMAGE_SIZES
+            .iter()
+            .copied()
+            .filter(|s| *s >= size && *s <= max)
+        {
             if let Some(p) = self.artwork_cached(server_id, image_id, s)? {
                 return Ok(Some(p));
             }
@@ -590,7 +617,11 @@ impl Caches {
     /// they belong to the downloads, as the audio does.
     pub fn enforce_image_budget(&self) -> DbResult<usize> {
         let budget = *self.inner.image_budget.read();
-        let total = self.images_bytes()?;
+        let mut image_bytes = self.inner.image_bytes.lock();
+        let total = match *image_bytes {
+            Some(t) => t,
+            None => *image_bytes.insert(self.images_bytes()?),
+        };
         if total <= budget {
             return Ok(0);
         }
@@ -609,7 +640,8 @@ impl Caches {
         let (kept_rows, victims): (Vec<_>, Vec<_>) = victims
             .into_iter()
             .partition(|(sid, iid, ..)| kept.contains(&(sid.clone(), iid.clone())));
-        *self.inner.kept_bytes.lock() = Some((kept_rows.iter().map(|v| v.4).sum(), now));
+        let kept_bytes: f64 = kept_rows.iter().map(|v| v.4).sum();
+        *self.inner.kept_bytes.lock() = Some((kept_bytes, now));
         let mut total: f64 = victims.iter().map(|v| v.4).sum();
         let mut removed = 0;
         for (sid, iid, size, path, bytes) in victims {
@@ -633,11 +665,16 @@ impl Caches {
             total -= bytes;
             removed += 1;
         }
+        // Counted afresh by the scan: what is kept plus what is left.
+        *image_bytes = Some(kept_bytes + total);
         Ok(removed)
     }
 
     /// Drops every cached image but the covers of downloads.
     pub fn clear_images(&self) -> DbResult<usize> {
+        let mut image_bytes = self.inner.image_bytes.lock();
+        // Counted again on the next fetch.
+        *image_bytes = None;
         let kept = self.kept_covers()?;
         let rows: Vec<(String, String, i64, String)> = self.inner.db.with_conn(|c| {
             let mut st =
@@ -1138,8 +1175,70 @@ mod tests {
             "b was least recently used"
         );
         assert_eq!(caches.images_bytes().unwrap(), 200.0);
+        assert_eq!(*caches.inner.image_bytes.lock(), Some(200.0));
         assert_eq!(caches.clear_images().unwrap(), 2);
         assert_eq!(caches.images_bytes().unwrap(), 0.0);
+        assert_eq!(*caches.inner.image_bytes.lock(), None, "counted again");
+    }
+
+    /// The budget check counts the table once, then keeps the count up; a
+    /// row gone behind its back leaves it high until a scan recounts.
+    #[tokio::test]
+    async fn image_bytes_are_counted_once_and_kept_up() {
+        let (_dir, db, caches, _clock, server) = fixture();
+        for id in ["a", "b", "c", "d"] {
+            server.set_media(id, vec![0u8; 100]);
+        }
+        caches.set_image_budget(250.0);
+        let p: Arc<dyn Provider> = Arc::new(server.provider());
+        caches.artwork_path(p.clone(), "a", 64).await.unwrap();
+        caches.artwork_path(p.clone(), "b", 64).await.unwrap();
+        assert_eq!(*caches.inner.image_bytes.lock(), Some(200.0));
+        db.with_conn(|c| {
+            c.execute("DELETE FROM image_cache WHERE image_id = 'a'", [])?;
+            Ok(())
+        })
+        .unwrap();
+        caches.artwork_path(p.clone(), "c", 64).await.unwrap();
+        // Counted 300 (really 200): over, so a scan ran, recounted and
+        // found nothing to evict.
+        assert_eq!(*caches.inner.image_bytes.lock(), Some(200.0));
+        assert!(caches.artwork_cached("srv", "b", 64).unwrap().is_some());
+        caches.artwork_path(p, "d", 64).await.unwrap();
+        assert_eq!(*caches.inner.image_bytes.lock(), Some(200.0));
+        assert_eq!(caches.images_bytes().unwrap(), 200.0);
+        assert!(caches.artwork_cached("srv", "b", 64).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn larger_copies_stand_in_up_to_a_limit() {
+        let (_dir, _db, caches, _clock, server) = fixture();
+        server.set_media("al-1", vec![1u8; 10]);
+        let p: Arc<dyn Provider> = Arc::new(server.provider());
+        let big = caches.artwork_path(p, "al-1", 1280).await.unwrap().unwrap();
+        let larger = |size, max| {
+            caches
+                .artwork_cached_larger("srv", "al-1", size, max)
+                .unwrap()
+        };
+        assert_eq!(larger(320, DISPLAY_LARGER_MAX), Some(big.clone()));
+        assert_eq!(larger(640, DISPLAY_LARGER_MAX), Some(big.clone()));
+        assert_eq!(larger(160, DISPLAY_LARGER_MAX), None, "8×: fetched");
+        assert_eq!(larger(64, u32::MAX), Some(big));
+    }
+
+    /// Each size Android shows art at is a download's kept size or served
+    /// by one at most [`DISPLAY_LARGER_MAX`] times larger.
+    #[test]
+    fn android_download_covers_serve_every_shown_size() {
+        let kept = download_cover_sizes(crate::api::Platform::Android);
+        for size in [64, 160, 320, 640] {
+            assert!(
+                kept.iter()
+                    .any(|k| *k >= size && *k <= size * DISPLAY_LARGER_MAX),
+                "{size}"
+            );
+        }
     }
 
     /// Track `t` downloaded, its cover `kept`.

@@ -1387,6 +1387,29 @@ async fn reqwest_download_retries_and_resumes_with_range() {
     assert_eq!(left.len(), 1, "only dest");
 }
 
+/// A cover is retried in place once, not as often as a track: whoever shows
+/// it asks again on its own schedule.
+#[tokio::test]
+async fn reqwest_image_download_retries_once() {
+    use super::transport::{HttpTransport, ReqwestTransport};
+    let (base, seen) = scripted_http(vec![SHORT_200]).await;
+    let tr = ReqwestTransport::new("hocket-test", std::time::Duration::from_secs(5))
+        .unwrap()
+        .with_download_retries(3, std::time::Duration::ZERO);
+    let dir = tempfile::tempdir().unwrap();
+    let url = Url::parse(&format!("{base}/rest/getCoverArt?id=1")).unwrap();
+    assert!(tr
+        .download_image(url.clone(), &dir.path().join("c.img"))
+        .await
+        .is_err());
+    assert_eq!(seen.lock().len(), 2);
+    assert!(tr
+        .download(url, &dir.path().join("t.flac"), None)
+        .await
+        .is_err());
+    assert_eq!(seen.lock().len(), 6, "a track keeps its three retries");
+}
+
 /// Without in-place retries the partial survives the failed call and the
 /// next call resumes it; a `206` for other bytes (or a `200`) restarts.
 #[tokio::test]

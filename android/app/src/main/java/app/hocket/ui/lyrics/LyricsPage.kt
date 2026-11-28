@@ -200,7 +200,8 @@ fun LyricsPage(visible: Boolean, modifier: Modifier = Modifier, embedded: Boolea
         var share by remember(doc.trackId) { mutableStateOf<LyricsShareRequest?>(null) }
         Column(Modifier.fillMaxSize()) {
             // A new song starts from a fresh list: no scroll, shift or line state carried over.
-            key(doc.trackId) { LyricsList(doc, positionMs, reducedMotion, lowPower = batterySaver, simple = simple, onSeek = { client.dispatch(Commands.seekTo(it)) }, onShare = { share = it }, sharing = share?.line ?: -1, modifier = Modifier.weight(1f).then(listModifier)) }
+            // (The position is read in the list, so its per-frame ticks recompose only the list.)
+            key(doc.trackId) { LyricsList(doc, { positionMs }, reducedMotion, lowPower = batterySaver, simple = simple, onSeek = { client.dispatch(Commands.seekTo(it)) }, onShare = { share = it }, sharing = share?.line ?: -1, modifier = Modifier.weight(1f).then(listModifier)) }
             // Inside the full player the timing lives in the song menu instead ([LyricsTimingSheet]).
             if (!embedded) OffsetControl(doc, onOffset = { client.dispatch(Commands.setLyricsOffset(doc.trackId, it)) })
         }
@@ -418,7 +419,8 @@ internal fun lineBlur(distance: Int): Float = when {
 }
 
 @Composable
-private fun LyricsList(doc: Lyrics, positionMs: Long, reducedMotion: Boolean, lowPower: Boolean, simple: Boolean, onSeek: (Long) -> Unit, onShare: (LyricsShareRequest) -> Unit, sharing: Int, modifier: Modifier) {
+private fun LyricsList(doc: Lyrics, position: () -> Long, reducedMotion: Boolean, lowPower: Boolean, simple: Boolean, onSeek: (Long) -> Unit, onShare: (LyricsShareRequest) -> Unit, sharing: Int, modifier: Modifier) {
+    val positionMs = position()
     val cursor = remember(doc, positionMs) { LyricsCursor.at(doc, positionMs) }
     val focus = remember(doc, cursor) { focusLine(doc, cursor) }
     // The view moves to a line a moment before it is sung.

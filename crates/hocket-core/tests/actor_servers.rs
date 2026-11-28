@@ -6,8 +6,11 @@
 use std::sync::Arc;
 
 use hocket_core::api::*;
-use hocket_core::core::test_support::{EventLog, TestBackend, TestOptions};
+use hocket_core::core::test_support::{
+    seeded_server, EventLog, TestBackend, TestCore, TestOptions,
+};
 use hocket_core::sim::SimTime;
+use hocket_core::subsonic::fake::FakeServer;
 use hocket_core::Core;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -239,4 +242,59 @@ async fn add_server_that_answers_the_probe_is_persisted_and_synced() {
         .iter()
         .any(|e| matches!(e, Event::Error { .. })));
     b.core.dispatch(Command::Shutdown).unwrap();
+}
+
+/// Whether the sync that just finished told every screen to refresh.
+async fn sync_refreshes(t: &TestCore, full: bool) -> bool {
+    t.events.clear();
+    t.run(Command::SyncLibrary {
+        account_id: t.server_id.clone(),
+        full,
+    })
+    .await;
+    t.wait_until(30_000.0, |t| {
+        t.events
+            .all()
+            .iter()
+            .any(|e| matches!(e, Event::SyncProgress { progress } if progress.finished))
+    })
+    .await;
+    let events = t.events.all();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::AccountsChanged { .. })),
+        "the last sync time is announced either way"
+    );
+    events.iter().any(
+        |e| matches!(e, Event::LibraryChanged { server_id, tables, .. } if tables.is_empty() && *server_id == t.server_id),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_sync_that_changes_nothing_refreshes_no_screen() {
+    let server = seeded_server(8, 100.0);
+    server.state.lock().scan_status.last_scan = Some("2024-06-01T00:00:00Z".into());
+    let t = TestCore::start("quiet-sync", server).await;
+    t.wait_until(30_000.0, |t| {
+        t.events
+            .all()
+            .iter()
+            .any(|e| matches!(e, Event::SyncProgress { progress } if progress.finished))
+    })
+    .await;
+    assert!(!sync_refreshes(&t, false).await, "nothing moved");
+    // A scan that found nothing new is not a change either.
+    t.server.state.lock().scan_status.last_scan = Some("2024-06-02T00:00:00Z".into());
+    assert!(!sync_refreshes(&t, false).await);
+    // A new album is.
+    t.server.state.lock().scan_status.last_scan = Some("2024-06-03T00:00:00Z".into());
+    let mut c = FakeServer::song("t99", "New Song", "al9", "ar0", 90.0);
+    c.created = Some("2030-05-01T00:00:00Z".into());
+    t.server.add_song(c);
+    t.server.state.lock().albums.get_mut("al9").unwrap().created =
+        Some("2030-05-01T00:00:00Z".into());
+    assert!(sync_refreshes(&t, false).await);
+    // A full pass always counts.
+    assert!(sync_refreshes(&t, true).await);
 }

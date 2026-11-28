@@ -41,6 +41,8 @@ class NetworkMonitor(
     private val dispatch: (Command) -> Unit,
     /** Called with whether there is any connectivity, on every change of that (and once at start). */
     private val onConnectivity: (online: Boolean) -> Unit = {},
+    /** Called with the default network's kind on every change of it (and once at start). */
+    private val onKind: (NetworkKind) -> Unit = {},
     /** How long a change must hold before it's published; 0 publishes at once. */
     private val debounceMs: Long = DEBOUNCE_MS,
     private val handler: Handler = Handler(Looper.getMainLooper()),
@@ -222,6 +224,7 @@ class NetworkMonitor(
             dispatch(Commands.setNetworkState(state))
             val online = state.kind != NetworkKind.Offline
             if (was == null || (was.kind != NetworkKind.Offline) != online) onConnectivity(online)
+            if (was == null || was.kind != state.kind) onKind(state.kind)
         }
     }
 

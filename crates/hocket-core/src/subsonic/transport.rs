@@ -138,6 +138,16 @@ pub trait HttpTransport: Send + Sync + 'static {
         dest: &Path,
         progress: Option<ProgressFn>,
     ) -> BoxFuture<'_, Result<DownloadOutcome, TransportError>>;
+
+    /// [`Self::download`] for a cover: retried in place at most once, as
+    /// whoever shows it asks again on its own schedule.
+    fn download_image(
+        &self,
+        url: Url,
+        dest: &Path,
+    ) -> BoxFuture<'_, Result<DownloadOutcome, TransportError>> {
+        self.download(url, dest, None)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -150,6 +160,36 @@ pub struct DownloadOutcome {
 // ---------------------------------------------------------------------------
 // reqwest implementation
 // ---------------------------------------------------------------------------
+
+/// The rustls config reqwest's `use_rustls_tls()` builds (webpki roots, its
+/// default provider, TLS 1.2 and 1.3), made once so every client built on
+/// it shares one session cache: a new connection to the server, from the
+/// API, download or stream client, resumes a TLS session instead of a full
+/// handshake. [http1_only] offers only HTTP/1.1 over ALPN, as a client
+/// built `.http1_only()` must.
+pub(crate) fn shared_tls(http1_only: bool) -> rustls::ClientConfig {
+    static BASE: std::sync::OnceLock<rustls::ClientConfig> = std::sync::OnceLock::new();
+    let base = BASE.get_or_init(|| {
+        let mut roots = rustls::RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let provider = rustls::crypto::CryptoProvider::get_default()
+            .cloned()
+            .unwrap_or_else(|| Arc::new(rustls::crypto::ring::default_provider()));
+        rustls::ClientConfig::builder_with_provider(provider)
+            .with_protocol_versions(rustls::ALL_VERSIONS)
+            .expect("rustls supports its own versions")
+            .with_root_certificates(roots)
+            .with_no_client_auth()
+    });
+    // A clone shares the session cache (`resumption` holds it in an Arc).
+    let mut config = base.clone();
+    config.alpn_protocols = if http1_only {
+        vec![b"http/1.1".to_vec()]
+    } else {
+        vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+    };
+    config
+}
 
 /// Production transport over reqwest + rustls. Never follows redirects: a
 /// redirect would otherwise carry the token+salt query, the native-API JWT
@@ -177,14 +217,28 @@ impl ReqwestTransport {
                 .user_agent(user_agent)
                 .connect_timeout(std::time::Duration::from_secs(15))
                 .redirect(reqwest::redirect::Policy::none())
-                .use_rustls_tls()
         };
         let build_err = |e: reqwest::Error| TransportError::Network(e.without_url().to_string());
         // API answers (JSON) come compressed when the server can: a sync's
         // pages shrink several times over. Downloads stay byte-exact: their
         // lengths, ranges and resumes count the file's own bytes.
-        let client = base().timeout(timeout).build().map_err(build_err)?;
+        //
+        // API calls may share one HTTP/2 connection. Every call then rides it, so a connection
+        // that goes dead without a reset (a black-holed Wi-Fi uplink, lost NAT state) is found
+        // by a ping within ~25 s instead of stalling each call until TCP gives up. No pings
+        // while idle: an idle app sends nothing.
+        let client = base()
+            .use_preconfigured_tls(shared_tls(false))
+            .http2_keep_alive_interval(Some(std::time::Duration::from_secs(15)))
+            .http2_keep_alive_timeout(std::time::Duration::from_secs(10))
+            .timeout(timeout)
+            .build()
+            .map_err(build_err)?;
+        // Downloads (tracks, covers) stay on HTTP/1.1, a connection each, as before: parallel
+        // track downloads keep their own congestion windows on a lossy link.
         let download_client = base()
+            .use_preconfigured_tls(shared_tls(true))
+            .http1_only()
             .read_timeout(timeout)
             .no_gzip()
             .no_brotli()
@@ -517,6 +571,28 @@ impl HttpTransport for ReqwestTransport {
         dest: &Path,
         progress: Option<ProgressFn>,
     ) -> BoxFuture<'_, Result<DownloadOutcome, TransportError>> {
+        self.download_retrying(url, dest, progress, self.download_retries)
+    }
+
+    fn download_image(
+        &self,
+        url: Url,
+        dest: &Path,
+    ) -> BoxFuture<'_, Result<DownloadOutcome, TransportError>> {
+        self.download_retrying(url, dest, None, self.download_retries.min(1))
+    }
+}
+
+impl ReqwestTransport {
+    /// A download retried in place up to `retries` times after a network
+    /// error or timeout.
+    fn download_retrying(
+        &self,
+        url: Url,
+        dest: &Path,
+        progress: Option<ProgressFn>,
+        retries: u32,
+    ) -> BoxFuture<'_, Result<DownloadOutcome, TransportError>> {
         let dest = dest.to_path_buf();
         Box::pin(async move {
             check_download_dest(&dest, self.download_root.as_deref())?;
@@ -534,7 +610,7 @@ impl HttpTransport for ReqwestTransport {
                     Err((e, p)) => {
                         let transient =
                             matches!(e, TransportError::Network(_) | TransportError::Timeout);
-                        if transient && attempt < self.download_retries {
+                        if transient && attempt < retries {
                             tokio::time::sleep(self.retry_backoff * 2u32.pow(attempt)).await;
                             attempt += 1;
                             partial = p;

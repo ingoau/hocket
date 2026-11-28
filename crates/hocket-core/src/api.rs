@@ -3578,6 +3578,12 @@ pub enum Query {
     Artwork {
         id: String,
         size: u32,
+        /// For showing only (scaled to `size` on screen): a larger copy
+        /// already cached, up to [`crate::cache::DISPLAY_LARGER_MAX`] times
+        /// the size, does instead of a fetch. Askers that read the pixels
+        /// (colours, layout) leave it off and get exactly `size`.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        display: bool,
     },
     /// Direct stream/file URL for a track (what the backend would be given).
     MediaSource {

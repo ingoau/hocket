@@ -515,12 +515,6 @@ pub fn finish(db: &Db, scope: &str, clock: &dyn Clock) -> usize {
                 serde_json::to_string(&pending.snoozes)?,
             ));
         }
-        if !pending.album_resumes.is_empty() {
-            docs.push((
-                crate::album_resume::state_key(scope),
-                serde_json::to_string(&pending.album_resumes)?,
-            ));
-        }
         if !pending.pending_scrobbles.is_empty() {
             // `core::state::pending_scrobbles_key`.
             docs.push((
@@ -535,6 +529,23 @@ pub fn finish(db: &Db, scope: &str, clock: &dyn Clock) -> usize {
                  ON CONFLICT(key) DO NOTHING",
                 params![key, json, now],
             )?;
+        }
+        // Album resume points are rows of their own (one per album): one document, left
+        // alone when the scope already has any.
+        let has_resumes: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM album_resumes WHERE scope = ?1)",
+            [scope],
+            |r| r.get(0),
+        )?;
+        if !pending.album_resumes.is_empty() && !has_resumes {
+            for e in &pending.album_resumes {
+                tx.execute(
+                    "INSERT INTO album_resumes(scope, album_id, json) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(scope, album_id) DO NOTHING",
+                    params![scope, e.album_id, serde_json::to_string(e)?],
+                )?;
+            }
+            written += 1;
         }
         Ok(written)
     });

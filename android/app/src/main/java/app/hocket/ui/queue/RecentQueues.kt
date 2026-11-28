@@ -88,8 +88,9 @@ fun RecentQueuesList(modifier: Modifier = Modifier, contentPadding: PaddingValue
     // The queue being renamed: a saved queue's id, "" for the playing queue, null for none.
     var renaming by remember { mutableStateOf<String?>(null) }
     var naming by remember { mutableStateOf(false) }
-    val pinned = saved.filter { it.pinned }.sortedByDescending { it.lastInteractedAt }
-    val recent = saved.filter { !it.pinned }.sortedByDescending { it.lastInteractedAt }
+    // Sorted once per list (not on every recomposition: the playing queue's changes, renaming).
+    val pinned = remember(saved) { saved.filter { it.pinned }.sortedByDescending { it.lastInteractedAt } }
+    val recent = remember(saved) { saved.filter { !it.pinned }.sortedByDescending { it.lastInteractedAt } }
     val playingLabel = queue.contextLabel?.takeIf { it.isNotBlank() }
     val playingCount = queue.total.toInt()
     val playingIndex = queue.currentIndex?.let { it.toInt() + 1 } ?: 0

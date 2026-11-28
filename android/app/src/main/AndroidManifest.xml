@@ -59,6 +59,13 @@
                 android:resource="@xml/share_paths" />
         </provider>
 
+        <!-- ML Kit's init provider (the code scanner's, Play services builds only) ran at every
+             process start; SetupScanner sets ML Kit up when a scan starts instead. -->
+        <provider
+            android:name="com.google.mlkit.common.internal.MlKitInitProvider"
+            tools:node="remove"
+            xmlns:tools="http://schemas.android.com/tools" />
+
         <!-- Keeps a report upload (docs/reports.md) going outside the app; started and stopped by the app only. -->
         <service
             android:name="app.hocket.diagnostics.ReportUploadService"

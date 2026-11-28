@@ -109,8 +109,56 @@ pub trait EventListener: Send + Sync {
 
 struct Bridge(Arc<dyn EventListener>);
 
+/// Whether the app reads `event` at all. The local search batch (the screen shows only the server
+/// one; local results come from the query), log lines and desktop shortcuts are dropped here, so
+/// they never cost a serialisation, a JNI crossing and a decode on the Kotlin side.
+fn android_reads(event: &Event) -> bool {
+    !matches!(
+        event,
+        Event::SearchResults { results } if !results.from_server
+    ) && !matches!(event, Event::Log { .. } | Event::ShortcutsChanged { .. })
+}
+
+/// Empties the session document's track lists, which the app never reads: it renders the queue
+/// from `QueueChanged`, takes only the context's kind from the document, and labels saved queues
+/// by `track_count`. On a long queue those lists (history, upcoming, the context's tracks and each
+/// saved queue's own) are megabytes of JSON on every track advance.
+fn slim_session(doc: &mut hocket_core::api::SessionDocument) {
+    doc.history = Vec::new();
+    doc.upcoming = Vec::new();
+    if let Some(context) = &mut doc.context {
+        context.tracks = Vec::new();
+    }
+    slim_saved(&mut doc.saved_queues);
+}
+
+fn slim_saved(queues: &mut [hocket_core::api::SavedQueue]) {
+    for saved in queues {
+        saved.history = Vec::new();
+        saved.upcoming = Vec::new();
+        saved.context.tracks = Vec::new();
+    }
+}
+
+fn slim(event: &mut Event) {
+    match event {
+        Event::SessionChanged { document } => slim_session(document),
+        Event::SavedQueuesChanged { queues } => slim_saved(queues),
+        Event::Started { snapshot } | Event::Snapshot { snapshot } => {
+            if let Some(doc) = &mut snapshot.session {
+                slim_session(doc);
+            }
+        }
+        _ => {}
+    }
+}
+
 impl hocket_core::EventSink for Bridge {
-    fn on_event(&self, event: Event) {
+    fn on_event(&self, mut event: Event) {
+        if !android_reads(&event) {
+            return;
+        }
+        slim(&mut event);
         let Ok(json) = serde_json::to_string(&event) else {
             return;
         };
@@ -498,6 +546,89 @@ mod ffi_tests {
         for (core_err, ffi_err) in cases {
             assert_eq!(StreamError::from(core_err), ffi_err);
         }
+    }
+
+    fn item(key: &str, track: &str, index: u32) -> hocket_core::api::QueueItem {
+        hocket_core::api::QueueItem {
+            settled: false,
+            key: key.into(),
+            track: hocket_core::api::TrackRef::new("srv", track),
+            source: hocket_core::api::QueueSource::Context { index },
+            unavailable: false,
+            added: false,
+            queued: false,
+            ordinal: index,
+            alts: vec![],
+        }
+    }
+
+    /// The document crosses with its track lists emptied and everything else (the current entry,
+    /// the context's kind, saved queues' metadata and counts) intact.
+    #[test]
+    fn session_events_cross_without_their_track_lists() {
+        use hocket_core::api::{ContextKind, QueueContext, SortOrder};
+        let mut doc = hocket_core::session::document::new_document("s", "id".into(), 0.0);
+        doc.context = Some(QueueContext {
+            source: "srv".into(),
+            kind: ContextKind::AdHoc {
+                label: "sel".into(),
+            },
+            label: "sel".into(),
+            sort: SortOrder::Default,
+            tracks: ["t1", "t2", "t3"]
+                .map(|t| hocket_core::api::TrackRef::new("srv", t))
+                .to_vec(),
+        });
+        doc.history = vec![item("k0", "t1", 0)];
+        doc.current = Some(item("k1", "t2", 1));
+        doc.upcoming = vec![item("k2", "t3", 2)];
+        let saved = hocket_core::session::saved::snapshot(&doc, 0, 1.0, "sq".into()).unwrap();
+        assert_eq!(saved.context.tracks.len(), 3);
+        doc.saved_queues = vec![saved];
+        let full = doc.clone();
+
+        let mut event = Event::SessionChanged { document: doc };
+        slim(&mut event);
+        let Event::SessionChanged { document } = event else {
+            unreachable!()
+        };
+        assert!(document.history.is_empty() && document.upcoming.is_empty());
+        assert_eq!(document.current, full.current);
+        let context = document.context.as_ref().unwrap();
+        assert!(context.tracks.is_empty());
+        assert_eq!(context.kind, full.context.as_ref().unwrap().kind);
+        let sq = &document.saved_queues[0];
+        assert!(sq.history.is_empty() && sq.upcoming.is_empty() && sq.context.tracks.is_empty());
+        assert_eq!(sq.current, full.saved_queues[0].current);
+        assert_eq!(sq.track_count, 3);
+        assert_eq!(sq.label, full.saved_queues[0].label);
+    }
+
+    #[test]
+    fn events_the_app_never_reads_are_dropped() {
+        let search = |from_server| Event::SearchResults {
+            results: hocket_core::api::SearchResults {
+                request_id: "r".into(),
+                query: "q".into(),
+                tracks: vec![],
+                albums: vec![],
+                artists: vec![],
+                playlists: vec![],
+                from_server,
+                lyrics: vec![],
+            },
+        };
+        assert!(android_reads(&search(true)));
+        assert!(!android_reads(&search(false)));
+        assert!(!android_reads(&Event::Log {
+            level: "info".into(),
+            target: "t".into(),
+            message: "m".into(),
+        }));
+        assert!(!android_reads(&Event::ShortcutsChanged {
+            shortcuts: vec![]
+        }));
+        assert!(android_reads(&Event::SleepTimerChanged { timer: None }));
     }
 
     struct FailingListener(AtomicUsize);

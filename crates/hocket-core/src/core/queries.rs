@@ -2,8 +2,6 @@
 //! network (artwork fetch, related tracks) are produced by a spawned task
 //! that owns the reply channel; the loop never waits.
 
-use std::sync::Arc;
-
 use tokio::sync::oneshot;
 
 use crate::actions::Surface;
@@ -322,8 +320,8 @@ impl Actor {
                 QueryResult::Actions(list)
             }
             Query::Shortcuts => QueryResult::Shortcuts(self.registry.shortcuts()),
-            Query::Artwork { id, size } => {
-                self.artwork_query(id, size, reply);
+            Query::Artwork { id, size, display } => {
+                self.artwork_query(id, size, display, reply);
                 return;
             }
             Query::MediaSource { track_id } => {
@@ -432,20 +430,11 @@ impl Actor {
             Want::Song(_, Some((sid, _))) => self.subsonic_for(sid),
             _ => None,
         };
-        let http = self.lyrics_http.clone();
-        let app_version = self.cfg.app_version.clone();
+        let Some(http) = self.shared_lyrics_http() else {
+            let _ = reply.send(QueryResult::SongLink(None));
+            return;
+        };
         self.spawn(async move {
-            let http: Arc<dyn crate::lyrics::LyricsHttp> = match http {
-                Some(h) => h,
-                None => match crate::lyrics::ReqwestLyricsHttp::new(&app_version) {
-                    Ok(h) => Arc::new(h),
-                    Err(e) => {
-                        tracing::debug!(target: "hocket_core", error = %e, "squigly: no http client");
-                        let _ = reply.send(QueryResult::SongLink(None));
-                        return;
-                    }
-                },
-            };
             let lookup = async {
                 match want {
                     Want::Song(mut facts, id) => {
@@ -545,7 +534,13 @@ impl Actor {
         });
     }
 
-    fn artwork_query(&mut self, id: String, size: u32, reply: oneshot::Sender<QueryResult>) {
+    fn artwork_query(
+        &mut self,
+        id: String,
+        size: u32,
+        display: bool,
+        reply: oneshot::Sender<QueryResult>,
+    ) {
         // Cover ids are an account's: the one whose library uses it.
         let sid = self
             .db
@@ -559,7 +554,11 @@ impl Actor {
         };
         let cached = if self.data_saver_active() {
             // Data saver: a larger copy already here does instead of a fetch.
-            self.caches.artwork_cached_larger(&sid, &id, size)
+            self.caches.artwork_cached_larger(&sid, &id, size, u32::MAX)
+        } else if display {
+            // Shown scaled to the size: a copy a little larger looks the same.
+            self.caches
+                .artwork_cached_larger(&sid, &id, size, crate::cache::DISPLAY_LARGER_MAX)
         } else {
             self.caches.artwork_cached(&sid, &id, size)
         };

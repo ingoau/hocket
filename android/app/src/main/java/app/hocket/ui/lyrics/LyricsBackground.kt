@@ -37,6 +37,7 @@ import app.hocket.ui.LocalCoreClient
 import app.hocket.ui.theme.ArtworkColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
 
 /**
  * Text colours over the lyrics background and the scrim that keeps them legible. The scrim is not a
@@ -121,12 +122,19 @@ fun LyricsBackground(coverArt: String?, animated: Boolean, visible: Boolean, mod
         if (!shouldAnimate) return@LaunchedEffect
         val start = System.nanoTime()
         var last = 0L
-        // ~15 fps: the warp is slow (`time * 0.12`) so 60 Hz was wasted composition.
-        while (true) withInfiniteAnimationFrameNanos { now ->
-            if (now - last >= 66_000_000L) {
-                time = (now - start) / 1_000_000_000f
-                last = now
+        // ~15 fps: the warp is slow (`time * 0.12`) so 60 Hz was wasted composition. Between
+        // updates it sleeps rather than waking every vsync to check the clock: a frame (or more)
+        // short of the gap, so it is still the first frame past the gap that updates.
+        while (true) {
+            val updated = withInfiniteAnimationFrameNanos { now ->
+                (now - last >= 66_000_000L).also {
+                    if (it) {
+                        time = (now - start) / 1_000_000_000f
+                        last = now
+                    }
+                }
             }
+            if (updated) delay(50)
         }
     }
     if (Build.VERSION.SDK_INT >= 33) {

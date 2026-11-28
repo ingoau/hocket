@@ -396,7 +396,18 @@ impl Actor {
             self.register_job_runners();
         }
         self.relink();
+        self.redo_records_after_next_sync();
         self.emit_everything(false);
+    }
+
+    /// The Mixed playlists and Hocket library stars are redone over the mirror when a sync
+    /// finishes having changed it; after a change of accounts, the next one redoes them anyway.
+    fn redo_records_after_next_sync(&self) {
+        for s in self.accounts.iter() {
+            if let Some(sync) = &s.sync {
+                sync.mark_changed();
+            }
+        }
     }
 
     /// Drop what a removed account (or source) kept: its download jobs, its
@@ -417,6 +428,7 @@ impl Actor {
         self.accounts.reorder(&ids);
         self.persist_priorities();
         self.relink();
+        self.redo_records_after_next_sync();
         self.providers_changed();
         if self.started {
             self.register_job_runners();
@@ -894,16 +906,29 @@ impl Actor {
                 s.info.last_sync = Some(now);
                 let _ = self.db.set_account_last_sync(&s.info.id, now);
             }
-            self.emit(Event::LibraryChanged {
-                server_id: p.server_id.clone(),
-                tables: vec![],
-                ids: vec![],
-            });
+            // A sync that changed nothing (the usual periodic one) leaves every screen as
+            // it is. Without the account's sync to ask, assume it did.
+            let changed = self
+                .accounts
+                .get(&p.server_id)
+                .and_then(|s| s.sync.as_ref())
+                .is_none_or(|s| s.take_changed());
+            if changed {
+                self.emit(Event::LibraryChanged {
+                    server_id: p.server_id.clone(),
+                    tables: vec![],
+                    ids: vec![],
+                });
+            }
+            // The last sync time.
             let accounts = self.account_infos();
             self.emit(Event::AccountsChanged { accounts });
             // New songs may have copies elsewhere; the Hocket library's
-            // stars and the Mixed playlists' rows are redone over the mirror.
-            self.apply_library_records();
+            // stars and the Mixed playlists' rows are redone over the mirror
+            // (as they were, when it is unchanged).
+            if changed {
+                self.apply_library_records();
+            }
             self.reconcile_playlist_pins();
             // Pins restored from a version-10 backup come without their
             // jobs: plan their wanted tracks after the account's first
