@@ -149,7 +149,11 @@
 .credential-warning .icon { flex: 0 0 auto; color: var(--danger); margin-top: -1px; }
 
 /* ---- First-run setup: the lockup over one card, on a soft accent wash ------- */
-.setup { flex-direction: column; align-items: center; justify-content: flex-start; gap: 48px; padding: 56px 24px 32px; background: radial-gradient(ellipse 60% 50% at 50% 35%, color-mix(in srgb, var(--accent-tint) 12%, var(--bg)) 0%, var(--bg) 100%); }
+/* The wash runs under the bare title bar (the window's drag region and controls) too; the page scrolls below it. */
+.setup-shell { height: 100%; display: flex; flex-direction: column; background: radial-gradient(ellipse 60% 50% at 50% 35%, color-mix(in srgb, var(--accent-tint) 12%, var(--bg)) 0%, var(--bg) 100%); }
+.setup-shell > .bare-titlebar { flex: 0 0 auto; }
+.setup { flex-direction: column; align-items: center; justify-content: flex-start; gap: 48px; padding: 8px 24px 32px; background: none; }
+.setup-shell > .setup { flex: 1 1 auto; height: auto; min-height: 0; }
 .setup .brand.setup-lockup { margin: 0; display: flex; align-items: center; gap: 18px; font-size: 56px; line-height: 1; white-space: nowrap; }
 .setup-card { width: 540px; max-width: 100%; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px; padding: 32px 34px 28px; border-radius: var(--shape-xl); background: var(--bg-elev); box-shadow: var(--shadow-2), 0 0 0 1px color-mix(in srgb, var(--border) 60%, transparent); }
 .setup .setup-title { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.2; }
@@ -207,6 +211,8 @@
 .setup-buttons { display: flex; gap: 10px; margin-top: 14px; }
 .setup-buttons .btn { flex: 1 1 0; height: 52px; border-radius: var(--shape-full); font-size: 15px; font-weight: 600; }
 @media (max-width: 560px) { .setup-pair { grid-template-columns: minmax(0, 1fr); } .setup .brand.setup-lockup { font-size: 40px; } }
+/* A short window (the smallest is 600px): a smaller lockup, closer to the card, so the form starts higher. */
+@media (max-height: 760px) { .setup { gap: 24px; } .setup .brand.setup-lockup { font-size: 40px; gap: 13px; } .setup .setup-heading { font-size: 26px; } }
 .setup .spin { animation: spin 1.2s linear infinite; }
 
 /* ---- Downloads -------------------------------------------------------------- */
@@ -343,19 +349,35 @@
   .setup-card { padding: 20px; }
 }
 
-/* The same compact settings when the page is narrow in a wider window (the side panel open in a
-   window up to about 1200px wide, or the library's Edit pins panel open too): beside the 300px nav
-   the body would be squeezed to a few letters a line. */
+/* The same compact settings when the page is narrow in a wider window (the side panel open, or the
+   library's Edit pins panel too): beside the 300px nav the body would be squeezed to a few words a
+   line. A little wider, the nav gives up some of its width first. */
 .page-settings { container: settings-page / inline-size; }
-@container settings-page (max-width: 600px) {
+@media (min-width: 901px) {
+  @container settings-page (max-width: 980px) {
+    .page-settings .settings { grid-template-columns: 264px minmax(0, 1fr); }
+    .page-settings .settings-nav { padding-inline: 10px; }
+    .page-settings .settings-body { padding-right: 24px; }
+  }
+}
+@container settings-page (max-width: 760px) {
   .page-settings .settings { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto; overflow: auto; }
   .page-settings .settings-nav { flex-direction: row; flex-wrap: wrap; gap: 6px; padding: 12px 16px 4px; border-bottom: 0; border-right: 0; overflow: visible; }
   .page-settings .settings-nav .nav-item { height: 36px; padding: 0 14px 0 10px; gap: 8px; font-size: var(--fs-md); background: var(--bg-sunken); }
   .page-settings .settings-nav .nav-item .icon { width: 18px; height: 18px; }
   .page-settings .settings-nav-group { display: contents; }
   .page-settings .settings-search { flex: 1 0 100%; margin-bottom: 4px; }
-  .page-settings .settings-nav-heading, .page-settings .settings-account, .page-settings .settings-nav-title { display: none; }
+  .page-settings .settings-nav-heading, .page-settings .settings-nav-title { display: none; }
+  /* The account stays, as a strip across the top: who, Sync, then its three links side by side. */
+  .page-settings .settings-account { flex: 1 0 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px 12px; padding: 10px; margin-bottom: 6px; }
+  .page-settings .settings-account-sync { width: auto; max-width: 280px; padding: 0 18px; }
+  .page-settings .settings-account-links { grid-column: 1 / -1; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .page-settings .settings-account-link:nth-child(1) { grid-column: auto; border-radius: var(--shape-lg) var(--shape-xs) var(--shape-xs) var(--shape-lg); }
+  .page-settings .settings-account-link:nth-child(2) { border-radius: var(--shape-xs); }
+  .page-settings .settings-account-link:nth-child(3) { border-radius: var(--shape-xs) var(--shape-lg) var(--shape-lg) var(--shape-xs); }
   .page-settings .settings-body { overflow: visible; padding: 16px var(--page-gutter) 28px; }
+}
+@container settings-page (max-width: 560px) {
   .page-settings .setting-row { grid-template-columns: minmax(0, 1fr); padding: 12px 16px; gap: 10px; }
   .page-settings .setting-row .control { flex-wrap: wrap; justify-content: flex-start; }
   .page-settings .setting-row:has(> .control > .m3-switch:only-child) { grid-template-columns: minmax(0, 1fr) auto; }
@@ -379,6 +401,9 @@
 .home-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); column-gap: 16px; }
 .home-list-row { display: flex; align-items: center; gap: 4px; border-radius: var(--shape-md); padding: 0 4px 0 6px; }
 .home-list-row:hover { background: var(--bg-hover); }
+/* A row's ⋯ shows on hover or keyboard focus, as a track row's does; right-click has the same menu. */
+.home-list-row > .btn.icon { opacity: 0; transition: opacity var(--dur-short) var(--ease-emphasized); }
+.home-list-row:hover > .btn.icon, .home-list-row:focus-within > .btn.icon { opacity: 1; }
 .home-list-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; height: 60px; border: 0; background: none; padding: 0; text-align: left; }
 .home-list-main .art { width: 44px; height: 44px; border-radius: var(--shape-sm); flex: 0 0 auto; }
 .home-list-main .text { display: flex; flex-direction: column; min-width: 0; }
@@ -403,6 +428,12 @@
 
 .customise-panel { width: 360px; flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px; padding: 20px 12px 20px 16px; border-left: 1px solid var(--border); overflow: auto; animation: panel-in var(--dur-spring) var(--spring-fast); }
 @keyframes panel-in { from { transform: translateX(16px); } to { transform: none; } }
+/* Beside Home when there is room; on a narrower page (the side panel open, a small window) it
+   slides over Home's right edge instead of squeezing the feed to a sliver. */
+.page-home .home-layout { position: relative; container: home-layout / inline-size; }
+@container home-layout (max-width: 960px) {
+  .customise-panel { position: absolute; z-index: 5; top: 0; right: 0; bottom: 0; max-width: 100%; box-sizing: border-box; border-left: 0; background: var(--bg-elev); box-shadow: var(--shadow-2), var(--shadow); }
+}
 .customise-head { display: flex; align-items: center; gap: 8px; }
 .customise-head .card-title { margin: 0; }
 .customise-note { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; }
@@ -925,6 +956,18 @@ button.m3-switch { border: 0; padding: 0; background: none; }
 .spot-dot { width: 8px; height: 8px; padding: 0; border: 0; border-radius: 4px; background: color-mix(in srgb, var(--fg) 45%, transparent); transition: width var(--dur-short, 160ms) var(--ease-emphasized, ease), background-color var(--dur-short, 160ms); }
 .spot-dot.on { width: 22px; background: var(--accent-text); }
 .customise-row.pinned .grip { visibility: hidden; }
+.spot-loading .spot-slide { --spot-surface: var(--surface-tonal); }
+/* A short window: a compact slide, so the sections below still show under it. */
+@media (max-height: 760px) {
+  .spot-slide { height: clamp(240px, 40vh, 300px); }
+  .spot-content { padding: 20px 28px; }
+  .spot-eyebrow { margin-bottom: 2px; }
+  .spot-open { font-size: clamp(26px, 3vw, 36px); }
+  .spot-actions { margin-top: 10px; }
+  .btn.spot-play { height: 44px; }
+  .btn.icon.spot-shuffle { width: 44px; height: 44px; border-radius: 16px; }
+  .spot-nav { top: 14px; right: 14px; }
+}
 /* In the dark theme a bright cover is kept a little down, so the slide reads as part of a dark page. */
 :root[data-theme="dark"] .spot-bg { opacity: 0.4; }
 :root[data-theme="dark"] .spot-art { filter: brightness(0.88); }

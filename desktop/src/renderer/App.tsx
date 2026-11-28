@@ -11,7 +11,7 @@ import { useGlobalKeyboard } from "./store/keyboard";
 import { bridge } from "./core/bridge";
 import { Sidebar } from "./components/Sidebar";
 import { EditPinsPanel } from "./components/EditPinsPanel";
-import { TopBar } from "./components/TopBar";
+import { BareTitleBar, TopBar } from "./components/TopBar";
 import { PlayerBar } from "./components/PlayerBar";
 import { NowPlayingSidebar } from "./components/NowPlayingSidebar";
 import { PlaylistPicker } from "./components/PlaylistPicker";
@@ -85,7 +85,7 @@ export function App() {
     });
   }, [ready, hasServer, setupSummary, pendingPair]);
 
-  if (!ready) return <div className="setup" role="main"><div className="muted" role="status">{t("app.loading")}</div></div>;
+  if (!ready) return <div className="setup-shell"><BareTitleBar /><div className="setup" role="main"><div className="muted" role="status">{t("app.loading")}</div></div></div>;
   if (!hasServer || setupSummary) return <Setup />;
   const skip = (e: React.MouseEvent) => {
     e.preventDefault();

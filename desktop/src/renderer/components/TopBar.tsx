@@ -29,10 +29,6 @@ export function TopBar() {
   const collapsed = useApp((s) => s.panels.sidebarCollapsed);
   const setPanels = useApp((s) => s.setPanels);
   const narrow = useMediaQuery(NARROW);
-  const win = useApp((s) => s.windowState);
-  // macOS draws its traffic lights, Windows its caption buttons (titleBarOverlay): only Linux's
-  // frameless window needs ours.
-  const ownControls = platform !== "macOs" && platform !== "windows";
   const toggleLabel = collapsed ? t("a11y.expandSidebar") : t("a11y.collapseSidebar");
   return (
     // The bar is the window's drag region (its empty stretch included); the system maximises on a double-click.
@@ -47,13 +43,39 @@ export function TopBar() {
       <div className="grow" />
       <StashChip />
       <JobsIndicator />
-      {ownControls ? (
-        <div className="window-controls">
-          <button type="button" className="btn icon" aria-label={t("misc.minimize")} onClick={() => bridge().window.minimize()}><Icon name="minimize" size={14} /></button>
-          <button type="button" className="btn icon" aria-label={win.maximized ? t("misc.restore") : t("misc.maximize")} onClick={() => (win.maximized ? bridge().window.unmaximize() : bridge().window.maximize())}><Icon name={win.maximized ? "restoreWin" : "maximize"} size={13} /></button>
-          <button type="button" className="btn icon close" aria-label={t("misc.close")} onClick={() => bridge().window.close()}><Icon name="close" size={14} /></button>
-        </div>
-      ) : null}
+      <WindowControls platform={platform} />
+    </div>
+  );
+}
+
+/**
+ * Minimise, maximise and close. macOS draws its traffic lights, Windows its caption buttons
+ * (titleBarOverlay): only Linux's frameless window needs ours.
+ */
+function WindowControls({ platform }: { platform: string | undefined }) {
+  const win = useApp((s) => s.windowState);
+  if (!platform || platform === "macOs" || platform === "windows") return null;
+  return (
+    <div className="window-controls">
+      <button type="button" className="btn icon" aria-label={t("misc.minimize")} onClick={() => bridge().window.minimize()}><Icon name="minimize" size={14} /></button>
+      <button type="button" className="btn icon" aria-label={win.maximized ? t("misc.restore") : t("misc.maximize")} onClick={() => (win.maximized ? bridge().window.unmaximize() : bridge().window.maximize())}><Icon name={win.maximized ? "restoreWin" : "maximize"} size={13} /></button>
+      <button type="button" className="btn icon close" aria-label={t("misc.close")} onClick={() => bridge().window.close()}><Icon name="close" size={14} /></button>
+    </div>
+  );
+}
+
+/**
+ * The title bar of a screen shown without the app's top bar (setup, loading): the frameless
+ * window's drag region and, on Linux, its window controls, so the window can still be moved,
+ * maximised (double-click) and closed there.
+ */
+export function BareTitleBar() {
+  // Until main has said which platform this is (the loading screen), no controls rather than the wrong ones.
+  const platform = useApp((s) => s.meta?.platform);
+  return (
+    <div className={`topbar bare-titlebar ${platform === "macOs" ? "mac" : ""} ${platform === "windows" ? "win" : ""}`} data-testid="bare-titlebar">
+      <div className="grow" />
+      <WindowControls platform={platform} />
     </div>
   );
 }
@@ -73,6 +95,14 @@ function SearchBox() {
   const pop = useRef<HTMLDivElement>(null);
   const reqId = useRef("");
   const [recent, setRecent] = useState<string[]>(() => recentSearches());
+  const route = useApp((s) => s.route);
+
+  // The field says what the page shows: a search page's query (Back to one brings it back), and
+  // nothing once the user has gone elsewhere, unless they are typing in it.
+  useEffect(() => {
+    if (route.view === "search") setQ(route.param ?? "");
+    else if (document.activeElement !== input.current) setQ("");
+  }, [route]);
 
   useEffect(() => {
     if (focusNonce) {
@@ -154,7 +184,13 @@ function SearchBox() {
     input.current?.blur();
   };
   const onKey = (e: React.KeyboardEvent) => {
-    if (e.key === "Escape") { setOpen(false); input.current?.blur(); return; }
+    // Escape steps back one thing at a time: the open sheet, then the query, then (the app's
+    // Escape in a text field) out of the field.
+    if (e.key === "Escape") {
+      if (expanded) { e.preventDefault(); setOpen(false); setActive(-1); }
+      else if (q) { e.preventDefault(); setQ(""); }
+      return;
+    }
     const count = showRecent ? recent.length : all.length;
     // Delete forgets the highlighted recent search (the rows' × does the same for the pointer).
     if (showRecent && e.key === "Delete" && recent[active]) { e.preventDefault(); forget(recent[active]); return; }
@@ -186,10 +222,14 @@ function SearchBox() {
   // The sheet lifts away on Escape, an outside click or a pick; when the query
   // is cleared there is nothing left to show, so it goes at once.
   const sheet = usePresence(expanded || undefined, pop, { instant: !q.trim() && !showRecent });
+  // The highlighted row stays in view as the arrow keys move through a long list.
+  useEffect(() => {
+    if (expanded && active >= 0) document.getElementById(`search-opt-${active}`)?.scrollIntoView({ block: "nearest", behavior: "instant" });
+  }, [active, expanded]);
   return (
     <div className="search" role="search">
       <Icon name="search" size={14} />
-      <input ref={input} className="input" type="search" placeholder={t("search.placeholder")} value={q} onChange={(e) => { setQ(e.target.value); setOpen(true); setActive(-1); }} onFocus={() => { setRecent(recentSearches()); setOpen(true); }} onBlur={(e) => { if (!pop.current?.contains(e.relatedTarget as Node | null)) { setOpen(false); setActive(-1); } }} onClick={() => setOpen(true)} onKeyDown={onKey} aria-label={t("search.placeholder")} role="combobox" aria-autocomplete="list" aria-expanded={expanded} aria-controls={expanded ? "search-results" : undefined} aria-activedescendant={expanded && active >= 0 ? `search-opt-${active}` : undefined} data-testid="search-input" />
+      <input ref={input} className="input" type="search" placeholder={t("search.placeholder")} value={q} onChange={(e) => { const v = e.target.value; setQ(v); setOpen((o) => o || !!v); setActive(-1); }} onFocus={() => { setRecent(recentSearches()); setOpen(true); }} onBlur={(e) => { if (!pop.current?.contains(e.relatedTarget as Node | null)) { setOpen(false); setActive(-1); } }} onClick={() => setOpen(true)} onKeyDown={onKey} aria-label={t("search.placeholder")} role="combobox" aria-autocomplete="list" aria-expanded={expanded} aria-controls={expanded ? "search-results" : undefined} aria-activedescendant={expanded && active >= 0 ? `search-opt-${active}` : undefined} data-testid="search-input" />
       {sheet.value ? (
         <div {...sheet.exitProps} id={showRecent ? undefined : "search-results"} className={`search-popover ${sheet.motion}`} role={showRecent ? undefined : "listbox"} aria-label={showRecent ? undefined : t("a11y.searchResults")} style={{ minHeight: showRecent ? undefined : minHeight }} data-testid="search-popover">
           {showRecent ? (
@@ -212,8 +252,8 @@ function SearchBox() {
             </>
           ) : null}
           {!showRecent && local && !localRows.length && !serverRows.length ? <div className="search-divider" role="presentation">{t("search.noResults", { query: q })}</div> : null}
-          {!showRecent && localRows.some((r) => r.lyric) ? <div className="search-divider" role="presentation">{t("search.lyricsScope")}</div> : null}
-          {!showRecent && localRows.length ? <div className="search-section" role="group" aria-label={t("nav.library")}>{localRows.map(renderRow)}</div> : null}
+          {/* Where lyrics were looked for heads the lyric matches, not the whole list. */}
+          {!showRecent && localRows.length ? <div className="search-section" role="group" aria-label={t("nav.library")}>{localRows.map((r, i) => (r.lyric && !localRows[i - 1]?.lyric ? [<div key="lyrics-scope" className="search-divider" role="presentation">{t("search.lyricsScope")}</div>, renderRow(r, i)] : renderRow(r, i)))}</div> : null}
           {!showRecent && local && (!server || serverRows.length) ? <div className="search-divider" role="presentation" data-testid="search-divider">{server ? t("search.server") : t("search.searching")}</div> : null}
           {!showRecent && serverRows.length ? <div className="search-section" role="group" aria-label={t("search.server")} data-testid="search-server-batch">{serverRows.map((r, i) => renderRow(r, localRows.length + i))}</div> : null}
         </div>

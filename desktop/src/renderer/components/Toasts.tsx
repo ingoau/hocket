@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Command } from "@core/api";
 import { useApp } from "../store/app";
 import { usePresenceList } from "../lib/presence";
@@ -12,9 +12,22 @@ export function Toasts() {
   const [held, setHeld] = useState(false);
   // A dismissed toast stays mounted, inert, while it sinks away.
   const entries = usePresenceList(toasts, (t) => t.id);
+  // When each toast's time started: its arrival (a toast pushed again under its id is a new one),
+  // or the end of a hold. Another toast arriving doesn't restart the others' time, so a stack
+  // clears from the oldest.
+  const since = useRef(new WeakMap<object, number>());
   useEffect(() => {
-    if (held) return;
-    const timers = toasts.map((t) => setTimeout(() => dismiss(t.id), Math.max(1500, t.durationMs)));
+    if (held) {
+      // Letting go gives every toast its full time again.
+      since.current = new WeakMap();
+      return;
+    }
+    const now = Date.now();
+    const timers = toasts.map((t) => {
+      const from = since.current.get(t) ?? now;
+      since.current.set(t, from);
+      return setTimeout(() => dismiss(t.id), Math.max(0, from + Math.max(1500, t.durationMs) - now));
+    });
     return () => timers.forEach(clearTimeout);
   }, [toasts, dismiss, held]);
   // Always mounted: a live region must exist before its content changes to be announced.
