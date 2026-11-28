@@ -366,10 +366,11 @@ class FullPlayerLayoutTest {
 
     /**
      * A song by two artists: the line under the title is its artist string as tagged ("A feat.
-     * B"), and the sheet lists each artist (the second one's page from its row).
+     * B"); it opens the song's details, which link each artist (the header's artist string offers them in
+     * a menu; the second one's page from it).
      */
     @Test
-    fun aSongBySeveralArtistsListsEachInTheSheet() {
+    fun aSongBySeveralArtistsLinksEachInTheSongsDetails() {
         startExpanded()
         val lib = core.fake.library
         val duet = lib.tracks.first { (it.artists?.size ?: 0) == 2 }
@@ -381,13 +382,19 @@ class FullPlayerLayoutTest {
         val line = compose.onAllNodesWithTag("player.artist", useUnmergedTree = true).fetchSemanticsNodes().single().config[SemanticsProperties.Text].joinToString { it.text }
         assertEquals(duet.artist, line)
         tap("player.artistLine")
-        compose.waitUntil(5_000) { exists("player.artists.artist.1") }
-        assertFalse(exists("player.artists.artist.2"))
+        compose.waitUntil(5_000) { exists("player.info") }
+        // The song tab: a link for each artist, by name.
+        compose.waitUntil(5_000) { exists("player.about.artistLink.1") }
+        assertFalse(exists("player.about.artistLink.2"))
         for ((i, a) in listOf(first, second).withIndex()) {
-            assertTrue("${a.name} in row $i", compose.onAllNodes(androidx.compose.ui.test.hasTestTag("player.artists.artist.$i") and androidx.compose.ui.test.hasText(a.name, substring = true)).fetchSemanticsNodes().isNotEmpty())
+            assertTrue("${a.name} in link $i", compose.onAllNodes(androidx.compose.ui.test.hasTestTag("player.about.artistLink.$i") and androidx.compose.ui.test.hasText(a.name, substring = true)).fetchSemanticsNodes().isNotEmpty())
         }
-        tap("player.artists.artist.1")
-        compose.waitUntil(5_000) { !exists("player.artists") }
+        // The header's artist string offers both artists in a menu.
+        tap("player.about.artist")
+        compose.waitUntil(5_000) { exists("player.about.artist.menu.1") }
+        assertTrue(compose.onAllNodes(androidx.compose.ui.test.hasTestTag("player.about.artist.menu.1") and androidx.compose.ui.test.hasText(second.name, substring = true)).fetchSemanticsNodes().isNotEmpty())
+        tap("player.about.artist.menu.1")
+        compose.waitUntil(5_000) { !exists("player.info") }
         compose.waitUntil(5_000) { exists("detail.header") && compose.onAllNodesWithText(second.name).fetchSemanticsNodes().isNotEmpty() }
     }
 
@@ -535,34 +542,32 @@ class FullPlayerLayoutTest {
         check("no stars", stars = false)
     }
 
-    /** The artist line opens the song's artists and its album; each goes to its page and closes the player. */
+    /** The artist line opens the song's details, like the title; its album and artist links go to their pages and close the player. */
     @Test
-    fun tappingTheArtistLineListsTheArtistsAndTheAlbum() {
+    fun tappingTheArtistLineOpensTheSongsDetails() {
         startExpanded()
         val track = core.client.nowPlaying.value!!.track
         val line = compose.onNodeWithTag("player.artistLine").fetchSemanticsNode()
-        assertEquals("Show artists and album", line.config[SemanticsActions.OnClick].label)
+        assertEquals("About this song", line.config[SemanticsActions.OnClick].label)
         tap("player.artistLine")
-        compose.waitUntil(5_000) { exists("player.artists") }
-        assertTrue(compose.onAllNodesWithText("Artists and album").fetchSemanticsNodes().isNotEmpty())
-        val artist = compose.onNodeWithTag("player.artists.artist.0").fetchSemanticsNode()
-        assertEquals("Go to artist", artist.config[SemanticsActions.OnClick].label)
-        assertTrue(compose.onAllNodesWithText(track.artist!!, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
-        assertFalse("a one-artist song", exists("player.artists.artist.1"))
-        assertEquals("Go to album", compose.onNodeWithTag("player.artists.album").fetchSemanticsNode().config[SemanticsActions.OnClick].label)
-        tap("player.artists.artist.0")
-        compose.waitUntil(5_000) { !exists("player.artists") }
+        compose.waitUntil(5_000) { exists("player.info") }
+        compose.waitUntil(5_000) { exists("player.about.artistLink.0") }
+        assertTrue(compose.onAllNodes(androidx.compose.ui.test.hasTestTag("player.about.artistLink.0") and androidx.compose.ui.test.hasText(track.artist!!, substring = true)).fetchSemanticsNodes().isNotEmpty())
+        assertFalse("a one-artist song", exists("player.about.artistLink.1"))
+        assertEquals("Go to artist", compose.onNodeWithTag("player.about.artist").fetchSemanticsNode().config[SemanticsActions.OnClick].label)
+        tap("player.about.artistLink.0")
+        compose.waitUntil(5_000) { !exists("player.info") }
         // The player collapses to the mini player.
         compose.waitUntil(5_000) { bounds("nowPlaying.sheet").top > 600f * dp }
         compose.waitUntil(5_000) { exists("detail.header") }
-        // The album, from the sheet again.
+        // The album, from the details again.
         compose.onNodeWithTag("nowPlaying.sheet").performSemanticsAction(SemanticsActions.Expand)
         compose.waitUntil(5_000) { exists("player.artistLine") }
         compose.waitForIdle()
         tap("player.artistLine")
-        compose.waitUntil(5_000) { exists("player.artists.album") }
-        tap("player.artists.album")
-        compose.waitUntil(5_000) { !exists("player.artists") }
+        compose.waitUntil(5_000) { exists("player.about.album") }
+        tap("player.about.album")
+        compose.waitUntil(5_000) { !exists("player.info") }
         compose.waitUntil(5_000) { compose.onAllNodesWithText(track.album!!).fetchSemanticsNodes().isNotEmpty() }
     }
 

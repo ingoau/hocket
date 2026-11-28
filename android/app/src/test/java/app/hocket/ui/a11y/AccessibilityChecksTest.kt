@@ -142,14 +142,22 @@ class AccessibilityChecksTest {
         A11yChecks.assertAccessible(compose, "about this song")
     }
 
+    /** A two-artist song's details, from the artist line: a link for each artist, and the header's menu of them. */
     @Test
-    fun theArtistsSheetPassesTheChecks() {
-        start()
+    fun aTwoArtistSongsDetailsPassTheChecks() {
+        val core = start()
+        val lib = core.fake.library
+        val duet = lib.tracks.first { (it.artists?.size ?: 0) == 2 }
+        core.client.dispatch(app.hocket.core.Commands.playTracks(listOf(app.hocket.core.api.TrackRef(lib.serverId, duet.id)), 0, "Duet"))
+        compose.waitUntil(5_000) { core.client.nowPlaying.value?.track?.id == duet.id }
         compose.onNodeWithTag("miniPlayer").performClick()
         compose.waitUntil(5_000) { displayed("player.playPause") }
         compose.onNodeWithTag("player.artistLine").performClick()
-        compose.waitUntil(5_000) { displayed("player.artists.album") }
-        check("artists and album")
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("player.about.artistLink.1").fetchSemanticsNodes().isNotEmpty() }
+        check("about a two-artist song")
+        compose.onNodeWithTag("player.about.artist").performClick()
+        compose.waitUntil(5_000) { displayed("player.about.artist.menu.1") }
+        check("the song's artists menu")
     }
 
     @Test
