@@ -15,6 +15,7 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.expressiveLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -27,23 +28,31 @@ import app.hocket.core.SettingKeys
 import app.hocket.core.client.CoreClient
 import app.hocket.ui.a11y.LocalReducedMotion
 import app.hocket.ui.a11y.rememberReducedMotion
+import app.hocket.ui.player.resolveNowPlayingSeed
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 
-/** The accent colour taken from the playing artwork, provided by the now-playing sheet while it is open. */
+/** The accent colour the app's scheme is built from when it comes from artwork (what's playing, or a preview), else null. */
 val LocalArtworkSeed = compositionLocalOf<Color?> { null }
 
 /** Whether the app is in dark mode after applying the theme setting. */
 val LocalDarkTheme = compositionLocalOf { false }
 
-/** A setter the now-playing sheet uses to publish the artwork seed to the whole tree. */
+/** The playing track's cover and its seed colour, as the theme works them out; null above the theme or with no client. */
+class NowPlayingSeed(val coverArt: String?, val seed: Color?)
+val LocalNowPlayingSeed = compositionLocalOf<NowPlayingSeed?> { null }
+
+/** A setter the now-playing sheet uses to preview a cover's colours across the whole tree (with colour from artwork off). */
 class ArtworkSeedState { var seed: Color? by mutableStateOf(null) }
 val LocalArtworkSeedState = compositionLocalOf { ArtworkSeedState() }
 
 /**
  * Material 3 Expressive theme: expressive colour scheme, expressive motion scheme, and the system
- * font on an expressive type scale. The colours come from, in order: the playing artwork (while the
- * now-playing sheet publishes a seed and `display.dynamicColour` is on), a picked accent
- * (`display.accent`), then the wallpaper on Android 12+. `display.dynamicColour` only gates the
- * artwork: turning it off falls back to the wallpaper, not the stock scheme.
+ * font on an expressive type scale. The colours come from, in order: the playing artwork (with
+ * `display.dynamicColour` on; while a new cover's seed is worked out the last one holds), a cover
+ * the now-playing sheet previews (with it off), a picked accent (`display.accent`), then the
+ * wallpaper on Android 12+. `display.dynamicColour` only gates the artwork: turning it off falls
+ * back to the accent or the wallpaper, not the stock scheme.
  */
 @Composable
 fun HocketTheme(client: CoreClient?, content: @Composable () -> Unit) {
@@ -55,17 +64,26 @@ fun HocketTheme(client: CoreClient?, content: @Composable () -> Unit) {
     val dark = when (themeSetting) { "light" -> false; "dark" -> true; else -> isSystemInDarkTheme() }
     val context = LocalContext.current
     val seedState = remember { ArtworkSeedState() }
-    val artworkSeed = seedState.seed
-    val scheme: ColorScheme = remember(dark, accentSetting, dynamicColour, artworkSeed) {
+    // Only the cover: the entry changes far more often (a star, a rating, the queue), and each
+    // recomposition here hands the whole tree a new scheme.
+    val playing = client?.let { c ->
+        val cover by remember(c) { c.nowPlaying.map { it?.track?.coverArt }.distinctUntilChanged() }.collectAsStateWithLifecycle(c.nowPlaying.value?.track?.coverArt)
+        val seed = resolveNowPlayingSeed(cover, c)
+        remember(cover, seed) { NowPlayingSeed(cover, seed) }
+    }
+    // A preview only means something with colour from artwork off; turning it on drops one.
+    LaunchedEffect(dynamicColour) { if (dynamicColour) seedState.seed = null }
+    val artworkSeed = if (dynamicColour) playing?.seed else seedState.seed
+    val scheme: ColorScheme = remember(dark, accentSetting, artworkSeed) {
         when {
-            artworkSeed != null && dynamicColour -> ArtworkColors.scheme(artworkSeed, dark)
+            artworkSeed != null -> ArtworkColors.scheme(artworkSeed, dark)
             accentSetting != null -> runCatching { Color(android.graphics.Color.parseColor(if (accentSetting.startsWith("#")) accentSetting else "#$accentSetting")) }.getOrNull()?.let { ArtworkColors.scheme(it, dark) }
                 ?: baseScheme(dark, context)
             else -> baseScheme(dark, context)
         }
     }
     val reducedMotion = rememberReducedMotion()
-    CompositionLocalProvider(LocalDarkTheme provides dark, LocalArtworkSeedState provides seedState, LocalArtworkSeed provides artworkSeed, LocalReducedMotion provides reducedMotion) {
+    CompositionLocalProvider(LocalDarkTheme provides dark, LocalArtworkSeedState provides seedState, LocalArtworkSeed provides artworkSeed, LocalNowPlayingSeed provides playing, LocalReducedMotion provides reducedMotion) {
         MaterialExpressiveTheme(
             colorScheme = animatedScheme(scheme, reducedMotion),
             motionScheme = MotionScheme.expressive(),

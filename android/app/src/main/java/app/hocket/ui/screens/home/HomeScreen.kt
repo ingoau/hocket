@@ -225,10 +225,11 @@ fun HomeScreen(nav: NavHostController) {
     // what's playing), unless colour from artwork is off.
     val dynamicColour = settings[SettingKeys.DISPLAY_DYNAMIC_COLOUR]?.value?.trim() != "false"
     val appScheme = MaterialTheme.colorScheme
-    val slideSchemes = remember(slides, slideSeeds, dark, dynamicColour, appScheme) {
-        slides.mapIndexed { i, s -> if (dynamicColour) ArtworkColors.scheme(slideSeeds[i] ?: ArtworkColors.seedFor(s.coverArt), dark) else appScheme }
+    // (Not keyed on the app's scheme: it eases through new instances whenever the playing cover changes.)
+    val slideSchemes = remember(slides, slideSeeds, dark, dynamicColour) {
+        if (dynamicColour) slides.mapIndexed { i, s -> ArtworkColors.scheme(slideSeeds[i] ?: ArtworkColors.seedFor(s.coverArt), dark) } else null
     }
-    val pageScheme = slideSchemes.getOrNull(pager.currentPage) ?: appScheme
+    val pageScheme = slideSchemes?.getOrNull(pager.currentPage) ?: appScheme
     // A cold load reveals Spotlight with the rest, so the carousel and the sections come in together.
     val reveal = rememberHomeReveal(serverId, ready = { feed != null && (!spotlightOn || spotlight != null) })
     val heroFirst = slides.isNotEmpty() && reveal.phase == RevealPhase.Shown
@@ -334,7 +335,7 @@ fun HomeScreen(nav: NavHostController) {
                         val step = order++
                         item(key = "spotlight", contentType = "spotlight") {
                             SpotlightCarousel(
-                                slides, pager, slideSchemes,
+                                slides, pager, slideSchemes ?: slides.map { appScheme },
                                 onOpen = { s -> openSlide(nav, s) },
                                 onPlay = { s, shuffle -> playSlide(client, serverId, s, shuffle) },
                                 onMenu = { s -> s.album?.let { sheets.album = it } ?: s.artist?.let { sheets.artist = it } ?: s.playlist?.let { sheets.playlist = it } },

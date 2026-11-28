@@ -304,18 +304,37 @@ internal class MiniPlayerColours(val container: Color, val content: Color, val c
 
 /**
  * The colour scheme of what is playing: the scheme of [coverArt]'s seed colour, or null with no
- * artwork. While a new cover's colours are worked out the last ones hold (rather than dipping
- * through the app's own scheme and back). The mini player and the navigation bar both wear it.
+ * artwork ([nowPlayingSeed]). The mini player and the navigation bar both wear it.
  */
 @Composable
 internal fun nowPlayingScheme(coverArt: String?): ColorScheme? {
     val dark = app.hocket.ui.theme.LocalDarkTheme.current
-    val worked = artworkSeed(coverArt).value
-    var last by remember { androidx.compose.runtime.mutableStateOf<Color?>(null) }
-    // Nothing playing forgets them, so the next song never starts in a long-gone cover's colours.
-    androidx.compose.runtime.SideEffect { if (coverArt == null) last = null else if (worked != null) last = worked }
-    val seed = worked ?: last.takeIf { coverArt != null }
+    val seed = nowPlayingSeed(coverArt)
     return remember(seed, dark) { seed?.let { app.hocket.ui.theme.ArtworkColors.scheme(it, dark) } }
+}
+
+/**
+ * The seed colour of what is playing ([coverArt]), or null with no artwork. While a new cover's
+ * seed is worked out the last one holds (rather than dipping through the app's own colours and
+ * back). The app's theme ([app.hocket.ui.theme.HocketTheme]) works it out for the playing track
+ * and shares it ([app.hocket.ui.theme.LocalNowPlayingSeed]), so each cover's palette is read once;
+ * any other cover (the player's, mid-swipe) is worked out here.
+ */
+@Composable
+internal fun nowPlayingSeed(coverArt: String?): Color? {
+    val shared = app.hocket.ui.theme.LocalNowPlayingSeed.current
+    if (shared != null && shared.coverArt == coverArt) return shared.seed
+    return resolveNowPlayingSeed(coverArt, app.hocket.ui.LocalCoreClient.current)
+}
+
+/** [nowPlayingSeed] worked out from [client]'s artwork. */
+@Composable
+fun resolveNowPlayingSeed(coverArt: String?, client: app.hocket.core.client.CoreClient): Color? {
+    val worked = artworkSeed(coverArt, client).value
+    var last by remember { androidx.compose.runtime.mutableStateOf<Color?>(null) }
+    // Nothing playing forgets it, so the next song never starts in a long-gone cover's colours.
+    androidx.compose.runtime.SideEffect { if (coverArt == null) last = null else if (worked != null) last = worked }
+    return worked ?: last.takeIf { coverArt != null }
 }
 
 /** The mini player's container in [scheme]: its primary container, a touch towards the surface. */

@@ -741,6 +741,8 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
         }
         // `swipe.playerUp`: the queue or the lyrics take the artwork's place; the device picker and
         // the song menu come up as sheets ([FullPlayer] sets [SwipeUpPull.openSheet] for those).
+        // The app already wears the playing cover's colours with colour from artwork on: nothing to preview.
+        val dynamicColour = settings[app.hocket.core.SettingKeys.DISPLAY_DYNAMIC_COLOUR]?.value?.trim() != "false"
         val swipeUp = settings[app.hocket.core.SettingKeys.SWIPE_PLAYER_UP]?.value?.trim()?.removeSurrounding("\"")
         queuePull.onOpen = { state.mode = if (swipeUp == app.hocket.core.SwipeOptions.PLAYER_UP_LYRICS) PlayerMode.Lyrics else PlayerMode.Queue }
         // The sheet moving (a collapse by the button, back or the scrim) drops any lift, so the
@@ -900,7 +902,7 @@ fun NowPlayingSheet(state: NowPlayingSheetState, bottomInset: Dp, onOpenAlbum: (
                                 artworkScale = { artScale.value },
                                 lyricsVisible = expanded && settledOpen && mode == PlayerMode.Lyrics,
                                 lyricLineVisible = expanded && settledOpen && mode == PlayerMode.Artwork,
-                                onPreviewToggle = { seed -> seedState.seed = if (seedState.seed == null) seed else null },
+                                onPreviewToggle = { seed -> if (!dynamicColour) seedState.seed = if (seedState.seed == null) seed else null },
                                 coverArt = coverArt,
                                 immersive = artworkLayout,
                                 carousel = carousel,
@@ -1353,8 +1355,7 @@ private fun animateColorScheme(target: ColorScheme, animate: Boolean): ColorSche
 
 /** Resolves the artwork's seed colour: palette from the cached file, else the id-derived placeholder hue. */
 @Composable
-fun artworkSeed(coverArt: String?): androidx.compose.runtime.State<Color?> {
-    val client = LocalCoreClient.current
+fun artworkSeed(coverArt: String?, client: app.hocket.core.client.CoreClient = LocalCoreClient.current): androidx.compose.runtime.State<Color?> {
     // Null while worked out; one worked out before (a neighbour's, say) is there from the first frame.
     val state = remember(coverArt) { mutableStateOf(coverArt?.let { seeds.get(it) }) }
     LaunchedEffect(state) {
