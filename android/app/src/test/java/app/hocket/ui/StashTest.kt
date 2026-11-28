@@ -142,6 +142,22 @@ class StashTest {
     }
 
     @Test
+    fun aSongsGoToAlbumClosesTheStash() {
+        val core = start()
+        stashSome(core, 2)
+        compose.onNodeWithTag("stash.chip").performClick()
+        compose.waitForIdle()
+        val title = core.client.stash.value.first().track.title
+        compose.onNodeWithContentDescription("More options for $title", useUnmergedTree = true).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("songMenu.action.goToAlbum", useUnmergedTree = true).performScrollTo().performClick()
+        compose.waitForIdle()
+        compose.onAllNodesWithTag("stash.sheet").assertCountEquals(0)
+        compose.onAllNodesWithTag("songMenu").assertCountEquals(0)
+        assertTrue(core.client.stash.value.size == 2)
+    }
+
+    @Test
     @Config(qualifiers = "w320dp-h700dp")
     fun onANarrowPhoneTheChipFloatsAboveTheMiniPlayerInstead() {
         val core = start()

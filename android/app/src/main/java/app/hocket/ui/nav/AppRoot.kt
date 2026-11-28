@@ -909,7 +909,7 @@ private fun MainShell(snackbar: SnackbarHostState) {
                     app.hocket.ui.stash.StashChip(held[0], onClick = { stashOpen = true })
                 }
             }
-            if (stashOpen) app.hocket.ui.stash.StashSheet(onDismiss = { stashOpen = false })
+            if (stashOpen) app.hocket.ui.stash.StashSheet(onDismiss = { stashOpen = false }, navigator = navigator)
             // Snackbars sit just above the mini player (or the bar when nothing plays), centred on
             // the content beside the rail on wide layouts; as the full player opens they ease down
             // to the bottom of the screen instead of floating over its controls.

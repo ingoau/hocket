@@ -249,7 +249,7 @@ object StashChipDefaults {
  * the sheet. Clear empties it (the core's toast has an Undo).
  */
 @Composable
-fun StashSheet(onDismiss: () -> Unit) {
+fun StashSheet(onDismiss: () -> Unit, navigator: DetailNavigator? = LocalDetailNavigator.current) {
     val client = LocalCoreClient.current
     val items by client.stash.collectAsStateWithLifecycle()
     val haptics = LocalHapticFeedback.current
@@ -282,7 +282,15 @@ fun StashSheet(onDismiss: () -> Unit) {
     var actions by remember { mutableStateOf<List<ActionDescriptor>>(emptyList()) }
     val currentTarget by rememberUpdatedState(target)
     LaunchedEffect(target) { if (refs.isNotEmpty()) actions = client.actions("contextMenu", target) }
-    LaunchedEffect(Unit) { client.actionsChanged.collectLatest { if (currentTarget.let { it is app.hocket.core.api.ActionTarget.Tracks && it.data.tracks.isNotEmpty() }) actions = client.actions("contextMenu", currentTarget) } }
+    LaunchedEffect(Unit) {
+        client.actionsChanged.collectLatest {
+            val t = currentTarget
+            if (t !is app.hocket.core.api.ActionTarget.Tracks || t.data.tracks.isEmpty()) return@collectLatest
+            val fresh = client.actions("contextMenu", t)
+            // Picked songs changed meanwhile: that set's own fetch has (or will have) the answer.
+            if (t == currentTarget) actions = fresh
+        }
+    }
     val subject = remember(acting, resources, dot) { songsSubject(acting.size, acting.map { it.track.toSummary() }, null, resources, dot) }
     fun playAction(a: ActionDescriptor) {
         when (a.id) {
@@ -295,15 +303,23 @@ fun StashSheet(onDismiss: () -> Unit) {
             }
         }
     }
-    // Each song's menu, over this sheet: going to its album or artist closes the stash first.
+    // Each song's menu, over this sheet; its go-to rows (and the rows' accessibility actions)
+    // close the stash first, so what they open is in view.
     val songMenu = remember { app.hocket.ui.components.SongMenuController() }
-    val navigator = LocalDetailNavigator.current
+    val dismiss by rememberUpdatedState(onDismiss)
     val songNavigator = remember(navigator) {
-        navigator?.let { n -> DetailNavigator(openAlbum = { id -> onDismiss(); n.openAlbum(id) }, openArtist = { id -> onDismiss(); n.openArtist(id) }) }
+        navigator?.let { n ->
+            DetailNavigator(
+                openAlbum = { id -> dismiss(); n.openAlbum(id) },
+                openArtist = { id -> dismiss(); n.openArtist(id) },
+                openPlaylist = n.openPlaylist?.let { open -> { id -> dismiss(); open(id) } },
+                openSetting = n.openSetting?.let { open -> { route, tag -> dismiss(); open(route, tag) } },
+            )
+        }
     }
     val removeOne = stringResource(R.string.stash_remove_one)
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState, modifier = Modifier.testTag("stash.sheet")) {
-        CompositionLocalProvider(LocalAppSnackbar provides snackbar) {
+        CompositionLocalProvider(LocalAppSnackbar provides snackbar, LocalDetailNavigator provides songNavigator) {
         Box {
         Column(Modifier.navigationBarsPadding()) {
             Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 12.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -346,9 +362,10 @@ fun StashSheet(onDismiss: () -> Unit) {
                     onClick = { client.dispatch(Command.StashRemove(CommandStashRemoveInner(selection.map { it.entryId }))) },
                     destructive = true, testTag = "stash.menu.remove", replaces = ActionIds.STASH,
                 ) else null
-                // A fresh menu for each set of songs it acts on (its toggles start from theirs). Add to
-                // stash makes no sense here: an extra stands in for it (or, for the whole stash, Clear does).
-                key(acting.map { it.entryId }) {
+                // A fresh menu for each set of songs it acts on, and as their state changes (its
+                // toggles start from the subject's). Add to stash makes no sense here: an extra
+                // stands in for it (or, for the whole stash, Clear does).
+                key(acting.map { it.entryId }, subject) {
                     MenuSheet(
                         subject, target, actions.filter { it.id != ActionIds.STASH },
                         onDismiss = {},

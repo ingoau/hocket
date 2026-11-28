@@ -180,7 +180,15 @@ private fun Drawer(
     LaunchedEffect(selection, kind) {
         if (active) actions = client.actions("contextMenu", client.selectionTarget())
     }
-    LaunchedEffect(Unit) { client.actionsChanged.collectLatest { if (client.selection.value.active) actions = client.actions("contextMenu", client.selectionTarget()) } }
+    LaunchedEffect(Unit) {
+        client.actionsChanged.collectLatest {
+            if (!client.selection.value.active) return@collectLatest
+            val target = client.selectionTarget()
+            val fresh = client.actions("contextMenu", target)
+            // The selection changed meanwhile: its own fetch (above) has the answer.
+            if (client.selectionTarget() == target) actions = fresh
+        }
+    }
     val navigator = LocalDetailNavigator.current
     val pins by client.pins.collectAsStateWithLifecycleCompat()
     val unknownArtist = stringResource(R.string.unknown_artist)
