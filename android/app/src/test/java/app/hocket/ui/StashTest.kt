@@ -5,6 +5,7 @@ import app.hocket.core.historyEntries
 import app.hocket.core.restEntries
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.getBoundsInRoot
@@ -13,6 +14,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -147,26 +149,37 @@ class StashTest {
     }
 
     @Test
-    @Config(qualifiers = "w411dp-h640dp")
-    fun aLongStashOpensScrolledToThePlayButtons() {
+    @Config(qualifiers = "w411dp-h960dp")
+    fun aShortStashSheetIsAsTallAsItsSongsAndMenu() {
         val core = start()
-        stashSome(core, 9)
+        stashSome(core, 2)
         compose.onNodeWithTag("stash.chip").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithTag("stash.menu.action.play", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
         compose.waitForIdle()
-        val play = compose.onNodeWithTag("stash.menu.action.play", useUnmergedTree = true).getBoundsInRoot()
+        // Two songs and the menu fit: the sheet stops short of the top, the menu runs to its foot.
         val list = compose.onNodeWithTag("stash.list").getBoundsInRoot()
-        // The buttons at the foot of the list, in full (Play heads the group's two rows); the first
-        // songs scrolled away above.
-        assertTrue("play ${play.top}..${play.bottom} in list ${list.top}..${list.bottom}", play.bottom <= list.bottom - 64.dp && play.bottom >= list.bottom - 120.dp)
+        assertTrue("list ${list.top}..${list.bottom}", list.top > 80.dp)
+        compose.onAllNodesWithTag("stash.row").assertCountEquals(2)
+        compose.onNodeWithTag("stash.summary").assertIsDisplayed()
+        compose.onNodeWithTag("stash.menu.action.play", useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h640dp")
+    fun aLongStashOpensAtItsTopAndTheHeaderScrollsAway() {
+        val core = start()
+        stashSome(core, 9)
+        compose.onNodeWithTag("stash.chip").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("stash.row").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitForIdle()
+        // Opened at the top: the header, then the first song.
+        compose.onNodeWithTag("stash.summary").assertIsDisplayed()
         val first = core.client.stash.value.first().track.title
-        val firstRow = compose.onAllNodes(androidx.compose.ui.test.hasTestTag("stash.row") and androidx.compose.ui.test.hasText(first, substring = true))
-        // (Nine songs and the menu don't fit this phone.) The first has scrolled up under the
-        // sheet's header, or away.
-        if (firstRow.fetchSemanticsNodes().isNotEmpty()) {
-            val top = firstRow[0].getBoundsInRoot().top
-            assertTrue("first row top $top vs list top ${list.top}", top < list.top)
-        }
+        compose.onAllNodes(androidx.compose.ui.test.hasTestTag("stash.row") and androidx.compose.ui.test.hasText(first, substring = true))[0].assertIsDisplayed()
+        // The header is no fixed bar: scrolled down to the menu, it's gone with the songs.
+        compose.onNodeWithTag("stash.list").performScrollToNode(androidx.compose.ui.test.hasTestTag("stash.menu"))
+        compose.waitForIdle()
+        compose.onNodeWithTag("stash.summary").assertIsNotDisplayed()
     }
 
     @Test

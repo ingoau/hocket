@@ -102,15 +102,6 @@ import app.hocket.ui.components.segmentedShape
 import app.hocket.ui.components.songsSubject
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import androidx.compose.foundation.gestures.scrollBy
-import androidx.compose.runtime.snapshotFlow
-import androidx.compose.runtime.withFrameNanos
-import androidx.compose.ui.layout.LayoutCoordinates
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInWindow
-import androidx.compose.ui.platform.LocalDensity
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.withTimeoutOrNull
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 
@@ -339,29 +330,31 @@ fun StashSheet(onDismiss: () -> Unit, navigator: DetailNavigator? = LocalDetailN
         CompositionLocalProvider(LocalAppSnackbar provides snackbar, LocalDetailNavigator provides songNavigator) {
         Box {
         Column(Modifier.navigationBarsPadding()) {
-            Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 12.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
-                    Text(
-                        if (selection.isNotEmpty()) pluralStringResource(R.plurals.stash_selected_of, items.size, selection.size, items.size)
-                        else pluralStringResource(R.plurals.stash_count, items.size, items.size),
-                        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.testTag("stash.summary"),
-                    )
-                }
-                if (selection.isNotEmpty()) TextButton(onClick = { picked = emptySet() }, modifier = Modifier.testTag("stash.deselect")) { Text(stringResource(R.string.stash_deselect)) }
-                else TextButton(onClick = { client.dispatch(Command.StashClear) }, modifier = Modifier.testTag("stash.clear")) {
-                    Icon(HocketIcons.Filled.ClearAll, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(stringResource(R.string.stash_clear))
-                }
-            }
             StashList(
+                header = {
+                Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 12.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
+                        Text(
+                            if (selection.isNotEmpty()) pluralStringResource(R.plurals.stash_selected_of, items.size, selection.size, items.size)
+                            else pluralStringResource(R.plurals.stash_count, items.size, items.size),
+                            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.testTag("stash.summary"),
+                        )
+                    }
+                    if (selection.isNotEmpty()) TextButton(onClick = { picked = emptySet() }, modifier = Modifier.testTag("stash.deselect")) { Text(stringResource(R.string.stash_deselect)) }
+                    else TextButton(onClick = { client.dispatch(Command.StashClear) }, modifier = Modifier.testTag("stash.clear")) {
+                        Icon(HocketIcons.Filled.ClearAll, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(stringResource(R.string.stash_clear))
+                    }
+                }
+                },
                 items = items,
                 picked = picked,
                 onToggle = { id -> picked = if (id in picked) picked - id else picked + id; haptics.performHapticFeedback(HapticFeedbackType.SegmentTick) },
                 onMove = { id, to -> client.dispatch(Command.StashMove(CommandStashMoveInner(id, to.toUInt()))) },
-            ) { playGroupModifier ->
+            ) {
                 // What the menu acts on, so it's never a surprise: everything, or the songs picked.
                 Text(
                     if (selection.isNotEmpty()) pluralStringResource(R.plurals.stash_acting_selected, selection.size, selection.size)
@@ -391,7 +384,6 @@ fun StashSheet(onDismiss: () -> Unit, navigator: DetailNavigator? = LocalDetailN
                         embedded = true,
                         showHeader = false,
                         onPlay = ::playAction,
-                        playGroupModifier = playGroupModifier,
                     )
                 }
             }
@@ -417,8 +409,10 @@ private fun StashList(
     picked: Set<String>,
     onToggle: (String) -> Unit,
     onMove: (String, Int) -> Unit,
-    /** The menu after the songs; its play group carries the modifier it is handed. */
-    footer: @Composable (playGroupModifier: Modifier) -> Unit,
+    /** Above the songs; it scrolls with them (the sheet keeps no fixed header). */
+    header: @Composable () -> Unit,
+    /** The menu after the songs. */
+    footer: @Composable () -> Unit,
 ) {
     val haptics = LocalHapticFeedback.current
     val dot = stringResource(R.string.dot_separator)
@@ -436,33 +430,14 @@ private fun StashList(
         shown = shown.toMutableList().apply { add(b, removeAt(a)) }
         haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
     }
-    // Opened, the list lands with the play group at its foot: as many songs as fit above it, the
-    // buttons in reach. (Once: after that it scrolls only as the user scrolls it.)
-    val listAt = remember { arrayOfNulls<LayoutCoordinates>(1) }
-    val playAt = remember { arrayOfNulls<LayoutCoordinates>(1) }
-    val margin = with(LocalDensity.current) { 12.dp.toPx() }
-    LaunchedEffect(Unit) {
-        snapshotFlow { shown.size }.first { it > 0 }
-        val footer = shown.size
-        if (listState.layoutInfo.visibleItemsInfo.none { it.index == footer }) listState.scrollToItem(footer)
-        // The play group shows once the menu's actions have loaded.
-        val play = withTimeoutOrNull(2_000) {
-            var found: LayoutCoordinates? = null
-            while (found == null) { withFrameNanos { }; found = playAt[0]?.takeIf { it.isAttached } }
-            found
-        } ?: return@LaunchedEffect
-        val list = listAt[0]?.takeIf { it.isAttached } ?: return@LaunchedEffect
-        val playBottom = play.positionInWindow().y + play.size.height
-        val listBottom = list.positionInWindow().y + list.size.height
-        listState.scrollBy(playBottom - (listBottom - margin))
-    }
     val moveUp = stringResource(R.string.stash_move_up)
     val moveDown = stringResource(R.string.stash_move_down)
     LazyColumn(
         state = listState,
-        modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp).onGloballyPositioned { listAt[0] = it }.testTag("stash.list"),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp).testTag("stash.list"),
         contentPadding = PaddingValues(bottom = 16.dp),
     ) {
+        item(key = "stash.header") { header() }
         itemsIndexed(shown, key = { _, it -> it.entryId }) { index, item ->
             ReorderableItem(reorder, key = item.entryId) { isDragging ->
                 val track = remember(item.track) { item.track.toSummary() }
@@ -518,6 +493,6 @@ private fun StashList(
                 )
             }
         }
-        item(key = "stash.menu") { footer(Modifier.onGloballyPositioned { playAt[0] = it }) }
+        item(key = "stash.menu") { footer() }
     }
 }

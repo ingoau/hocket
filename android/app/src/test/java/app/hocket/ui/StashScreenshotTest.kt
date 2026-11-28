@@ -39,7 +39,7 @@ import java.io.File
  *     HOCKET_SCREENSHOT_DIR=/tmp/stash ./gradlew :app:testDebugUnitTest --tests '*StashScreenshotTest*' --rerun
  */
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [35], application = android.app.Application::class, qualifiers = "w411dp-h800dp-night-xxhdpi")
+@Config(sdk = [35], application = android.app.Application::class, qualifiers = "w411dp-h915dp-night-xxhdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class StashScreenshotTest {
     @get:Rule
@@ -50,8 +50,7 @@ class StashScreenshotTest {
 
     private fun exists(tag: String) = compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()
 
-    @Test
-    fun stash() {
+    private fun open(songs: Int): File {
         val dir = outDir
         assumeTrue("set HOCKET_SCREENSHOT_DIR to write screenshots", dir != null)
         dir!!.mkdirs()
@@ -60,18 +59,35 @@ class StashScreenshotTest {
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
         val q = core.client.queue.value
-        val ids = (listOfNotNull(q.current) + q.groupEntries + q.restEntries).map { it.item.track }.distinct().take(9)
+        val ids = (listOfNotNull(q.current) + q.groupEntries + q.restEntries).map { it.item.track }.distinct().take(songs)
         core.client.dispatch(Command.StashAdd(CommandStashAddInner(ids)))
         compose.waitUntil(5_000) { core.client.stash.value.size == ids.size }
         settle()
+        return dir
+    }
+
+    @Test
+    fun shortStash() {
+        val dir = open(2)
+        compose.onNodeWithTag("stash.chip").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { exists("stash.row") }
+        settle()
+        shot(dir, "stash-0-short")
+    }
+
+    @Test
+    fun stash() {
+        val dir = open(9)
 
         record(dir, "rec-1-open", frames = 60) { compose.onNodeWithTag("stash.chip").performSemanticsAction(SemanticsActions.OnClick) }
         compose.waitUntil(5_000) { exists("stash.row") }
         settle()
         shot(dir, "stash-1-open")
+        compose.onNodeWithTag("stash.list").performScrollToNode(hasTestTag("stash.menu"))
+        settle()
+        shot(dir, "stash-1b-scrolled")
         compose.onNodeWithTag("stash.list").performScrollToIndex(0)
         settle()
-        shot(dir, "stash-1b-top")
 
         record(dir, "rec-2-pick", frames = 30) { compose.onAllNodesWithTag("stash.row")[1].performSemanticsAction(SemanticsActions.OnClick) }
         record(dir, "rec-3-pick", frames = 30) { compose.onAllNodesWithTag("stash.row")[3].performSemanticsAction(SemanticsActions.OnClick) }
@@ -82,7 +98,11 @@ class StashScreenshotTest {
         settle()
         shot(dir, "stash-3-menu-picked")
 
+        compose.onNodeWithTag("stash.list").performScrollToIndex(0)
+        settle()
         compose.onNodeWithTag("stash.deselect").performSemanticsAction(SemanticsActions.OnClick)
+        settle()
+        compose.onNodeWithTag("stash.list").performScrollToNode(hasTestTag("stash.menu"))
         settle()
         shot(dir, "stash-4-menu-all")
 
