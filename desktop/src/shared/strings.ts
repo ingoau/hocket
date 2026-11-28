@@ -540,6 +540,7 @@ const STRINGS = {
   "album.shuffle": "Shuffle",
   "album.tracks": "{count} tracks · {duration}",
   "album.tracksTitle": "Tracks",
+  "album.disc": "Disc {disc}",
   "album.yourRating": "Your rating",
   "album.download": "Download",
   "album.downloaded": "Downloaded · remove download",

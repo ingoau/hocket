@@ -24,8 +24,9 @@ const DETAIL = new Set<Route["view"]>(["album", "artist", "playlist", "genre"]);
 
 /**
  * The routed view, keyed on the page (not on a tab or section param, so
- * switching tabs keeps focus) so every navigation mounts afresh and plays the
- * enter transition in m3-shell.css (off under reduced motion).
+ * switching tabs keeps focus) so every navigation mounts afresh, at the top, and
+ * plays the enter transition in m3-shell.css (off under reduced motion). Back and
+ * Forward put a page's scroll back where it was left (each page's lib/scroll-memory.ts hook).
  */
 export function Router() {
   const route = useApp((s) => s.route);

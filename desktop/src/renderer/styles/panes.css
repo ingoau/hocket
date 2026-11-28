@@ -150,7 +150,7 @@
 .detail-head.hero-small.washed { background: linear-gradient(180deg, var(--hero-wash) 0%, color-mix(in srgb, var(--hero-wash) 82%, #000) 100%); }
 .detail-head.hero-small.washed .hero-backdrop { display: none; }
 /* Light: a tint under the actions, light enough that muted text still reads at 4.5:1 on it. */
-.detail-actions.washed { padding-bottom: 20px; background: linear-gradient(180deg, color-mix(in srgb, var(--hero-wash) 22%, var(--bg-elev)) 0%, var(--bg-elev) 100%); }
+.detail-actions.washed { background: linear-gradient(180deg, color-mix(in srgb, var(--hero-wash) 22%, var(--bg-elev)) 0%, var(--bg-elev) 100%); }
 /* Dark: one continuous wash, darkening into the pane's own colour through the actions. */
 :root[data-theme="dark"] .detail-head.hero-small.washed { background: linear-gradient(180deg, var(--hero-wash) 0%, color-mix(in srgb, var(--hero-wash) 62%, var(--bg-elev)) 100%); }
 :root[data-theme="dark"] .detail-actions.washed { --fg-muted: var(--fg); --accent-text: var(--fg); background: linear-gradient(180deg, color-mix(in srgb, var(--hero-wash) 62%, var(--bg-elev)) 0%, var(--bg-elev) 100%); }

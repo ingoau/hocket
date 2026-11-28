@@ -178,16 +178,23 @@ function configurePlayer(p: DomLyricPlayer, lighter: boolean): void {
 function LyricsList({ lines, synced, visuallyHidden = false, variant, size }: { lines: AmllLine[]; synced: boolean; visuallyHidden?: boolean; variant: "compact" | "large"; size: number }) {
   const active = useActiveLine(synced ? lines : NO_LINES);
   const ref = useRef<HTMLOListElement>(null);
+  /** When the reader last scrolled the list themselves: it leaves them be for a moment. */
+  const readAt = useRef(Number.NEGATIVE_INFINITY);
+  const reading = () => { readAt.current = performance.now(); };
   useEffect(() => {
-    if (visuallyHidden || active < 0) return;
-    ref.current?.querySelector<HTMLElement>(`[data-line="${active}"]`)?.scrollIntoView({ block: "center", behavior: "auto" });
+    if (visuallyHidden || active < 0 || performance.now() - readAt.current < FOLLOW_PAUSE_MS) return;
+    const list = ref.current;
+    const li = list?.querySelector<HTMLElement>(`[data-line="${active}"]`);
+    if (!list || !li) return;
+    // The list's own scroll only (scrollIntoView would move every scrolling box around it too).
+    list.scrollTop += li.getBoundingClientRect().top - list.getBoundingClientRect().top - (list.clientHeight - li.offsetHeight) / 2;
   }, [active, visuallyHidden]);
   const bgText = (i: number) => lines[i]?.words.map((w) => w.word).join("").trim() ?? "";
   // A background line belongs to the active main line it follows.
   let owner = -1;
   const owners = lines.map((l, i) => (l.isBG ? owner : (owner = i)));
   return (
-    <ol ref={ref} className={visuallyHidden ? "sr-only" : `lyrics-static ${variant}`} style={visuallyHidden ? undefined : { fontSize: `calc(${variant === "large" ? 24 : 15}px * ${size})` }} aria-label={t("a11y.lyricsList")} tabIndex={visuallyHidden ? undefined : 0} data-testid={visuallyHidden ? "lyrics-sr-list" : "lyrics-plain"}>
+    <ol ref={ref} className={visuallyHidden ? "sr-only" : `lyrics-static ${variant}`} style={visuallyHidden ? undefined : { fontSize: `calc(${variant === "large" ? 24 : 15}px * ${size})` }} aria-label={t("a11y.lyricsList")} tabIndex={visuallyHidden ? undefined : 0} onWheel={reading} onPointerDown={reading} onKeyDown={reading} data-testid={visuallyHidden ? "lyrics-sr-list" : "lyrics-plain"}>
       {lines.map((l, i) => {
         const current = synced && (i === active || (l.isBG && owners[i] === active));
         return (
@@ -201,6 +208,8 @@ function LyricsList({ lines, synced, visuallyHidden = false, variant, size }: { 
 }
 
 const NO_LINES: AmllLine[] = [];
+/** How long the plain list leaves the reader's own scrolling be before it follows the song again. */
+const FOLLOW_PAUSE_MS = 4000;
 /** How long the lines keep moving after a change while paused (AMLL's springs settle well within it). */
 const SETTLE_MS = 2000;
 

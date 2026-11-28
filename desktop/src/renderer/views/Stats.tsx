@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { t } from "@shared/strings";
 import { useApp } from "../store/app";
 import { useQuery } from "../store/queries";
 import { Artwork } from "../components/Artwork";
 import { EmptyState } from "../components/EmptyState";
 import { Icon } from "../components/Icon";
+import { useScrollMemory } from "../lib/scroll-memory";
 
 const PERIODS = [7, 30, 365] as const;
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -34,6 +35,9 @@ export function Stats() {
   const [days, setDays] = useState(30);
   const navigate = useApp((s) => s.navigate);
   const { data, loading } = useQuery(() => ({ type: "stats", data: { period_days: days } }), "stats", [days]);
+  // Back (from a top album or artist) returns to where the page was left.
+  const body = useRef<HTMLDivElement>(null);
+  useScrollMemory(body, "stats", !!data);
   // Rounded to the minute first, so 2 h 59 m 40 s reads 3 h 0 min, never 2 h 60 min.
   const totalMinutes = Math.round((data?.totalMs ?? 0) / 60_000);
   const hours = Math.floor(totalMinutes / 60);
@@ -48,7 +52,7 @@ export function Stats() {
           </div>
         </div>
       </div>
-      <div className="view-body">
+      <div ref={body} className="view-body">
         {!loading && !data?.totalPlays ? <EmptyState message={t("stats.empty")} icon="stats" /> : null}
         {data?.totalPlays ? (
           <div className="stats-stack">

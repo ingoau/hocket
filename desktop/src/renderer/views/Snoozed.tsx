@@ -27,7 +27,9 @@ export function Snoozed() {
                   type="button"
                   className="tr snoozed snoozed-row"
                   data-testid="snoozed-row"
-                  onClick={() => play(item)}
+                  // A double click plays, as a song row does anywhere else; Enter and Space too (a keyboard "click" has detail 0).
+                  onClick={(e) => { if (e.detail === 0) play(item); }}
+                  onDoubleClick={() => play(item)}
                   onContextMenu={(e) => void openContextMenu(e, { type: "tracks", data: { tracks: [item.trackRef] } })}
                 >
                   <Artwork id={item.track.coverArt} size={64} className="art" />

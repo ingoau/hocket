@@ -76,14 +76,25 @@ export function ArtistChooser({ track, className, onNavigate, testId }: { track:
   }, [open, placed]);
   useEffect(() => {
     if (!open) return;
-    const down = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (menu.current?.contains(target) || button.current?.contains(target)) return;
+    const dismiss = () => {
       setOpen(false);
       setAt(undefined);
     };
-    window.addEventListener("mousedown", down, true);
-    return () => window.removeEventListener("mousedown", down, true);
+    // A press or a wheel outside it, or the window losing focus, closes it, as with any menu
+    // (scrolling the panel under it would leave it beside nothing).
+    const outside = (e: Event) => {
+      const target = e.target as Node;
+      if (menu.current?.contains(target) || (e.type === "mousedown" && button.current?.contains(target))) return;
+      dismiss();
+    };
+    window.addEventListener("mousedown", outside, true);
+    window.addEventListener("wheel", outside, { capture: true, passive: true });
+    window.addEventListener("blur", dismiss);
+    return () => {
+      window.removeEventListener("mousedown", outside, true);
+      window.removeEventListener("wheel", outside, true);
+      window.removeEventListener("blur", dismiss);
+    };
   }, [open]);
   // Another song: the menu was about the last one.
   useEffect(() => {

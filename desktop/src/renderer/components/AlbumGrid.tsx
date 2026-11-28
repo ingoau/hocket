@@ -11,6 +11,19 @@ import { Icon } from "./Icon";
 import { usePlayIntent } from "../lib/use-prime";
 import { dragFromControl, endLibraryDrag, startLibraryDrag } from "../lib/queue-drag";
 import { playlistDropZone } from "../lib/playlist-drop";
+import { gridColumns, gridVars } from "../lib/grid-columns";
+import { useScrollMemory } from "../lib/scroll-memory";
+
+/** The space between columns, and between rows (as `.grid`'s gap in global.css). */
+const COL_GAP = 14;
+const ROW_GAP = 16;
+/**
+ * A tile's height less its width (padding, the text under the square art): as last measured, kept
+ * across grids so a list reopened (Back) has its rows' real height from the start.
+ */
+let measuredChrome: number | undefined;
+/** Until a tile has been measured. */
+const TILE_CHROME = 47;
 
 export interface GridItem {
   id: string;
@@ -32,6 +45,8 @@ export interface AlbumGridProps {
   onNeedRange?: (start: number, end: number) => void;
   tileWidth?: number;
   emptyMessage: string;
+  /** Still loading: an empty list isn't said to be empty yet. */
+  loading?: boolean;
   testId?: string;
   /** Accessible name of the grid. */
   label: string;
@@ -39,15 +54,17 @@ export interface AlbumGridProps {
   header?: ReactNode;
 }
 
-export function AlbumGrid({ items, total, scope, targetKind, onOpen, onPlay, onNeedRange, tileWidth = 160, emptyMessage, testId, label, header }: AlbumGridProps) {
+export function AlbumGrid({ items, total, scope, targetKind, onOpen, onPlay, onNeedRange, tileWidth = 160, emptyMessage, loading = false, testId, label, header }: AlbumGridProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const headRef = useRef<HTMLDivElement>(null);
   // Where the grid starts in the scroller (below the header): the virtualiser's scroll margin.
   const [margin, setMargin] = useState(0);
   const hasHeader = !!header;
-  const [cols, setCols] = useState(4);
-  const [colW, setColW] = useState(tileWidth);
+  const [{ cols, colW }, setColumns] = useState(() => gridColumns(4 * tileWidth + 3 * COL_GAP, tileWidth, COL_GAP));
+  // A tile's height beyond its square art, measured once one is drawn (it follows the font size).
+  const [chrome, setChrome] = useState(() => measuredChrome ?? TILE_CHROME);
+  const [chromeKnown, setChromeKnown] = useState(() => measuredChrome !== undefined);
   const selection = useApp((s) => (s.selectionScope === scope ? s.selection : EMPTY_SELECTION));
   const setSelection = useApp((s) => s.setSelection);
   const [focusIdx, setFocusIdx] = useState(0);
@@ -56,25 +73,28 @@ export function AlbumGrid({ items, total, scope, targetKind, onOpen, onPlay, onN
   // (never when the grid scrolls under a resting pointer: see lib/prime.ts).
   const primer = usePlayIntent(scope, "album");
   const intent = (id: string) => (targetKind === "albums" ? primer.bind(id) : undefined);
+  // Back to this list returns to where it was left, once its length and its rows' height are known.
+  const initialOffset = useScrollMemory(parentRef, `grid:${scope}`, total > 0 && chromeKnown);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = parentRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => {
+    const layout = () => {
       const cs = getComputedStyle(el);
       const inner = el.clientWidth - (Number.parseFloat(cs.paddingLeft) || 0) - (Number.parseFloat(cs.paddingRight) || 0);
-      const n = Math.max(1, Math.floor((el.clientWidth - 40) / (tileWidth + 14)));
-      setCols(n);
       // Tiles stretch to fill the row, so the row height follows the real column width.
-      setColW(Math.max(tileWidth, Math.floor((inner - (n - 1) * 14) / n)));
-    });
+      const next = gridColumns(inner, tileWidth, COL_GAP);
+      setColumns((cur) => (cur.cols === next.cols && Math.abs(cur.colW - next.colW) < 0.5 ? cur : next));
+    };
+    layout();
+    const ro = new ResizeObserver(layout);
     ro.observe(el);
     return () => ro.disconnect();
   }, [tileWidth]);
 
   const rowCount = Math.ceil(total / cols);
-  // Tile: 6px padding, square art, 6px gap, title, 6px gap, subtitle, 6px padding; plus the row's 4px padding and breathing room.
-  const rowH = colW + 70;
+  // Rows sit ROW_GAP apart, as a plain .grid's do: the tile, then the gap (4px of it the row's top padding).
+  const rowH = Math.round(colW + chrome + ROW_GAP);
   // The focused tile's row is always rendered so the grid keeps its one Tab stop.
   const focusRow = useRef(0);
   focusRow.current = Math.floor(focusIdx / cols);
@@ -95,7 +115,7 @@ export function AlbumGrid({ items, total, scope, targetKind, onOpen, onPlay, onN
     ro.observe(head);
     return () => ro.disconnect();
   }, [hasHeader]);
-  const virt = useVirtualizer({ count: rowCount, getScrollElement: () => parentRef.current, estimateSize: () => rowH, overscan: 3, rangeExtractor, scrollMargin: margin });
+  const virt = useVirtualizer({ count: rowCount, getScrollElement: () => parentRef.current, estimateSize: () => rowH, overscan: 3, rangeExtractor, scrollMargin: margin, initialOffset });
   const pendingFocus = useRef<number | undefined>(undefined);
   useEffect(() => {
     const i = pendingFocus.current;
@@ -107,6 +127,17 @@ export function AlbumGrid({ items, total, scope, targetKind, onOpen, onPlay, onN
   });
   useEffect(() => virt.measure(), [rowH, virt]);
   const vrows = virt.getVirtualItems();
+  // Measure a drawn tile (not a placeholder) for the rows' height.
+  const drawn = items.some(Boolean);
+  useLayoutEffect(() => {
+    const tile = gridRef.current?.querySelector<HTMLElement>('[data-testid="grid-tile"]');
+    if (!tile) return;
+    const next = Math.round(tile.offsetHeight - tile.offsetWidth);
+    if (next <= 0) return;
+    measuredChrome = next;
+    setChrome((cur) => (cur === next ? cur : next));
+    setChromeKnown(true);
+  }, [drawn, colW]);
   useEffect(() => {
     if (!onNeedRange || !vrows.length) return;
     onNeedRange((vrows[0]?.index ?? 0) * cols, ((vrows[vrows.length - 1]?.index ?? 0) + 1) * cols - 1);
@@ -158,13 +189,13 @@ export function AlbumGrid({ items, total, scope, targetKind, onOpen, onPlay, onN
   };
 
   return (
-    <div ref={parentRef} className="view-body" data-testid={`${testId ?? "grid"}-scroller`} style={{ "--tile-w": `${tileWidth}px` } as React.CSSProperties}>
+    <div ref={parentRef} className="view-body sized-cols" data-testid={`${testId ?? "grid"}-scroller`} style={{ "--tile-w": `${tileWidth}px`, ...gridVars(cols, colW, COL_GAP) } as React.CSSProperties}>
       {hasHeader ? <div ref={headRef} className="grid-header">{header}</div> : null}
       <div ref={gridRef} role="grid" aria-label={label} aria-multiselectable="true" aria-rowcount={rowCount} aria-colcount={cols} onKeyDown={onKey} data-testid={testId ?? "grid"} className="album-grid">
-        {total === 0 ? <div className="empty" role="row"><div role="gridcell" className="empty-cell"><span className="empty-icon" aria-hidden="true"><Icon name={targetKind === "albums" ? "album" : targetKind === "artists" ? "artist" : "playlist"} size={32} /></span>{emptyMessage}</div></div> : null}
+        {total === 0 && !loading ? <div className="empty" role="row"><div role="gridcell" className="empty-cell"><span className="empty-icon" aria-hidden="true"><Icon name={targetKind === "albums" ? "album" : targetKind === "artists" ? "artist" : "playlist"} size={32} /></span>{emptyMessage}</div></div> : null}
         <div style={{ height: virt.getTotalSize(), position: "relative" }}>
           {vrows.map((vr) => (
-            <div key={vr.key} role="row" aria-rowindex={vr.index + 1} style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${vr.start - margin}px)`, height: vr.size, display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: "16px 14px", padding: "4px 0" }}>
+            <div key={vr.key} role="row" aria-rowindex={vr.index + 1} style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${vr.start - margin}px)`, height: vr.size, display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, columnGap: COL_GAP, alignItems: "start", padding: "4px 0" }}>
               {Array.from({ length: cols }, (_, c) => {
                 const i = vr.index * cols + c;
                 if (i >= total) return <div key={c} role="presentation" />;
