@@ -418,17 +418,18 @@ class FakeCoreTest {
         val song = Commands.tracks(listOf(TrackRef("fake-server", "t1")))
         suspend fun menu() = (core.query(Queries.menu(song, appItems = listOf(MenuItemIds.SHARE, MenuItemIds.INFO, MenuItemIds.GENIUS))) as QueryResult.Menu).data.items
         fun List<app.hocket.core.api.MenuItem>.shown() = filter { it.section != MenuSection.Play && it.section != MenuSection.Rate && it.section != MenuSection.Danger && !it.folded }.map { it.id }
-        assertEquals(listOf("addToPlaylist", "stash", "goToAlbum", "goToArtist", "download", "share"), menu().shown())
-        assertTrue(menu().any { it.id == MenuItemIds.RATING })
-        core.dispatchAndWait(Commands.setMenuItem(MenuItemIds.RATING, MenuTier.Hidden))
+        assertEquals(listOf("addToPlaylist", "goToAlbum", "goToArtist"), menu().shown())
+        // Song first: the stars and Genius wait until the user adds them.
+        assertTrue(menu().none { it.id == MenuItemIds.RATING || it.id == MenuItemIds.GENIUS })
+        core.dispatchAndWait(Commands.setMenuItem(MenuItemIds.RATING, MenuTier.Shown))
         core.dispatchAndWait(Commands.setMenuItem(MenuItemIds.GENIUS, MenuTier.Shown))
-        assertTrue(menu().none { it.id == MenuItemIds.RATING })
+        assertTrue(menu().any { it.id == MenuItemIds.RATING })
         assertTrue("genius" in menu().shown())
         val info = (core.query(Queries.menuItems()) as QueryResult.MenuItems).data
         assertEquals(MenuTier.Shown, info.first { it.id == MenuItemIds.GENIUS }.tier)
         assertTrue(info.none { it.id == ActionIds.PLAY })
         core.dispatchAndWait(Commands.resetMenuItems())
-        assertTrue(menu().any { it.id == MenuItemIds.RATING })
+        assertTrue(menu().none { it.id == MenuItemIds.RATING })
     }
 
     @Test
@@ -439,7 +440,7 @@ class FakeCoreTest {
         val newer = """{"nope":"shown","rating":"more","play":"hidden","genius":"shown"}"""
         assertTrue(FakeMenu.shapeValid(newer))
         assertEquals(mapOf("genius" to MenuTier.Shown), FakeMenu.parseOverrides(FakeMenu.parse(newer)))
-        assertEquals(FakeMenu.parse("""{"nope":"shown","rating":"more","play":"hidden"}"""), FakeMenu.withOverride(FakeMenu.parse(newer), "genius", MenuTier.More))
+        assertEquals(FakeMenu.parse("""{"nope":"shown","rating":"more","play":"hidden"}"""), FakeMenu.withOverride(FakeMenu.parse(newer), "genius", MenuTier.Hidden))
     }
 
     @Test

@@ -12,7 +12,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync,
 import { join } from "node:path";
 import type {
   TrackRef, IdentityInfo, CoordinatorInviteInfo, HomeShelf,
-  ActionTarget, Album, BatterySaver, Artist, AudioSettings, RatingTarget, ReportAttachment, ReportUploadStatus, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, DiagnosticsSourceState, DiagnosticsSourceStatus, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, OfflineState, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, PreviewState, Problem, Query, QueryResult, QueueContext, QueueEntry, QueueItem, QueueSource, QueueView, RelatedTrack, RepeatMode, ResumeOffer, RoomDiagnosticsStatus, RoomDiagnosticsUnavailable, SavedQueue, SearchResults, AccountInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StashItem, StorageSummary, Toast, Track, TrackSummary, TransitionSettings, TransportState, UndoEntry, UndoState, LyricHit,
+  ActionTarget, Album, BatterySaver, Artist, AudioSettings, RatingTarget, ReportAttachment, ReportUploadStatus, AutoplaySettings, Command, ConfigDocument, ConnectionState, CoreConfig, DeviceInfo, DiagnosticsSourceState, DiagnosticsSourceStatus, Event, Filter, FilterNode, FilterRule, Job, Lyrics, MediaSessionAction, OfflineState, MediaSessionState, OutputDevice, Pin, PlayHistoryEntry, PlayerNoticeCode, PreviewClip, PreviewState, Problem, Query, QueryResult, QueueContext, QueueEntry, QueueItem, QueueSource, QueueView, RelatedTrack, RepeatMode, ResumeOffer, RoomDiagnosticsStatus, RoomDiagnosticsUnavailable, SavedQueue, SearchResults, AccountInfo, SessionDocument, Setting, Shortcut, SleepTimer, Snapshot, SortOrder, StashItem, StorageSummary, Toast, Track, TrackSummary, TransitionSettings, TransportState, UndoEntry, UndoState, LyricHit,
 } from "@core/api";
 import type { CoreHandle } from "@shared/core-handle";
 import { accountIdFor } from "../account-id";
@@ -30,6 +30,8 @@ import { AVAILABLE_OFFLINE_FILTER_ID, OFFLINE_NOTICE_CODES } from "@shared/const
 
 const ARTWORK_SIZES = [64, 300, 1000];
 const SEEK_STEP_MS = 10_000;
+/** How long a clipped preview (the menu's) plays before it stops by itself, like the core. */
+const PREVIEW_CLIP_MS = 30_000;
 /** The queue view's window: rows behind the pointer and past the current entry. */
 const VIEW_BEFORE = 100;
 const VIEW_AFTER = 100;
@@ -84,6 +86,12 @@ interface FakeOptions {
 /** The track credits the artist: as its artist or one of its artists. */
 function creditsArtist(tr: Track, id: string): boolean {
   return tr.artistId === id || (tr.artists ?? []).some((x) => x.id === id);
+}
+
+/** The stretch a clipped preview plays from `startMs`: 30 s, or up to the end of a shorter song. */
+function previewClip(startMs: number, durationMs: number): PreviewClip {
+  const endMs = startMs + PREVIEW_CLIP_MS;
+  return { startMs, endMs: durationMs > 0 ? Math.min(endMs, durationMs) : endMs };
 }
 
 function clone<T>(v: T): T {
@@ -225,6 +233,7 @@ export class FakeCore implements CoreHandle {
     if (this.ticker) clearInterval(this.ticker);
     for (const t of this.timers) clearTimeout(t);
     this.timers.clear();
+    clearTimeout(this.previewClipTimer);
     for (const resolve of this.roomDiagnosticsWaiting) resolve("Other devices: not collected (the core shut down).\n");
     this.roomDiagnosticsWaiting.clear();
   }
@@ -364,7 +373,7 @@ export class FakeCore implements CoreHandle {
         this.emitTransport();
         return;
       case "previewStart":
-        this.previewStart(cmd.data.track.id);
+        this.previewStart(cmd.data.track.id, cmd.data.clip ?? false);
         return;
       case "previewToggle":
         this.previewToggle();
@@ -2448,7 +2457,7 @@ export class FakeCore implements CoreHandle {
       ["display.dynamicColour", true, "deviceLocal"],
       ["display.queuePanelSplit", 0.5, "deviceLocal"],
       ["display.immersiveArtwork", "automatic", "deviceLocal"],
-      ["display.playerRating", true, "accountSynced"],
+      ["display.playerRating", false, "accountSynced"],
       ["display.albumTrackArtists", false, "accountSynced"],
       ["playback.resumeAlbums", true, "accountSynced"],
       ["menu.overrides", {}, "accountSynced"],
@@ -2625,7 +2634,10 @@ export class FakeCore implements CoreHandle {
   /** Set when this device's own playback was paused for the preview. */
   private previewHold: { wasPlaying: boolean } | undefined;
 
-  private previewStart(trackId: string): void {
+  /** Stops a clipped preview at its end, like the core does by itself. */
+  private previewClipTimer: ReturnType<typeof setTimeout> | undefined;
+
+  private previewStart(trackId: string, clip: boolean): void {
     if (this.preview?.trackId === trackId) {
       this.previewToggle();
       return;
@@ -2637,8 +2649,21 @@ export class FakeCore implements CoreHandle {
       this.previewHold = remote ? undefined : { wasPlaying: this.transport.position.isPlaying };
       if (!remote && this.transport.position.isPlaying) this.setPlaying(false);
     }
-    this.preview = { trackId, title: t?.title ?? trackId, durationMs: duration, positionMs: Math.floor(duration * 0.3), playing: true, takenAt: Date.now() };
-    this.emit({ type: "previewChanged", data: { preview: this.preview } });
+    const start = Math.floor(duration * 0.3);
+    this.preview = { trackId, title: t?.title ?? trackId, durationMs: duration, positionMs: start, playing: true, takenAt: Date.now(), ...(clip ? { clip: previewClip(start, duration) } : {}) };
+    this.emitPreview();
+  }
+
+  /** Announces the preview and (re)arms the clip's stop. */
+  private emitPreview(): void {
+    clearTimeout(this.previewClipTimer);
+    this.previewClipTimer = undefined;
+    const p = this.preview;
+    if (p?.clip && p.playing) {
+      this.previewClipTimer = setTimeout(() => this.previewStop(true), Math.max(0, p.clip.endMs - p.positionMs));
+      this.previewClipTimer.unref?.();
+    }
+    this.emit({ type: "previewChanged", data: { preview: p } });
   }
 
   private previewToggle(): void {
@@ -2646,15 +2671,17 @@ export class FakeCore implements CoreHandle {
     if (!current) return;
     const position = this.previewPosition(current);
     this.preview = { ...current, playing: !current.playing, positionMs: position, takenAt: Date.now() };
-    this.emit({ type: "previewChanged", data: { preview: this.preview } });
+    this.emitPreview();
   }
 
   private previewSeek(positionMs: number): void {
     const current = this.preview;
     if (!current) return;
     const cap = current.durationMs > 0 ? current.durationMs : positionMs;
-    this.preview = { ...current, positionMs: Math.max(0, Math.min(cap, positionMs)), takenAt: Date.now() };
-    this.emit({ type: "previewChanged", data: { preview: this.preview } });
+    const at = Math.max(0, Math.min(cap, positionMs));
+    // Like the core, a seek starts the clip over from where it lands.
+    this.preview = { ...current, positionMs: at, takenAt: Date.now(), ...(current.clip ? { clip: previewClip(at, current.durationMs) } : {}) };
+    this.emitPreview();
   }
 
   private previewStop(restore: boolean): void {
@@ -2662,7 +2689,7 @@ export class FakeCore implements CoreHandle {
     const hold = this.previewHold;
     this.preview = undefined;
     this.previewHold = undefined;
-    this.emit({ type: "previewChanged", data: { preview: undefined } });
+    this.emitPreview();
     if (restore && hold?.wasPlaying && this.transport.lease.owner === this.config.deviceId) this.setPlaying(true);
   }
 
@@ -2809,7 +2836,7 @@ export class FakeCore implements CoreHandle {
         this.handle({ type: "stashQueueGroup" });
         return;
       case "preview":
-        if (trackIds.length === 1) this.previewStart(trackIds[0]!);
+        if (trackIds.length === 1) this.previewStart(trackIds[0]!, true);
         return;
       case "stash":
         this.stashAdd(trackIds);

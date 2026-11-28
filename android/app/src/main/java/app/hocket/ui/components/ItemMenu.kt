@@ -121,7 +121,6 @@ import app.hocket.core.api.MenuScreen
 import app.hocket.core.api.MenuSection
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.wrapContentHeight
-import app.hocket.core.ArtworkSizes
 import app.hocket.core.Commands
 import app.hocket.core.api.Command
 import app.hocket.core.Queries
@@ -191,9 +190,6 @@ sealed interface MenuEntry {
     /** A registry action shown as itself (its label, or the context's "Remove from Late night"). */
     data class Action(val action: ActionDescriptor) : MenuEntry { override val key get() = action.id }
 
-    /** Preview: stays open and becomes a small player while the song plays. */
-    data class Preview(val action: ActionDescriptor) : MenuEntry { override val key get() = action.id }
-
     /** Download / Downloaded: runs `download`, or `unpin` once downloaded. */
     data class Download(val download: ActionDescriptor?, val remove: ActionDescriptor?) : MenuEntry { override val key get() = "download" }
 
@@ -248,8 +244,8 @@ fun menuAppItems(kind: MenuKind, count: Int, hasInfo: Boolean, extras: List<Song
     extras.mapNotNullTo(this) { it.item }
 }
 
-/** How many of [extras] top the short list (the query's `extras`): not the removing ones, nor app items the core places. */
-fun menuExtraCount(extras: List<SongMenuExtra>): Int = extras.count { it.item == null && !it.destructive }
+/** How many of [extras] top the short list (the query's `extras`): not the removing ones, those under More, nor app items the core places. */
+fun menuExtraCount(extras: List<SongMenuExtra>): Int = extras.count { it.item == null && !it.destructive && !it.underMore }
 
 /** The core's menu ([CoreClient.menu]) for [target], asked with what this app can offer there. */
 suspend fun app.hocket.core.client.CoreClient.itemMenu(
@@ -264,7 +260,8 @@ suspend fun app.hocket.core.client.CoreClient.itemMenu(
 /**
  * Lays the core's [menu] (rows in order, each folded or not: `Query.Menu`) out on the sheet. The
  * play strip, then the stars (with a `rating` row) and the header's heart (with `love`); the short
- * list is the context's extras, then the unfolded rows; More holds the folded ones; the rows that
+ * list is the context's extras, then the unfolded rows; More holds the extras that are
+ * [SongMenuExtra.underMore], then the folded rows; the rows that
  * remove or delete (the core's, then the context's destructive extras) come last, never folded. An
  * extra that [SongMenuExtra.replaces] a row stands in for it; one that is an app [SongMenuExtra.item]
  * sits where the core put that item. Go-to rows need somewhere to go ([canGoToAlbum],
@@ -306,7 +303,6 @@ fun sheetLayout(
             ActionIds.DOWNLOAD -> listOf(MenuEntry.Download(action(ActionIds.DOWNLOAD), action(ActionIds.UNPIN)))
             ActionIds.GO_TO_ALBUM -> listOfNotNull(action(ActionIds.GO_TO_ALBUM)?.takeIf { canGoToAlbum }?.let { MenuEntry.GoTo(it) })
             ActionIds.GO_TO_ARTIST -> listOfNotNull(action(ActionIds.GO_TO_ARTIST)?.takeIf { canGoToArtist }?.let { MenuEntry.GoTo(it) })
-            ActionIds.PREVIEW -> listOfNotNull(action(ActionIds.PREVIEW)?.takeIf { it.enabled }?.let { MenuEntry.Preview(it) })
             ActionIds.SNOOZE -> when (snoozed) {
                 true -> listOfNotNull(action(ActionIds.UNSNOOZE))
                 false -> listOfNotNull(action(ActionIds.SNOOZE))
@@ -338,8 +334,10 @@ fun sheetLayout(
         }
     }
     val (removing, others) = extras.filter { it.item == null }.partition { it.destructive }
-    var short = others.map { MenuEntry.Extra(it) } + primary
-    var folded: List<MenuEntry> = more
+    // A More holding only an extra is a tap for nothing: with nothing folded it stays in the list.
+    val (extraMore, extraShort) = if (more.isEmpty()) emptyList<SongMenuExtra>() to others else others.partition { it.underMore }
+    var short = extraShort.map { MenuEntry.Extra(it) } + primary
+    var folded: List<MenuEntry> = extraMore.map { MenuEntry.Extra(it) } + more
     if (short.isEmpty()) { short = folded; folded = emptyList() }
     return SheetLayout(love, play, rating, short, folded, danger + removing.map { MenuEntry.Extra(it) })
 }
@@ -400,6 +398,8 @@ fun MenuSheet(
     playGroupModifier: Modifier = Modifier,
     /** Embedded: a change sends the menu back to its first page (the host has closed it to a peek). */
     resetKey: Any? = null,
+    /** One song's cover previews it ([PreviewArtwork]); false where that song is the one playing (the player's menu). */
+    canPreview: Boolean = true,
 ) {
     val client = LocalCoreClient.current
     val context = LocalContext.current
@@ -552,7 +552,6 @@ fun MenuSheet(
     @Composable
     fun EntryRow(entry: MenuEntry, shape: Shape) {
         when (entry) {
-            is MenuEntry.Preview -> PreviewMenuRow(entry.action, subject.trackRef, target, shape, "$tag.action.${entry.action.id}")
             is MenuEntry.Action -> {
                 val a = entry.action
                 val label = when (a.id) {
@@ -661,7 +660,8 @@ fun MenuSheet(
             // The header's artist and album go where the menu's rows would (where it has them).
             val headerArtist = if (entries.any { it is MenuEntry.GoTo && it.action.id == ActionIds.GO_TO_ARTIST }) { { goToArtist() } } else null
             val headerAlbum = if (entries.any { it is MenuEntry.GoTo && it.action.id == ActionIds.GO_TO_ALBUM }) { { onGoToAlbum?.invoke(); hideThen() } } else null
-            if (showHeader) MenuHeader(subject, layout.love, loved, tag, onArtist = headerArtist, onAlbum = headerAlbum) { love, unlove ->
+            val previewTrack = subject.trackRef?.takeIf { canPreview && subject.kind == MenuKind.Song && subject.count <= 1 }
+            if (showHeader) MenuHeader(subject, layout.love, loved, tag, previewTrack, onArtist = headerArtist, onAlbum = headerAlbum) { love, unlove ->
                 if (loved == Tick.On) { unlove?.let(::run); loved = Tick.Off } else { love?.let(::run); loved = Tick.On }
             }
             // A sub-page slides in from the end, the menu slides back from the start, and the height
@@ -845,12 +845,12 @@ private fun MenuHandle(expanded: Boolean, canExpand: Boolean, onToggle: () -> Un
 /**
  * Artwork, the title (one line) with the lines under it, and the love toggle. The subtitle's artist
  * (at its start) and album (at its end) are links where [onArtist] / [onAlbum] go there: the menu's
- * Go to rows, a tap nearer.
+ * Go to rows, a tap nearer. With [previewTrack] the artwork plays a clip of it ([PreviewArtwork]).
  */
 @Composable
-private fun MenuHeader(subject: MenuSubject, love: LoveToggle?, loved: Tick, tag: String, onArtist: (() -> Unit)? = null, onAlbum: (() -> Unit)? = null, onLove: (ActionDescriptor?, ActionDescriptor?) -> Unit) {
+private fun MenuHeader(subject: MenuSubject, love: LoveToggle?, loved: Tick, tag: String, previewTrack: app.hocket.core.api.TrackRef?, onArtist: (() -> Unit)? = null, onAlbum: (() -> Unit)? = null, onLove: (ActionDescriptor?, ActionDescriptor?) -> Unit) {
     Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, bottom = 14.dp).testTag("$tag.header"), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-        Artwork(subject.coverArt, ArtworkSizes.THUMB, null, Modifier.size(64.dp), RoundedCornerShape(16.dp))
+        PreviewArtwork(subject.coverArt, previewTrack, 64.dp, RoundedCornerShape(16.dp), "$tag.artwork")
         Column(Modifier.weight(1f)) {
             Text(subject.title, style = MaterialTheme.typography.titleLarge.copy(fontSize = 19.sp, lineHeight = 24.sp), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
             subject.subtitle?.let { HeaderSubtitle(it, subject, onArtist, onAlbum, tag) }

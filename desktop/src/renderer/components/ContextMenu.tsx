@@ -1,6 +1,7 @@
 // Native-feeling context menu generated from the core's item-menu layout (Query.Menu), laid out per
-// the menu design (lib/menu-model): a header naming the item, the play actions as one icon-only
-// strip, then the core's rows section by section: an inline Rating row, Love / Download / Pin as
+// the menu design (lib/menu-model): a header naming the item (a single song's cover plays a 30 s
+// preview, with a ring for its progress; the menu stays open, and closing it stops the preview), the
+// play actions as one icon-only strip, then the core's rows section by section: an inline Rating row, Love / Download / Pin as
 // checkboxes, Add to playlist as a submenu (PlaylistSubmenu), the destructive rows last.
 // Keyboard: the context-menu key or Shift+F10 opens it for the focused item (a synthetic
 // `contextmenu` event at the item, so every surface's existing onContextMenu handler serves both),
@@ -13,7 +14,7 @@
 // its submenus appear and go at once, with no motion (menus.css).
 // Pointer: like a native menu, the right button can be held, dragged onto an item and released to
 // run it; released where it was pressed, the menu stays open for a click.
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ActionTarget, PreviewState } from "@core/api";
 import { chordFromEvent, formatChord, parseChord } from "../store/shortcuts";
 import { useKeymap } from "../store/keyboard";
@@ -36,7 +37,7 @@ import { ratingText } from "../lib/a11y";
 import { appItemsFor, buildMenu, layoutActions, loveToast, nextRating, rateToast, removeToast, starLabel, type MenuHeader, type MenuRow } from "../lib/menu-model";
 import { openGenius } from "../lib/share";
 import { bridge } from "../core/bridge";
-import { previewPosition, seekFraction } from "../lib/preview-seek";
+import { previewProgress } from "../lib/preview-seek";
 
 /** Where focus goes back to when the menu closes. */
 let returnFocus: HTMLElement | null = null;
@@ -306,11 +307,14 @@ export function ContextMenu() {
   const previewRef = menu.target.type === "tracks" && menu.target.data.tracks.length === 1
     ? menu.target.data.tracks[0]
     : facts?.trackRefs?.length === 1 ? facts.trackRefs[0] : undefined;
+  // The player's own menu is for what is playing: there is nothing to preview.
+  const previewable = !!previewRef && !!facts?.header && menu.context?.screen !== "nowPlaying";
   const trackId = previewRef?.id;
   const mine = preview && trackId && preview.trackId === trackId ? preview : undefined;
+  /** The cover's press: a clip of the song, then pause and resume. It never closes the menu. */
   const previewCommand = () => {
-    if (!trackId) return;
-    if (!mine && previewRef) bridge().dispatch({ type: "previewStart", data: { track: previewRef } });
+    if (!previewable || !previewRef) return;
+    if (!mine) bridge().dispatch({ type: "previewStart", data: { track: previewRef, clip: true } });
     else bridge().dispatch({ type: "previewToggle" });
   };
 
@@ -354,6 +358,12 @@ export function ContextMenu() {
   const rowCells: number[][] = [];
   const commands = new Map<string, () => void>();
   let line = 0;
+  // The cover is a cell of its own, above the strip. It has no label, so type-ahead passes it by.
+  const coverCell = previewable ? cells.length : -1;
+  if (previewable) {
+    cells.push({ label: "", enabled: true, line, run: previewCommand });
+    line++;
+  }
   model.forEach((r, ri) => {
     const at: number[] = [];
     const push = (c: Omit<Cell, "line">) => { at.push(cells.length); cells.push({ ...c, line }); };
@@ -387,12 +397,9 @@ export function ContextMenu() {
         line++;
         break;
       case "action":
-        push({ label: r.label, enabled: r.action.enabled, run: () => (r.action.id === "preview" ? previewCommand() : perform(r.action.id)) });
+        push({ label: r.label, enabled: r.action.enabled, run: () => perform(r.action.id) });
         if (r.action.enabled) {
-          // A chord for Preview must not close the menu first: the close
-          // stops the preview, and the start would then run with nothing
-          // left to stop it.
-          const run = r.action.id === "preview" ? previewCommand : () => perform(r.action.id);
+          const run = () => perform(r.action.id);
           commands.set(r.action.id, run);
           const alias = CHORD_OF[r.action.id];
           if (alias) commands.set(alias, run);
@@ -436,7 +443,8 @@ export function ContextMenu() {
     const cur = cells[active];
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      const at = cur ? lines.indexOf(cur.line) : -1;
+      // From nothing, ↓ starts on the first command, past the cover (as `firstEnabled` does).
+      const at = cur ? lines.indexOf(cur.line) : coverCell >= 0 && e.key === "ArrowDown" ? 0 : -1;
       const n = lines.length;
       const next = e.key === "ArrowDown" ? lines[(at + 1) % n] : lines[at <= 0 ? n - 1 : at - 1];
       const i = next === undefined ? undefined : landing(next);
@@ -594,9 +602,6 @@ export function ContextMenu() {
           </div>
         );
       case "action": {
-        if (r.action.id === "preview") {
-          return <PreviewRow key="preview" index={first} label={r.label} enabled={r.action.enabled} active={active === first} sample={mine} onStart={previewCommand} cellProps={cellProps(first)} />;
-        }
         const destructive = r.destructive;
         return (
           <div key={`a-${r.action.id}`} {...cellProps(first)} role="menuitem" className={`mi ${r.action.enabled ? "" : "disabled"} ${destructive ? "destructive" : ""} ${active === first ? "active" : ""}`} data-action={r.action.id}>
@@ -653,7 +658,7 @@ export function ContextMenu() {
         data-context-layer=""
         data-testid="context-menu"
       >
-        {facts?.header ? <Header header={facts.header} /> : null}
+        {facts?.header ? <Header header={facts.header} cover={previewable ? { sample: mine, active: active === coverCell, cellProps: cellProps(coverCell) } : undefined} /> : null}
         {model.map(renderRow)}
       </div>
       {/* Reaching the submenu keeps it: a switch the pointer's path asked for on the way is called off. */}
@@ -685,99 +690,72 @@ export function ContextMenu() {
   );
 }
 
-/** Preview row: a progress bar behind the label, tap to pause, drag to seek. Does not close the menu. */
-function PreviewRow({ index, label, enabled, active, sample, onStart, cellProps }: {
-  index: number;
-  label: string;
-  enabled: boolean;
-  active: boolean;
+/** The ring's radius in the cover's 36-unit box, and its length. */
+const RING_R = 13;
+const RING_LEN = 2 * Math.PI * RING_R;
+
+/** A single song's cover as the preview button: a scrim, a progress ring and pause/play while it plays. */
+function PreviewCover({ cover, sample, active, cellProps }: {
+  cover: string | undefined;
   sample: PreviewState | undefined;
-  onStart: () => void;
-  cellProps: HTMLAttributes<HTMLDivElement>;
+  active: boolean;
+  cellProps: { id: string; "aria-disabled"?: boolean; onMouseMove: (e: React.MouseEvent) => void; onClick: () => void };
 }) {
-  const [, setTick] = useState(0);
+  // Redrawn every frame while it plays: the ring extrapolates from the core's sample.
+  const [, setFrame] = useState(0);
   useEffect(() => {
     if (!sample?.playing) return;
-    const id = window.setInterval(() => setTick((n) => n + 1), 80);
-    return () => window.clearInterval(id);
+    let raf = requestAnimationFrame(function tick() {
+      setFrame((n) => n + 1);
+      raf = requestAnimationFrame(tick);
+    });
+    return () => cancelAnimationFrame(raf);
   }, [sample?.playing, sample?.trackId, sample?.takenAt]);
-  const position = sample ? previewPosition(sample, Date.now()) : 0;
-  const fraction = sample && sample.durationMs > 0 ? Math.min(1, position / sample.durationMs) : 0;
-  const seek = (clientX: number, row: HTMLElement) => {
-    if (!sample || sample.durationMs <= 0) return;
-    const rect = row.getBoundingClientRect();
-    const at = Math.round(seekFraction(clientX - rect.left, rect.width, 12) * sample.durationMs);
-    bridge().dispatch({ type: "previewSeek", data: { position_ms: at } });
-  };
+  const progress = sample ? previewProgress(sample, Date.now()) : 0;
+  const label = !sample ? t("menu.previewPlay") : sample.playing ? t("menu.previewPause") : t("menu.previewResume");
   return (
-    <div
+    <button
+      type="button"
+      tabIndex={-1}
       {...cellProps}
-      id={`cm-item-${index}`}
       role="menuitem"
-      aria-label={sample ? (sample.playing ? `${label}, playing` : `${label}, paused`) : label}
-      className={`mi cm-preview ${enabled ? "" : "disabled"} ${active ? "active" : ""}`}
-      data-action="preview"
-      onClick={(e) => {
-        e.preventDefault();
-        // A real mouse click (detail >= 1) is handled on pointerup. A
-        // right-drag release, a screen reader, and the keyboard send a click
-        // with detail 0, the same gesture every other row runs.
-        if (e.detail > 0 || !enabled) return;
-        if (sample) bridge().dispatch({ type: "previewToggle" });
-        else onStart();
-      }}
-      onPointerDown={(e) => {
-        if (e.button !== 0 || !enabled) return;
-        const row = e.currentTarget;
-        if (!sample) {
-          onStart();
-          return;
-        }
-        const startX = e.clientX;
-        const startY = e.clientY;
-        let dragged = false;
-        const move = (ev: PointerEvent) => {
-          const dx = ev.clientX - startX;
-          const dy = ev.clientY - startY;
-          if (!dragged) {
-            if (Math.hypot(dx, dy) < 5) return;
-            if (Math.abs(dy) > Math.abs(dx)) {
-              cleanup();
-              return;
-            }
-            dragged = true;
-          }
-          seek(ev.clientX, row);
-        };
-        const up = () => {
-          cleanup();
-          if (!dragged) bridge().dispatch({ type: "previewToggle" });
-        };
-        const cleanup = () => {
-          window.removeEventListener("pointermove", move);
-          window.removeEventListener("pointerup", up);
-        };
-        window.addEventListener("pointermove", move);
-        window.addEventListener("pointerup", up);
-      }}
+      aria-label={label}
+      className={`cm-cover-btn ${sample ? "on" : ""} ${active ? "active" : ""}`}
+      data-testid="menu-preview"
+      data-state={!sample ? "idle" : sample.playing ? "playing" : "paused"}
+      // Focus stays on the menu, which holds the keyboard.
+      onMouseDown={(e) => e.preventDefault()}
     >
-      {sample ? <span className="cm-preview-bar" style={{ width: `${fraction * 100}%` }} /> : null}
-      <span className="cm-lead cm-icon" aria-hidden="true"><Icon name={sample?.playing ? "pause" : "headphones"} size={15} /></span>
-      <span className="grow truncate">{label}</span>
-    </div>
+      <span className="cm-cover-art" aria-hidden="true"><Artwork id={cover} size={64} className="cm-cover" /></span>
+      <span className="cm-cover-scrim" aria-hidden="true" />
+      {sample ? (
+        <span className="cm-ring" role="progressbar" aria-label={t("menu.previewProgress")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)}>
+          <svg viewBox="0 0 36 36" aria-hidden="true">
+            <circle className="cm-ring-track" cx="18" cy="18" r={RING_R} />
+            <circle className="cm-ring-fill" cx="18" cy="18" r={RING_R} strokeDasharray={RING_LEN} strokeDashoffset={RING_LEN * (1 - progress)} />
+          </svg>
+        </span>
+      ) : null}
+      <span className="cm-cover-glyph" aria-hidden="true"><Icon name={sample?.playing ? "pause" : "play"} size={12} /></span>
+    </button>
   );
 }
 
-/** The item the menu is for: its cover (three stacked for several), title and subtitle. */
-function Header({ header }: { header: MenuHeader }) {
+/** The item the menu is for: its cover (three stacked for several), title and subtitle. Only the
+ * preview button (a single song's cover) is exposed; the menu's label already names the item. */
+function Header({ header, cover }: { header: MenuHeader; cover?: { sample: PreviewState | undefined; active: boolean; cellProps: React.ComponentProps<typeof PreviewCover>["cellProps"] } }) {
   const covers = header.covers.length ? header.covers : [undefined];
   return (
-    <div className="cm-head" aria-hidden="true">
-      <div className={`cm-covers ${covers.length > 1 ? "stacked" : ""} ${header.round ? "round" : ""}`}>
-        {/* Back to front, so the first item's cover is on top. */}
-        {[...covers].reverse().map((c, k) => <Artwork key={`${c ?? "none"}-${k}`} id={c} size={64} className="cm-cover" />)}
-      </div>
-      <div className="cm-head-text">
+    <div className="cm-head">
+      {cover ? (
+        <PreviewCover cover={covers[0]} {...cover} />
+      ) : (
+        <div className={`cm-covers ${covers.length > 1 ? "stacked" : ""} ${header.round ? "round" : ""}`} aria-hidden="true">
+          {/* Back to front, so the first item's cover is on top. */}
+          {[...covers].reverse().map((c, k) => <Artwork key={`${c ?? "none"}-${k}`} id={c} size={64} className="cm-cover" />)}
+        </div>
+      )}
+      <div className="cm-head-text" aria-hidden="true">
         <span className="cm-head-title truncate">{header.title}</span>
         {header.subtitle ? <span className="cm-head-sub truncate">{header.subtitle}</span> : null}
       </div>
@@ -792,6 +770,7 @@ function menuItemAt(el: EventTarget | null): HTMLElement | null {
 
 /** The first enabled cell of a freshly drawn menu (its cells carry ids in order). */
 function firstEnabled(menu: HTMLElement): number {
-  const el = menu.querySelector<HTMLElement>("[id^='cm-item-']:not([aria-disabled='true'])");
+  // Not the cover: like a native menu, the keyboard starts on the first command.
+  const el = menu.querySelector<HTMLElement>("[id^='cm-item-']:not([aria-disabled='true']):not(.cm-cover-btn)");
   return el ? Number(el.id.slice("cm-item-".length)) : -1;
 }

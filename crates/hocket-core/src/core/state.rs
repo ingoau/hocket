@@ -310,6 +310,15 @@ pub(crate) struct PreviewSession {
     /// Playing the song for real from here: the preview plays on until the
     /// main player takes over ([`PreviewHandoff`]).
     pub handoff: Option<PreviewHandoff>,
+    /// Stops by itself [`crate::core::handlers::preview::PREVIEW_CLIP_MS`]
+    /// after `clip_start_ms`.
+    pub clipped: bool,
+    /// Where the clip began: the opening position, moved by a seek.
+    pub clip_start_ms: Ms,
+    /// A progress report has landed inside the clip since it (re)started.
+    /// Until then the clip can't end: a report the player sent before it
+    /// took the load or the seek still carries the old position.
+    pub clip_armed: bool,
 }
 
 /// Where a preview is in handing over to the main player, which plays the

@@ -246,6 +246,7 @@ fn preview_start(t: &ActionTarget, s: &StateView, r: &dyn Resolver) -> Vec<Comma
     }
     vec![Command::PreviewStart {
         track: tracks.remove(0),
+        clip: true,
     }]
 }
 

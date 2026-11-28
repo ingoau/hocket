@@ -55,6 +55,8 @@ class SongMenuExtra(
     val page: MenuPage? = null,
     /** The core's app-handled menu item this row is ([app.hocket.core.MenuItemIds]). */
     val item: String? = null,
+    /** Under More rather than atop the short list (the player's sleep timer while it isn't set). */
+    val underMore: Boolean = false,
 )
 
 /**
@@ -157,6 +159,7 @@ fun SongMenuHost(controller: SongMenuController, navigator: DetailNavigator?) {
                 onGoToArtist = navigator?.let { n -> { id -> n.openArtist(id) } },
                 onInfo = { infoFor = track },
                 pull = request.pull,
+                canPreview = request.screen != app.hocket.core.api.MenuScreen.NowPlaying,
             )
         }
     }

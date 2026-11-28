@@ -108,6 +108,8 @@ class MenuPredictiveBackTest {
         val lib = core.fake.library
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
+        // Share and Snooze in the short list (by default under More, and hidden).
+        core.client.dispatch(app.hocket.core.Commands.setSetting(app.hocket.core.SettingKeys.MENU_OVERRIDES, """{"share":"shown","snooze":"shown"}"""))
         val title = lib.track(lib.playlistTracks.getValue("pl0").first())!!.title
         compose.setThemedContent(core) {
             CompositionLocalProvider(LocalDetailNavigator provides DetailNavigator({}, {}, {})) {

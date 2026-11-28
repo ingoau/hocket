@@ -41,6 +41,7 @@ class RatingDragTrackTest : PlayerRulesTestBase() {
     @Test
     fun aStarDragAcrossATrackChangeRatesTheSongItStartedOn() {
         val core = TestCore()
+        core.fake.dispatch(app.hocket.core.Commands.setSetting(app.hocket.core.SettingKeys.DISPLAY_PLAYER_RATING, "true"))
         startExpanded(core)
         val first = core.client.nowPlaying.value!!.track
         val star = { n: Int -> (n - 1) * 28f * dp + 10f * dp }

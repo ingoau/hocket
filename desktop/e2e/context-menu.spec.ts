@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
-import { completeSetup, expect, launchFake, openPlace, test } from "./fixtures";
+import { completeSetup, expect, launchFake, openPlace, showMenuRows, test } from "./fixtures";
 
 /** Opens a playlist from the Playlists page by name. */
 async function openPlaylist(page: Page, name: string): Promise<void> {
@@ -33,9 +33,16 @@ test.describe("context menu", () => {
     for (const name of ["Play", "Play next", "Play later"]) {
       await expect(menu.getByRole("menuitem", { name, exact: true })).toHaveAttribute("title", name);
     }
-    await expect(menu.getByRole("group", { name: "Rating" }).getByRole("menuitemradio")).toHaveCount(5);
     await expect(menu.getByRole("menuitemcheckbox", { name: /Love/ })).toHaveAttribute("aria-checked", "false");
     await expect(menu.locator('[data-action="removeFromPlaylist"]')).toHaveText(/^Remove from Slow SundaysDel$/);
+    // The stars, Genius and Snooze wait until the user adds them (Settings → Customisation).
+    await expect(menu.getByRole("group", { name: "Rating" })).toHaveCount(0);
+    await expect(menu.getByRole("menuitem", { name: "Open in Genius" })).toHaveCount(0);
+    await expect(menu.locator('[data-action="snooze"]')).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await showMenuRows(page, "rating", "genius");
+    await page.getByTestId("track-row").first().click({ position: onTitle, button: "right" });
+    await expect(menu.getByRole("group", { name: "Rating" }).getByRole("menuitemradio")).toHaveCount(5);
 
     await expect(menu.getByRole("menuitem", { name: "Open in Genius" })).toBeVisible();
     // Share opens beside the menu: Navidrome, Squigly and the file.
@@ -146,6 +153,7 @@ test.describe("context menu", () => {
       const r = (await window.hocket.query({ type: "playlistTracks", data: { id: "pl-5", page: { offset: 1, limit: 3 } } })) as { data: { items: { id: string }[] } };
       return r.data.items.map((x) => x.id);
     });
+    await showMenuRows(page, "rating");
     await page.evaluate((ids) => {
       for (const [i, id] of ids.entries()) window.hocket.dispatch({ type: "setLoved", data: { targets: [{ type: "track", data: { id, source: "" } }], loved: i < 2 } });
       for (const id of ids) window.hocket.dispatch({ type: "setRating", data: { targets: [{ type: "track", data: { id, source: "" } }], rating: 0 } });
@@ -246,7 +254,7 @@ test.describe("context menu", () => {
     await page.keyboard.press("Escape");
   });
 
-  test("the player's menu has no Preview and picks among a song's artists; the album page's has no Go to album", async ({ hocket }) => {
+  test("the player's menu has no preview and picks among a song's artists; the album page's has no Go to album", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);
     // tr-1 has a guest (fake core): two artists.
@@ -259,7 +267,9 @@ test.describe("context menu", () => {
     const menu = page.getByTestId("context-menu");
     await page.getByTestId("bar-more").click();
     await expect(menu).toBeVisible();
-    await expect(menu.locator('[data-action="preview"]')).toHaveCount(0);
+    // What is playing has nothing to preview: its cover is only a picture.
+    await expect(menu.getByTestId("menu-preview")).toHaveCount(0);
+    await expect(menu.locator(".cm-head .cm-cover")).toBeVisible();
     await expect(menu.locator('[data-action="goToAlbum"]')).toBeVisible();
     // Go to artist opens a submenu of the song's artists.
     const goToArtist = menu.locator('[data-action="goToArtist"]');
@@ -278,7 +288,42 @@ test.describe("context menu", () => {
     await expect(menu).toBeVisible();
     await expect(menu.locator('[data-action="goToAlbum"]')).toHaveCount(0);
     await expect(menu.locator('[data-action="goToArtist"]')).toBeVisible();
-    await expect(menu.locator('[data-action="preview"]')).toBeVisible();
+    await expect(menu.getByTestId("menu-preview")).toBeVisible();
+    await expect(menu.locator('[data-action="preview"]')).toHaveCount(0);
+    await page.keyboard.press("Escape");
+  });
+
+  test("a song's cover plays a clip in the menu: a ring fills through it, a click pauses and resumes, closing stops it", async ({ hocket }) => {
+    const { page } = hocket;
+    await completeSetup(page);
+    await openPlaylist(page, "Slow Sundays");
+    const menu = page.getByTestId("context-menu");
+    await page.getByTestId("track-row").first().click({ position: onTitle, button: "right" });
+    const cover = menu.getByTestId("menu-preview");
+    await expect(cover).toHaveAttribute("aria-label", "Play a preview");
+    await expect(cover).toHaveAttribute("data-state", "idle");
+    await expect(cover.getByRole("progressbar")).toHaveCount(0);
+    await cover.click();
+    // The menu stays open; the ring fills from the clip's start.
+    await expect(menu).toBeVisible();
+    await expect(cover).toHaveAttribute("data-state", "playing");
+    await expect(cover).toHaveAttribute("aria-label", "Pause the preview");
+    const ring = cover.getByRole("progressbar", { name: "Preview" });
+    await expect(ring).toBeVisible();
+    await expect.poll(async () => Number(await ring.getAttribute("aria-valuenow")), { timeout: 10_000 }).toBeGreaterThan(0);
+    await cover.click();
+    await expect(cover).toHaveAttribute("data-state", "paused");
+    await expect(cover).toHaveAttribute("aria-label", "Resume the preview");
+    const held = await ring.getAttribute("aria-valuenow");
+    await page.waitForTimeout(600);
+    await expect(ring).toHaveAttribute("aria-valuenow", held!);
+    await cover.click();
+    await expect(cover).toHaveAttribute("data-state", "playing");
+    // Closing the menu stops it: the next open starts afresh.
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await page.getByTestId("track-row").first().click({ position: onTitle, button: "right" });
+    await expect(menu.getByTestId("menu-preview")).toHaveAttribute("data-state", "idle");
     await page.keyboard.press("Escape");
   });
 

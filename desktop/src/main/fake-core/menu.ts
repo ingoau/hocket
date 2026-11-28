@@ -1,6 +1,6 @@
 // The fake core's item menus: a port of crates/hocket-core/src/actions/menu.rs. One layout for
 // every platform: each row has a section (its place in the order), a default tier (the phone's
-// short list or under More) and a priority (which default rows fold first when the short list is
+// short list, under More, or hidden until the user adds it) and a priority (which default rows fold first when the short list is
 // full). `menuLayout` applies what the target and screen offer, the user's `menu.overrides`, and
 // the fold rule. Desktop draws every row; the phone folds.
 import type { ActionDescriptor, ActionTarget, MenuItem, MenuItemInfo, MenuLayout, MenuScreen, MenuSection, MenuTier } from "@core/api";
@@ -13,8 +13,8 @@ export const NO_FOLD_MAX = 7;
 interface Def {
   id: string;
   section: MenuSection;
-  /** Default tier: the short list (false) or under More (true). */
-  folded: boolean;
+  /** Default tier: the short list, under More, or left out until the user adds it. */
+  tier: MenuTier;
   /** Which default short-list rows stay when it is full: higher stays. */
   priority: number;
   /** Only for one item, not a selection. */
@@ -23,37 +23,42 @@ interface Def {
   source: readonly string[] | "app";
 }
 
-const def = (id: string, section: MenuSection, folded: boolean, priority: number, single: boolean, source: readonly string[] | "app"): Def => ({ id, section, folded, priority, single, source });
+const def = (id: string, section: MenuSection, tier: MenuTier, priority: number, single: boolean, source: readonly string[] | "app"): Def => ({ id, section, tier, priority, single, source });
 
-/** Every row, in display order. */
+const S: MenuTier = "shown";
+const M: MenuTier = "more";
+const H: MenuTier = "hidden";
+
+/** Every row, in display order. The defaults suit a song-first library: the heart over stars, the
+ * rows a song needs most in the short list, and the lyrics and Genius tools left for whoever wants
+ * them. Preview isn't a row: the menu's artwork plays it. */
 export const MENU_DEFS: readonly Def[] = [
-  def("play", "play", false, 0, false, ["play"]),
-  def("playShuffled", "play", false, 0, false, ["playShuffled"]),
-  def("playNext", "play", false, 0, false, ["playNext"]),
-  def("addToQueue", "play", false, 0, false, ["addToQueue"]),
-  def("playLater", "play", false, 0, false, ["playLater"]),
-  def("rating", "rate", false, 0, false, ["rate5", "rate4", "rate3", "rate2", "rate1", "rate0"]),
-  def("love", "rate", false, 0, false, ["love", "unlove"]),
-  def("addToPlaylist", "organise", false, 80, false, ["addToPlaylist"]),
-  def("stash", "organise", false, 60, false, ["stash"]),
-  def("pinToLibrary", "organise", true, 30, true, ["pinToLibrary", "unpinFromLibrary"]),
-  def("addToLibrary", "organise", true, 25, false, ["addToLibrary", "removeFromLibrary"]),
-  def("restoreSavedQueue", "organise", false, 90, false, ["restoreSavedQueue"]),
-  def("pinSavedQueue", "organise", false, 70, false, ["pinSavedQueue", "unpinSavedQueue"]),
-  def("saveQueueAsPlaylist", "organise", false, 65, false, ["saveQueueAsPlaylist"]),
-  def("goToAlbum", "goTo", false, 95, true, ["goToAlbum"]),
-  def("goToArtist", "goTo", false, 100, true, ["goToArtist"]),
-  def("download", "keep", false, 20, false, ["download", "unpin"]),
-  def("share", "keep", false, 50, false, "app"),
-  def("preview", "about", true, 15, true, ["preview"]),
-  def("info", "about", true, 12, true, "app"),
-  def("genius", "about", true, 10, true, "app"),
-  def("lyricsTiming", "about", true, 8, true, "app"),
-  def("snooze", "tune", true, 5, false, ["snooze", "unsnooze"]),
-  def("removeFromQueue", "danger", false, 0, false, ["removeFromQueue"]),
-  def("removeFromPlaylist", "danger", false, 0, false, ["removeFromPlaylist"]),
-  def("deleteSavedQueue", "danger", false, 0, false, ["deleteSavedQueue"]),
-  def("deletePlaylist", "danger", false, 0, false, ["deletePlaylist"]),
+  def("play", "play", S, 0, false, ["play"]),
+  def("playShuffled", "play", S, 0, false, ["playShuffled"]),
+  def("playNext", "play", S, 0, false, ["playNext"]),
+  def("addToQueue", "play", S, 0, false, ["addToQueue"]),
+  def("playLater", "play", S, 0, false, ["playLater"]),
+  def("rating", "rate", H, 0, false, ["rate5", "rate4", "rate3", "rate2", "rate1", "rate0"]),
+  def("love", "rate", S, 0, false, ["love", "unlove"]),
+  def("addToPlaylist", "organise", S, 80, false, ["addToPlaylist"]),
+  def("stash", "organise", M, 60, false, ["stash"]),
+  def("pinToLibrary", "organise", M, 30, true, ["pinToLibrary", "unpinFromLibrary"]),
+  def("addToLibrary", "organise", M, 25, false, ["addToLibrary", "removeFromLibrary"]),
+  def("restoreSavedQueue", "organise", S, 90, false, ["restoreSavedQueue"]),
+  def("pinSavedQueue", "organise", S, 70, false, ["pinSavedQueue", "unpinSavedQueue"]),
+  def("saveQueueAsPlaylist", "organise", S, 65, false, ["saveQueueAsPlaylist"]),
+  def("goToAlbum", "goTo", S, 95, true, ["goToAlbum"]),
+  def("goToArtist", "goTo", S, 100, true, ["goToArtist"]),
+  def("download", "keep", M, 20, false, ["download", "unpin"]),
+  def("share", "keep", M, 50, false, "app"),
+  def("info", "about", M, 12, true, "app"),
+  def("genius", "about", H, 10, true, "app"),
+  def("lyricsTiming", "about", H, 8, true, "app"),
+  def("snooze", "tune", H, 5, false, ["snooze", "unsnooze"]),
+  def("removeFromQueue", "danger", S, 0, false, ["removeFromQueue"]),
+  def("removeFromPlaylist", "danger", S, 0, false, ["removeFromPlaylist"]),
+  def("deleteSavedQueue", "danger", S, 0, false, ["deleteSavedQueue"]),
+  def("deletePlaylist", "danger", S, 0, false, ["deletePlaylist"]),
 ];
 
 const find = (id: string) => MENU_DEFS.find((d) => d.id === id);
@@ -65,7 +70,7 @@ function choices(d: Def): MenuTier[] {
   return ["shown", "more", "hidden"];
 }
 
-const defaultTier = (d: Def): MenuTier => (d.folded ? "more" : "shown");
+const defaultTier = (d: Def): MenuTier => d.tier;
 
 /** The stored `menu.overrides` object as is ({} when it isn't one). */
 function storedOverrides(raw: string | undefined): Record<string, unknown> {
@@ -117,11 +122,10 @@ export function menuItemsInfo(overrides: Map<string, MenuTier>): MenuItemInfo[] 
   }));
 }
 
-/** Whether the screen leaves the row out: the player doesn't preview what is playing, a page
- * doesn't link to itself, and only an editable playlist removes songs from itself. */
+/** Whether the screen leaves the row out: a page doesn't link to itself, and only an editable
+ * playlist removes songs from itself. */
 function screenDrops(id: string, screen: MenuScreen): boolean {
   switch (id) {
-    case "preview": return screen === "nowPlaying";
     case "goToAlbum": return screen === "albumPage";
     case "goToArtist": return screen === "artistPage";
     case "removeFromPlaylist": return screen !== "playlist";
@@ -158,7 +162,7 @@ export function menuLayout(req: MenuRequest): MenuLayout {
   const rows: { d: Def; actions: ActionDescriptor[]; tier: MenuTier | undefined }[] = [];
   for (const d of MENU_DEFS) {
     const tier = req.overrides.get(d.id);
-    if (tier === "hidden" || screenDrops(d.id, req.screen)) continue;
+    if ((tier ?? d.tier) === "hidden" || screenDrops(d.id, req.screen)) continue;
     if (d.single && count > 1) continue;
     let actions: ActionDescriptor[] = [];
     if (d.source === "app") {
@@ -179,10 +183,10 @@ export function menuLayout(req: MenuRequest): MenuLayout {
     // Rows the user put in the menu always stay; the defaults fill what's left of the short list by priority.
     const pinned = rows.filter((r) => foldable(r.d) && r.tier === "shown").length;
     let room = Math.max(0, SHORT_LIST_MAX - req.extras - pinned);
-    const byPriority = rows.map((_, i) => i).filter((i) => foldable(rows[i]!.d) && rows[i]!.tier === undefined && !rows[i]!.d.folded);
+    const byPriority = rows.map((_, i) => i).filter((i) => foldable(rows[i]!.d) && rows[i]!.tier === undefined && rows[i]!.d.tier === "shown");
     byPriority.sort((a, b) => rows[b]!.d.priority - rows[a]!.d.priority);
     rows.forEach((r, i) => {
-      if (foldable(r.d)) folded[i] = r.tier === "shown" ? false : r.tier !== undefined ? true : r.d.folded;
+      if (foldable(r.d)) folded[i] = r.tier === "shown" ? false : r.tier !== undefined ? true : r.d.tier === "more";
     });
     for (const i of byPriority) {
       if (room > 0) room--;

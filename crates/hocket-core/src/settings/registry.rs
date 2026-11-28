@@ -93,7 +93,8 @@ pub mod keys {
     /// otherwise), `always` (mirror or extend every square cover) or `never` (always a card).
     pub const DISPLAY_IMMERSIVE_ARTWORK: &str = "display.immersiveArtwork";
     /// The star rating in the player (the full player and the desktop's bar): shown, or left to
-    /// the song menu and the song's details. Synced: a preference, not a device's.
+    /// the song menu and the song's details. Off by default: Love is the song-first rating.
+    /// Synced: a preference, not a device's.
     pub const DISPLAY_PLAYER_RATING: &str = "display.playerRating";
     /// An album's tracks name their artist on every row; off names it only where it is not the
     /// album's artist. Synced: a preference, not a device's.
@@ -643,7 +644,7 @@ pub static REGISTRY: &[SettingDef] = &[
         || json!("automatic"),
     ),
     def(DISPLAY_PLAYER_RATING, Synced, SettingKind::Bool, || {
-        json!(true)
+        json!(false)
     }),
     def(
         DISPLAY_ALBUM_TRACK_ARTISTS,

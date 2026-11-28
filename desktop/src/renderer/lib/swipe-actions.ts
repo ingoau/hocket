@@ -105,7 +105,7 @@ export function runRowSwipe(a: RowSwipeAction, target: ActionTarget, track: Trac
     const r = anchor?.getBoundingClientRect();
     void openContextMenu({ clientX: Math.round(r ? r.left + 24 : 0), clientY: Math.round(r ? r.bottom : 0), preventDefault: () => {} }, target, ctx).then(() => {
       // Don't start one there is no menu to show it in.
-      if (useApp.getState().contextMenu) bridge().dispatch({ type: "previewStart", data: { track } });
+      if (useApp.getState().contextMenu) bridge().dispatch({ type: "previewStart", data: { track, clip: true } });
     });
     return;
   }

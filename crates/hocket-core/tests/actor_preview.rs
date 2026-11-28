@@ -48,6 +48,7 @@ async fn preview_pauses_here_and_resumes_at_the_same_position() {
     t.events.clear();
     t.run(Command::PreviewStart {
         track: TrackRef::new(t.server_id.clone(), "t3"),
+        clip: false,
     })
     .await;
     let transport = t.transport().await;
@@ -138,6 +139,7 @@ async fn preview_on_a_peer_leaves_the_player_alone() {
     b.events.clear();
     b.run(Command::PreviewStart {
         track: TrackRef::new(b.server_id.clone(), "t2"),
+        clip: false,
     })
     .await;
     TestCore::run_all_for(&[&a, &b], 1_000.0).await;
@@ -184,6 +186,7 @@ async fn transport_commands_during_a_preview_follow_what_the_user_hears() {
     t.run_for(1_000.0).await;
     t.run(Command::PreviewStart {
         track: TrackRef::new(t.server_id.clone(), "t3"),
+        clip: false,
     })
     .await;
     assert!(!t.transport().await.position.is_playing);
@@ -204,6 +207,7 @@ async fn transport_commands_during_a_preview_follow_what_the_user_hears() {
     t.run_for(500.0).await;
     t.run(Command::PreviewStart {
         track: TrackRef::new(t.server_id.clone(), "t4"),
+        clip: false,
     })
     .await;
     t.run(Command::TogglePlay).await;
@@ -230,6 +234,7 @@ async fn preview_end_resumes_and_an_interruption_does_not() {
     t.run_for(500.0).await;
     t.run(Command::PreviewStart {
         track: TrackRef::new(t.server_id.clone(), "t1"),
+        clip: false,
     })
     .await;
     // 200 s song. Land just before the end and let the preview finish.
@@ -249,6 +254,7 @@ async fn preview_end_resumes_and_an_interruption_does_not() {
 
     t.run(Command::PreviewStart {
         track: TrackRef::new(t.server_id.clone(), "t2"),
+        clip: false,
     })
     .await;
     t.backend.finish_preview(true);
@@ -276,6 +282,7 @@ async fn a_preview_that_cannot_load_gives_playback_back() {
     t.backend.fail_key("preview:t5");
     t.run(Command::PreviewStart {
         track: TrackRef::new(t.server_id.clone(), "t5"),
+        clip: false,
     })
     .await;
     assert!(preview_of(&t.events.all()).is_none());
@@ -298,10 +305,12 @@ async fn a_second_preview_keeps_the_hold_and_a_paused_track_stays_paused() {
     t.run_for(500.0).await;
     t.run(Command::PreviewStart {
         track: TrackRef::new(t.server_id.clone(), "t1"),
+        clip: false,
     })
     .await;
     t.run(Command::PreviewStart {
         track: TrackRef::new(t.server_id.clone(), "t2"),
+        clip: false,
     })
     .await;
     let preview = preview_of(&t.events.all()).expect("switched preview");
@@ -318,6 +327,7 @@ async fn a_second_preview_keeps_the_hold_and_a_paused_track_stays_paused() {
     assert!(!t.transport().await.position.is_playing);
     t.run(Command::PreviewStart {
         track: TrackRef::new(t.server_id.clone(), "t3"),
+        clip: false,
     })
     .await;
     t.run(Command::PreviewStop).await;
@@ -350,6 +360,7 @@ async fn preview_after_pausing_a_buffering_track_stays_paused() {
     );
     t.run(Command::PreviewStart {
         track: TrackRef::new(t.server_id.clone(), "t2"),
+        clip: false,
     })
     .await;
     assert!(preview_of(&t.events.all()).is_some());
@@ -380,6 +391,7 @@ async fn preview_while_the_track_is_still_loading_resumes_it() {
     .await;
     t.run(Command::PreviewStart {
         track: TrackRef::new(t.server_id.clone(), "t1"),
+        clip: false,
     })
     .await;
     assert!(preview_of(&t.events.all()).is_some());
@@ -421,6 +433,7 @@ async fn a_peers_transport_commands_during_a_preview_are_kept() {
     // Pause from the peer, then close the preview: main stays paused.
     a.run(Command::PreviewStart {
         track: TrackRef::new(a.server_id.clone(), "t2"),
+        clip: false,
     })
     .await;
     assert!(!a.backend.is_playing());
@@ -442,6 +455,7 @@ async fn a_peers_transport_commands_during_a_preview_are_kept() {
     // preview pausing it again.
     a.run(Command::PreviewStart {
         track: TrackRef::new(a.server_id.clone(), "t3"),
+        clip: false,
     })
     .await;
     a.events.clear();
@@ -474,6 +488,7 @@ async fn the_sleep_timer_stopping_during_a_preview_stays_stopped() {
     .await;
     t.run(Command::PreviewStart {
         track: TrackRef::new(t.server_id.clone(), "t1"),
+        clip: false,
     })
     .await;
     t.run_for(3_000.0).await;
@@ -502,6 +517,7 @@ async fn a_preview_that_fails_while_playing_says_so_and_gives_playback_back() {
     t.run_for(500.0).await;
     t.run(Command::PreviewStart {
         track: TrackRef::new(t.server_id.clone(), "t1"),
+        clip: false,
     })
     .await;
     t.events.clear();
@@ -534,6 +550,7 @@ async fn previewing_t3() -> (TestCore, u32) {
     t.run_for(2_000.0).await;
     t.run(Command::PreviewStart {
         track: TrackRef::new(sid, "t3"),
+        clip: false,
     })
     .await;
     t.run_for(2_000.0).await;
@@ -762,4 +779,56 @@ async fn a_preview_closed_while_handing_over_starts_the_song_where_it_got_to() {
         "on from the preview's {at}, at {}",
         transport.position.position_ms
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_clipped_preview_stops_after_thirty_seconds_and_gives_playback_back() {
+    let t = synced_core("preview-clip").await;
+    let sid = t.server_id.clone();
+    t.run(Command::PlayTracks {
+        tracks: TrackRef::list(&sid, ["t0"]),
+        start_index: 0,
+        label: "Sel".into(),
+        shuffle: false,
+        start_position_ms: 0,
+    })
+    .await;
+    t.run_for(500.0).await;
+    t.events.clear();
+    t.run(Command::PreviewStart {
+        track: TrackRef::new(sid.clone(), "t1"),
+        clip: true,
+    })
+    .await;
+    let preview = preview_of(&t.events.all()).expect("preview started");
+    // 200 s song: 30% in, for 30 s.
+    assert_eq!(
+        preview.clip,
+        Some(PreviewClip {
+            start_ms: 60_000,
+            end_ms: 90_000
+        })
+    );
+    t.run_for(25_000.0).await;
+    assert!(preview_of(&t.events.all()).is_some(), "still in the clip");
+    t.run_for(6_000.0).await;
+    assert!(
+        preview_of(&t.events.all()).is_none(),
+        "the clip ending stops the preview"
+    );
+    assert!(
+        t.transport().await.position.is_playing,
+        "main playback resumes"
+    );
+
+    // Unclipped, the same preview plays on.
+    t.run(Command::PreviewStart {
+        track: TrackRef::new(sid, "t2"),
+        clip: false,
+    })
+    .await;
+    let preview = preview_of(&t.events.all()).expect("preview started");
+    assert_eq!(preview.clip, None);
+    t.run_for(31_000.0).await;
+    assert!(preview_of(&t.events.all()).is_some(), "plays past 30 s");
 }

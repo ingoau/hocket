@@ -148,7 +148,7 @@ class SongMenuTest {
     }
 
     /**
-     * The player's menu and a queue row's menu are one menu: the same header and star row, the
+     * The player's menu and a queue row's menu are one menu: the same header, the
      * common actions, and the context's own rows (the queue's remove, the player's sleep timer)
      * after them. Removing from the menu removes that entry and closes only the menu.
      */
@@ -157,7 +157,12 @@ class SongMenuTest {
         val core = TestCore()
         openPlayer(core)
         openMenu()
-        assertTrue(present("rating"))
+        // Song first: no stars until the user adds the row.
+        assertTrue(!present("rating"))
+        // The sleep timer waits under More until it's set.
+        assertTrue(!present("player.sleep"))
+        compose.onNodeWithTag("songMenu.more").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
         assertTrue(top("player.sleep") > top("songMenu.action.${ActionIds.PLAY_NEXT}"))
         assertTrue(!present("songMenu.action.${ActionIds.REMOVE_FROM_QUEUE}"))
         compose.onNodeWithTag("songMenu.header").performTouchInput { swipe(start = center, end = center + Offset(0f, 1200f), durationMillis = 100) }
@@ -172,19 +177,19 @@ class SongMenuTest {
         row.config[SemanticsActions.CustomActions].first { it.label == "More options" }.action()
         compose.waitUntil(5_000) { present("songMenu.header") }
         compose.waitForIdle()
-        assertTrue(present("rating"))
+        assertTrue(!present("rating"))
         assertTrue(!present("player.sleep"))
         val remove = "songMenu.action.${ActionIds.REMOVE_FROM_QUEUE}"
-        // The destructive row is last, and in view without More.
+        // The destructive row is last, and in view without More (this short menu has none).
         assertTrue(present(remove))
-        assertTrue(top(remove) > top("songMenu.more"))
+        assertTrue(top(remove) > top("songMenu.action.${ActionIds.ADD_TO_PLAYLIST}"))
         compose.onNodeWithTag(remove).performSemanticsAction(SemanticsActions.OnClick)
         compose.waitUntil(5_000) { !present("songMenu.header") }
         compose.waitUntil(5_000) { core.client.queue.value.let { it.historyEntries.size + it.groupEntries.size + it.restEntries.size } == before - 1 }
         assertTrue(displayed("player.playPause"))
     }
 
-    /** From a list row the menu is the same sheet: header, stars, the common actions, go-to that navigates. */
+    /** From a list row the menu is the same sheet: header, the common actions, go-to that navigates. */
     @Test
     fun aListRowOpensTheSameMenu() {
         val core = TestCore(startPlaying = false)
@@ -201,7 +206,7 @@ class SongMenuTest {
         compose.onAllNodesWithContentDescription("More options for ${track.title}")[0].performSemanticsAction(SemanticsActions.OnClick)
         compose.waitUntil(5_000) { present("songMenu.header") }
         compose.waitForIdle()
-        assertTrue(present("rating"))
+        assertTrue(!present("rating"))
         assertTrue(present("songMenu.action.${ActionIds.PLAY_NEXT}"))
         assertTrue(!present("songMenu.action.${ActionIds.REMOVE_FROM_QUEUE}"))
         // On the album's own page there's no Go to album; Go to artist is in the short list.

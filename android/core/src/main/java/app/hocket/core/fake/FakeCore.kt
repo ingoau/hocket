@@ -178,7 +178,7 @@ class FakeCore(
         def(SettingKeys.DISPLAY_LYRICS_FPS, "30", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_THEME, "\"system\"", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_IMMERSIVE_ARTWORK, "\"automatic\"", SettingScope.DeviceLocal)
-        def(SettingKeys.DISPLAY_PLAYER_RATING, "true", SettingScope.AccountSynced)
+        def(SettingKeys.DISPLAY_PLAYER_RATING, "false", SettingScope.AccountSynced)
         def(SettingKeys.DISPLAY_ALBUM_TRACK_ARTISTS, "false", SettingScope.AccountSynced)
         def(SettingKeys.PLAYBACK_RESUME_ALBUMS, "true", SettingScope.AccountSynced)
         def(SettingKeys.DISPLAY_FLOATING_NAV_BAR, "true", SettingScope.DeviceLocal)
@@ -878,7 +878,7 @@ class FakeCore(
             is Command.SeekBy -> { startPlayback((positionNow() + c.data.delta_ms).coerceAtLeast(0), stamp.isPlaying); emitTransport() }
             is Command.SetVolume -> { volumes[volumeTarget()] = c.data.volume.coerceIn(0.0, 1.0) to false; emitTransport() }
             is Command.SetMuted -> { volumes[volumeTarget()] = volumeOf(volumeTarget()).first to c.data.muted; emitTransport() }
-            is Command.PreviewStart -> previewStart(c.data.track.id)
+            is Command.PreviewStart -> previewStart(c.data.track.id, c.data.clip == true)
             Command.PreviewToggle -> previewToggle()
             is Command.PreviewSeek -> previewSeek(c.data.position_ms)
             Command.PreviewStop -> previewStop(true)
@@ -1679,9 +1679,31 @@ class FakeCore(
     private var preview: PreviewState? = null
     private var previewHeld = false
     private var previewWasPlaying = false
+    /** Stops a clipped preview at its end (with timers). */
+    private var clipEnd: kotlinx.coroutines.Job? = null
+
+    /** As the core's `preview_clip`: 30 s from [start], or to the end of a shorter song. */
+    private fun clipFrom(start: UInt, duration: UInt): PreviewClip {
+        val end = start + 30_000u
+        return PreviewClip(start, if (duration > 0u) minOf(end, duration) else end)
+    }
+
+    /** Arms (or disarms, paused or unclipped) the stop at the clip's end. */
+    private fun armClipEnd() {
+        clipEnd?.cancel()
+        clipEnd = null
+        val current = preview ?: return
+        val clip = current.clip ?: return
+        if (!timers || !current.playing) return
+        val left = clip.endMs.toLong() - previewPositionMs(current).toLong()
+        clipEnd = scope.launch {
+            delay(left.coerceAtLeast(0))
+            if (preview?.trackId == current.trackId) previewStop(true)
+        }
+    }
 
     /** A local preview. Pausing here is skipped when another device owns playback. */
-    private fun previewStart(trackId: String) {
+    private fun previewStart(trackId: String, clip: Boolean) {
         if (preview?.trackId == trackId) {
             previewToggle()
             return
@@ -1695,8 +1717,9 @@ class FakeCore(
             previewWasPlaying = stamp.isPlaying
             if (!remote && stamp.isPlaying) handle(Command.Pause)
         }
-        preview = PreviewState(trackId, track?.title ?: trackId, duration, position, true, now())
+        preview = PreviewState(trackId, track?.title ?: trackId, duration, position, true, now(), if (clip) clipFrom(position, duration) else null)
         emit(Event.PreviewChanged(EventPreviewChangedInner(preview)))
+        armClipEnd()
     }
 
     private fun endsPreview(c: Command): Boolean = when (c) {
@@ -1711,18 +1734,23 @@ class FakeCore(
         val position = previewPositionMs(current)
         preview = current.copy(playing = !current.playing, positionMs = position, takenAt = now())
         emit(Event.PreviewChanged(EventPreviewChangedInner(preview)))
+        armClipEnd()
     }
 
     private fun previewSeek(position: UInt) {
         val current = preview ?: return
         val cap = current.durationMs
         val at = if (cap > 0u) minOf(position, cap) else position
-        preview = current.copy(positionMs = at, takenAt = now())
+        // As the core: a seek starts the clip again from where it lands.
+        preview = current.copy(positionMs = at, takenAt = now(), clip = current.clip?.let { clipFrom(at, cap) })
         emit(Event.PreviewChanged(EventPreviewChangedInner(preview)))
+        armClipEnd()
     }
 
     private fun previewStop(restore: Boolean) {
         if (preview == null) return
+        clipEnd?.cancel()
+        clipEnd = null
         preview = null
         emit(Event.PreviewChanged(EventPreviewChangedInner(null)))
         if (restore && previewHeld && previewWasPlaying && transportOwner == deviceId) handle(Command.Play)
@@ -1769,7 +1797,7 @@ class FakeCore(
             }
             id == ActionIds.CLEAR_QUEUE_GROUP -> handle(Command.ClearQueueGroup)
             id == ActionIds.STASH_QUEUE_GROUP -> handle(Command.StashQueueGroup)
-            id == ActionIds.PREVIEW -> trackIds.firstOrNull()?.let { previewStart(it) }
+            id == ActionIds.PREVIEW -> trackIds.firstOrNull()?.let { previewStart(it, clip = true) }
             id == ActionIds.STASH -> stashAdd(trackIds)
             id == ActionIds.CLEAR_STASH -> handle(Command.StashClear)
             id == ActionIds.LOVE -> setLoved(trackIds.map { RatingTarget.Track(RatingTargetTrackInner(it, serverId)) }, true)

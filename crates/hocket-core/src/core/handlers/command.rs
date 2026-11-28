@@ -96,7 +96,7 @@ impl Actor {
             Command::SetMuted { muted } => self.volume_command(None, muted),
 
             // -- preview --
-            Command::PreviewStart { track } => self.preview_start(track),
+            Command::PreviewStart { track, clip } => self.preview_start(track, clip),
             Command::PreviewToggle => self.preview_toggle(),
             Command::PreviewSeek { position_ms } => self.preview_seek(position_ms),
             Command::PreviewStop => self.stop_preview(true),

@@ -170,7 +170,7 @@ import kotlin.math.roundToLong
  * - the mode area: the big artwork in [PlayerMode.Artwork], or the lyrics or the queue in its place,
  *   straight on the player's backdrop (the artwork then sits small beside the title);
  * - the title row: a thumbnail slot (lyrics / queue), title and artist (a tap on either opens the
- *   song's details in a sheet), the star rating (draggable; hidden by `display.playerRating`) and a
+ *   song's details in a sheet), the star rating (draggable; shown with `display.playerRating`, off by default) and a
  *   tonal add-to-playlist button;
  * - spread over what is left: the wavy seek bar with elapsed and
  *   remaining time and, between them, "Playing on <device>" (only while another device plays) or
@@ -222,7 +222,7 @@ internal fun FullPlayer(
     val client = LocalCoreClient.current
     val entry by client.nowPlaying.collectAsStateWithLifecycle()
     val settings by client.settings.collectAsStateWithLifecycle()
-    val showRating = settings[SettingKeys.DISPLAY_PLAYER_RATING]?.value?.trim() != "false"
+    val showRating = settings[SettingKeys.DISPLAY_PLAYER_RATING]?.value?.trim() == "true"
     val lyricLine = settings[SettingKeys.LYRICS_PLAYER_LINE]?.value?.trim() == "true"
     val track = entry?.track
     val density = LocalDensity.current
@@ -260,7 +260,9 @@ internal fun FullPlayer(
                     supporting = resources.getString(R.string.lyrics_offset_value, doc.offsetMs), testTag = "player.lyricsTiming", item = app.hocket.core.MenuItemIds.LYRICS_TIMING)
             }
             songMenu.open(it, extras = listOfNotNull(timing, app.hocket.ui.components.SongMenuExtra(sleepLabel, HocketIcons.Filled.Bedtime,
-                page = app.hocket.ui.components.MenuPage.Sleep, supporting = sleepState, highlighted = sleep != null, testTag = "player.sleep")), pull = pull,
+                page = app.hocket.ui.components.MenuPage.Sleep, supporting = sleepState, highlighted = sleep != null, testTag = "player.sleep",
+                // Under More until it's set; a running timer stays in view.
+                underMore = sleep == null)), pull = pull,
                 screen = app.hocket.core.api.MenuScreen.NowPlaying)
         } ?: false
     }
