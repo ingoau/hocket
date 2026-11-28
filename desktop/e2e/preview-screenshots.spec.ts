@@ -1,4 +1,4 @@
-// Screenshots of the song-menu preview player. Runs only with an output folder:
+// Screenshots of the song menu's preview: its cover plays a clip, with a ring for its progress. Runs only with an output folder:
 //
 //   HOCKET_SCREENSHOT_DIR=/tmp/shots xvfb-run -a pnpm exec playwright test preview-screenshots
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -41,15 +41,20 @@ test("song preview in the context menu", async () => {
       const menu = page.getByTestId("context-menu");
       await page.getByTestId("track-row").first().click({ button: "right" });
       await expect(menu).toBeVisible();
-      await expect(menu.locator('[data-action="preview"]')).toBeVisible();
+      const cover = menu.getByTestId("menu-preview");
+      await expect(cover).toBeVisible();
       await page.mouse.move(8, 8);
       await shot("preview-menu");
-      await menu.locator('[data-action="preview"]').click();
-      await expect(menu.locator('[data-action="preview"]')).toHaveAttribute("aria-label", /playing/);
-      await page.waitForTimeout(500);
+      await cover.hover();
+      await shot("preview-hover");
+      await cover.click();
+      await expect(cover).toHaveAttribute("data-state", "playing");
+      await page.waitForTimeout(1500);
+      await page.mouse.move(8, 8);
       await shot("preview-playing");
-      await menu.locator('[data-action="preview"]').click();
-      await expect(menu.locator('[data-action="preview"]')).toHaveAttribute("aria-label", /paused/);
+      await cover.click();
+      await expect(cover).toHaveAttribute("data-state", "paused");
+      await page.mouse.move(8, 8);
       await shot("preview-paused");
     } finally {
       await app.close().catch(() => undefined);

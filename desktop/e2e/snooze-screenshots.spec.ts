@@ -3,7 +3,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
-import { completeSetup, expect, openPlace, test } from "./fixtures";
+import { completeSetup, expect, openPlace, showMenuRows, test } from "./fixtures";
 
 const out = process.env.HOCKET_SCREENSHOT_DIR;
 const onTitle = { x: 130, y: 12 };
@@ -19,6 +19,8 @@ test("snooze screens", async ({ hocket }) => {
   test.setTimeout(120_000);
   const { page } = hocket;
   await completeSetup(page);
+  // Snooze waits in Settings until the user adds it to the menu.
+  await showMenuRows(page, "snooze");
   await openPlace(page, "playlists");
   await page.getByTestId("playlists-grid").getByTestId("grid-tile").first().dblclick();
   await expect(page.getByTestId("view-playlist")).toBeVisible();
@@ -54,6 +56,8 @@ test("snooze until a custom date and time", async ({ hocket }) => {
   test.setTimeout(120_000);
   const { page } = hocket;
   await completeSetup(page);
+  // Snooze waits in Settings until the user adds it to the menu.
+  await showMenuRows(page, "snooze");
   await openPlace(page, "playlists");
   await page.getByTestId("playlists-grid").getByTestId("grid-tile").first().dblclick();
   await expect(page.getByTestId("view-playlist")).toBeVisible();

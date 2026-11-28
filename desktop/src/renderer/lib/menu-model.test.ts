@@ -14,7 +14,7 @@ describe("context menu layout", () => {
       ">addToPlaylist", "stash", "sep",
       "goToAlbum", "goToArtist", "sep",
       "download:false", ">share", "sep",
-      "preview", "ui.info", "genius", "sep",
+      "ui.info", "genius", "sep",
       ">snooze", "sep",
       "removeFromPlaylist",
     ]);
@@ -33,7 +33,7 @@ describe("context menu layout", () => {
     expect(rows.find((r) => r.kind === "submenu")).toMatchObject({ label: "Add to playlist" });
     expect(rows.find((r) => r.kind === "genius")).toMatchObject({ label: "Open in Genius" });
     const labels = rows.flatMap((r) => (r.kind === "action" ? [r.label] : []));
-    expect(labels).toEqual(["Stash", "goToAlbum", "goToArtist", "Preview", "Song info", "Remove from Late night"]);
+    expect(labels).toEqual(["Stash", "goToAlbum", "goToArtist", "Song info", "Remove from Late night"]);
     expect(rows.find((r) => r.kind === "strip")).toMatchObject({ cells: [{ label: "Play" }, { label: "Play next" }, { label: "Play later" }] });
     expect(rows.find((r) => r.kind === "action" && r.action.id === "removeFromPlaylist")).toMatchObject({ destructive: true });
   });
@@ -50,7 +50,7 @@ describe("context menu layout", () => {
   it("shows several songs' mixed states and counts", () => {
     const facts: MenuFacts = { kind: "song", count: 3, loved: 2, downloaded: 0, ratings: [4, 3, 0], playlistName: "Late night" };
     // The core leaves the single-item rows out for several songs.
-    const single = new Set(["pinToLibrary", "goToAlbum", "goToArtist", "preview", "info", "genius"]);
+    const single = new Set(["pinToLibrary", "goToAlbum", "goToArtist", "info", "genius"]);
     const rows = buildMenu(songLayout({ playlist: true }).filter((i) => !single.has(i.id)), [], facts);
     expect(rows.find((r) => r.kind === "rating")).toMatchObject({ mixed: true, value: 0, count: 3 });
     expect(rows.find((r) => r.kind === "check" && r.id === "love")).toMatchObject({ checked: "mixed", label: "Love", note: "2 of 3", runId: "love" });

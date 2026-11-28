@@ -641,7 +641,7 @@ function Appearance() {
       <Row anchor="immersiveArtwork" title={t("settings.immersiveArtwork")} settingKey={SK.displayImmersiveArtwork}>
         <Select value={immersive} aria-label={t("settings.immersiveArtwork")} onChange={(e) => set(SK.displayImmersiveArtwork, e.target.value)} data-testid="setting-immersive-artwork">{["automatic", "always", "never"].map((v) => <option key={v} value={v}>{t(`settings.immersiveArtwork.${v}` as never)}</option>)}</Select>
       </Row>
-      <Toggle anchor="playerRating" settingKey={SK.displayPlayerRating} title={t("settings.playerRating")} fallback />
+      <Toggle anchor="playerRating" settingKey={SK.displayPlayerRating} title={t("settings.playerRating")} />
       <Toggle anchor="albumTrackArtists" settingKey={SK.displayAlbumTrackArtists} title={t("settings.albumTrackArtists")} desc={t("settings.albumTrackArtistsDesc")} />
       <IdleHideRow />
       <LyricsSizeRow />
@@ -768,7 +768,7 @@ function SwipeChoice({ anchor, settingKey, fallback, choices, title, testId }: {
 const MENU_ITEM_ICONS: Record<string, string> = {
   rating: "star", love: "heart", addToPlaylist: "playlistAdd", stash: "stash", pinToLibrary: "pin", addToLibrary: "library",
   restoreSavedQueue: "restore", pinSavedQueue: "pin", saveQueueAsPlaylist: "playlistAdd", goToAlbum: "album", goToArtist: "artist",
-  download: "download", share: "share", preview: "headphones", info: "info", genius: "external", lyricsTiming: "lyrics", snooze: "sleep",
+  download: "download", share: "share", info: "info", genius: "external", lyricsTiming: "lyrics", snooze: "sleep",
   removeFromQueue: "remove", removeFromPlaylist: "remove", deleteSavedQueue: "trash", deletePlaylist: "trash",
 };
 

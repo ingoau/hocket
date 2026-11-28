@@ -28,37 +28,40 @@ internal object FakeMenu {
     private const val SHORT_LIST_MAX = 6
     private const val NO_FOLD_MAX = 7
 
-    /** One row: [actions] null for an app-handled one (offered when the app lists it). */
-    private class Def(val id: String, val section: MenuSection, val folded: Boolean, val priority: Int, val single: Boolean, val actions: List<String>?)
+    /** One row: [actions] null for an app-handled one (offered when the app lists it). [tier]: its default. */
+    private class Def(val id: String, val section: MenuSection, val tier: MenuTier, val priority: Int, val single: Boolean, val actions: List<String>?)
+
+    private val S = MenuTier.Shown
+    private val M = MenuTier.More
+    private val H = MenuTier.Hidden
 
     private val DEFS = listOf(
-        Def("play", Play, false, 0, false, listOf("play")),
-        Def("playShuffled", Play, false, 0, false, listOf("playShuffled")),
-        Def("playNext", Play, false, 0, false, listOf("playNext")),
-        Def("addToQueue", Play, false, 0, false, listOf("addToQueue")),
-        Def("playLater", Play, false, 0, false, listOf("playLater")),
-        Def("rating", Rate, false, 0, false, listOf("rate5", "rate4", "rate3", "rate2", "rate1", "rate0")),
-        Def("love", Rate, false, 0, false, listOf("love", "unlove")),
-        Def("addToPlaylist", Organise, false, 80, false, listOf("addToPlaylist")),
-        Def("stash", Organise, false, 60, false, listOf("stash")),
-        Def("pinToLibrary", Organise, true, 30, true, listOf("pinToLibrary", "unpinFromLibrary")),
-        Def("addToLibrary", Organise, true, 25, false, listOf("addToLibrary", "removeFromLibrary")),
-        Def("restoreSavedQueue", Organise, false, 90, false, listOf("restoreSavedQueue")),
-        Def("pinSavedQueue", Organise, false, 70, false, listOf("pinSavedQueue", "unpinSavedQueue")),
-        Def("saveQueueAsPlaylist", Organise, false, 65, false, listOf("saveQueueAsPlaylist")),
-        Def("goToAlbum", GoTo, false, 95, true, listOf("goToAlbum")),
-        Def("goToArtist", GoTo, false, 100, true, listOf("goToArtist")),
-        Def("download", Keep, false, 20, false, listOf("download", "unpin")),
-        Def("share", Keep, false, 50, false, null),
-        Def("preview", About, true, 15, true, listOf("preview")),
-        Def("info", About, true, 12, true, null),
-        Def("genius", About, true, 10, true, null),
-        Def("lyricsTiming", About, true, 8, true, null),
-        Def("snooze", Tune, true, 5, false, listOf("snooze", "unsnooze")),
-        Def("removeFromQueue", Danger, false, 0, false, listOf("removeFromQueue")),
-        Def("removeFromPlaylist", Danger, false, 0, false, listOf("removeFromPlaylist")),
-        Def("deleteSavedQueue", Danger, false, 0, false, listOf("deleteSavedQueue")),
-        Def("deletePlaylist", Danger, false, 0, false, listOf("deletePlaylist")),
+        Def("play", Play, S, 0, false, listOf("play")),
+        Def("playShuffled", Play, S, 0, false, listOf("playShuffled")),
+        Def("playNext", Play, S, 0, false, listOf("playNext")),
+        Def("addToQueue", Play, S, 0, false, listOf("addToQueue")),
+        Def("playLater", Play, S, 0, false, listOf("playLater")),
+        Def("rating", Rate, H, 0, false, listOf("rate5", "rate4", "rate3", "rate2", "rate1", "rate0")),
+        Def("love", Rate, S, 0, false, listOf("love", "unlove")),
+        Def("addToPlaylist", Organise, S, 80, false, listOf("addToPlaylist")),
+        Def("stash", Organise, M, 60, false, listOf("stash")),
+        Def("pinToLibrary", Organise, M, 30, true, listOf("pinToLibrary", "unpinFromLibrary")),
+        Def("addToLibrary", Organise, M, 25, false, listOf("addToLibrary", "removeFromLibrary")),
+        Def("restoreSavedQueue", Organise, S, 90, false, listOf("restoreSavedQueue")),
+        Def("pinSavedQueue", Organise, S, 70, false, listOf("pinSavedQueue", "unpinSavedQueue")),
+        Def("saveQueueAsPlaylist", Organise, S, 65, false, listOf("saveQueueAsPlaylist")),
+        Def("goToAlbum", GoTo, S, 95, true, listOf("goToAlbum")),
+        Def("goToArtist", GoTo, S, 100, true, listOf("goToArtist")),
+        Def("download", Keep, M, 20, false, listOf("download", "unpin")),
+        Def("share", Keep, M, 50, false, null),
+        Def("info", About, M, 12, true, null),
+        Def("genius", About, H, 10, true, null),
+        Def("lyricsTiming", About, H, 8, true, null),
+        Def("snooze", Tune, H, 5, false, listOf("snooze", "unsnooze")),
+        Def("removeFromQueue", Danger, S, 0, false, listOf("removeFromQueue")),
+        Def("removeFromPlaylist", Danger, S, 0, false, listOf("removeFromPlaylist")),
+        Def("deleteSavedQueue", Danger, S, 0, false, listOf("deleteSavedQueue")),
+        Def("deletePlaylist", Danger, S, 0, false, listOf("deletePlaylist")),
     )
 
     private fun choices(d: Def): List<MenuTier> = when (d.section) {
@@ -67,7 +70,7 @@ internal object FakeMenu {
         else -> listOf(MenuTier.Shown, MenuTier.More, MenuTier.Hidden)
     }
 
-    private fun defaultTier(d: Def) = if (d.folded) MenuTier.More else MenuTier.Shown
+    private fun defaultTier(d: Def) = d.tier
 
     private fun tierOf(s: String?): MenuTier? = MenuTier.entries.firstOrNull { it.string == s }
 
@@ -95,7 +98,6 @@ internal object FakeMenu {
     }
 
     private fun dropped(id: String, screen: MenuScreen) = when (id) {
-        "preview" -> screen == MenuScreen.NowPlaying
         "goToAlbum" -> screen == MenuScreen.AlbumPage
         "goToArtist" -> screen == MenuScreen.ArtistPage
         "removeFromPlaylist" -> screen != MenuScreen.Playlist
@@ -118,7 +120,7 @@ internal object FakeMenu {
         val n = count(target)
         val rows = DEFS.mapNotNull { d ->
             val tier = overrides[d.id]
-            if (tier == MenuTier.Hidden || dropped(d.id, screen) || (d.single && n > 1)) return@mapNotNull null
+            if ((tier ?: d.tier) == MenuTier.Hidden || dropped(d.id, screen) || (d.single && n > 1)) return@mapNotNull null
             val actions = if (d.actions == null) {
                 if (d.id !in appItems) return@mapNotNull null
                 emptyList()
@@ -132,9 +134,9 @@ internal object FakeMenu {
             val pinned = rows.count { foldable(it.first) && it.third == MenuTier.Shown }
             var room = (SHORT_LIST_MAX - extras - pinned).coerceAtLeast(0)
             rows.forEachIndexed { i, (d, _, t) ->
-                if (foldable(d)) folded[i] = when (t) { MenuTier.Shown -> false; null -> d.folded; else -> true }
+                if (foldable(d)) folded[i] = when (t) { MenuTier.Shown -> false; null -> d.tier == MenuTier.More; else -> true }
             }
-            rows.indices.filter { foldable(rows[it].first) && rows[it].third == null && !rows[it].first.folded }
+            rows.indices.filter { foldable(rows[it].first) && rows[it].third == null && rows[it].first.tier == MenuTier.Shown }
                 .sortedByDescending { rows[it].first.priority }
                 .forEach { i -> if (room > 0) room-- else folded[i] = true }
             // A More holding one row is a tap for nothing, unless the user put it there.

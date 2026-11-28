@@ -25,7 +25,6 @@ export function songLayout(opts: { playlist?: boolean; addToQueue?: boolean; lab
     row("goToArtist", "goTo", [d("goToArtist", "navigate", l("Go to artist"))]),
     row("download", "keep", [d("download", "library", l("Download")), d("unpin", "library", { label: opts.labels ? "Remove download" : "unpin", destructive: true })]),
     row("share", "keep"),
-    row("preview", "about", [d("preview", "playback", { label: "Preview" })], true),
     row("info", "about", [], true),
     row("genius", "about", [], true),
     row("snooze", "tune", [d("snooze", "queue"), d("unsnooze", "queue", { label: "Unsnooze" })], true),

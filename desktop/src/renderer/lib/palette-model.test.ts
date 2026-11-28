@@ -102,7 +102,7 @@ describe("palette actions menu", () => {
       ["addToPlaylist", "stash"],
       ["goToAlbum", "goToArtist"],
       ["download"],
-      ["preview", "ui.info"],
+      ["ui.info"],
     ]);
   });
 

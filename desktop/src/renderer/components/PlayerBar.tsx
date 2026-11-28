@@ -53,7 +53,7 @@ export function PlayerBar({ inert = false }: { inert?: boolean }) {
   const navigate = useApp((s) => s.navigate);
   const sleep = useApp((s) => s.sleepTimer);
   const batterySaver = useApp((s) => saverEngaged(s.batterySaver));
-  const showRating = useSetting(SK.displayPlayerRating, true);
+  const showRating = useSetting(SK.displayPlayerRating, false);
   const d = bridge().dispatch;
   const track = now?.track;
   const lyricsOn = sideOpen && panels.rightView === "lyrics" && !reveal;

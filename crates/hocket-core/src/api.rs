@@ -2023,6 +2023,19 @@ pub struct PreviewState {
     pub playing: bool,
     /// Wall-clock milliseconds when `position_ms` was sampled.
     pub taken_at: EpochMs,
+    /// A clip: where it began and where it stops by itself. `None` plays to
+    /// the end of the song.
+    pub clip: Option<PreviewClip>,
+}
+
+/// The stretch of a song a clipped preview plays (`Command::PreviewStart`'s
+/// `clip`): a UI draws its progress from `start_ms` to `end_ms`.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewClip {
+    pub start_ms: Ms,
+    pub end_ms: Ms,
 }
 
 // ---------------------------------------------------------------------------
@@ -2385,8 +2398,8 @@ pub enum ActionTarget {
 // ---------------------------------------------------------------------------
 
 /// Where an item menu was opened. It changes what the menu offers: a song's own
-/// page drops the row that goes there, the player drops Preview, and only a
-/// playlist you can edit offers removing a song from it.
+/// page drops the row that goes there, and only a playlist you can edit offers
+/// removing a song from it.
 #[typeshare]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -2420,7 +2433,7 @@ pub enum MenuSection {
     GoTo,
     /// Download, Share.
     Keep,
-    /// Preview, info, Open in Genius, Lyrics timing.
+    /// Info, Open in Genius, Lyrics timing.
     About,
     /// Snooze.
     Tune,
@@ -2932,9 +2945,12 @@ pub enum Command {
     /// Play a song beside the queue, starting about 30% in. Pauses playback
     /// on this device and restores it afterwards; a Connect peer is left
     /// playing. Never written to the queue, play history, scrobbles or the
-    /// resume position.
+    /// resume position. `clip` stops it by itself after a short clip
+    /// (`PREVIEW_CLIP_MS`, the menu's preview); otherwise it plays to the end.
     PreviewStart {
         track: TrackRef,
+        #[serde(default)]
+        clip: bool,
     },
     /// Pause or resume the preview that is already open.
     PreviewToggle,

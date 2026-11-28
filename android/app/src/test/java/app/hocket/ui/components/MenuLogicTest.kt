@@ -50,7 +50,7 @@ class MenuLogicTest {
         item(ActionIds.PIN_TO_LIBRARY, MenuSection.Organise, true, d(ActionIds.PIN_TO_LIBRARY), d(ActionIds.UNPIN_FROM_LIBRARY, enabled = false)),
         row(ActionIds.GO_TO_ALBUM, MenuSection.GoTo), row(ActionIds.GO_TO_ARTIST, MenuSection.GoTo),
         item(ActionIds.DOWNLOAD, MenuSection.Keep, false, d(ActionIds.DOWNLOAD), d(ActionIds.UNPIN)),
-        item(MenuItemIds.SHARE, MenuSection.Keep), row(ActionIds.PREVIEW, MenuSection.About, true),
+        item(MenuItemIds.SHARE, MenuSection.Keep),
         item(MenuItemIds.INFO, MenuSection.About, true), item(MenuItemIds.GENIUS, MenuSection.About, true),
         item(ActionIds.SNOOZE, MenuSection.Tune, true, d(ActionIds.SNOOZE), d(ActionIds.UNSNOOZE)),
         row(ActionIds.REMOVE_FROM_QUEUE, MenuSection.Danger),
@@ -88,10 +88,10 @@ class MenuLogicTest {
         assertEquals(listOf(ActionIds.PLAY, ActionIds.PLAY_NEXT, ActionIds.PLAY_LATER), l.play.map { it.id })
         assertTrue(l.love != null && l.rating)
         assertEquals(listOf(ActionIds.ADD_TO_PLAYLIST, ActionIds.STASH, ActionIds.GO_TO_ALBUM, ActionIds.GO_TO_ARTIST, "download", "share"), l.primary.map { it.key })
-        assertEquals(listOf("pin", ActionIds.PREVIEW, "info", "genius", ActionIds.SNOOZE), l.more.map { it.key })
+        assertEquals(listOf("pin", "info", "genius", ActionIds.SNOOZE), l.more.map { it.key })
         // Removing is last and never under More.
         assertEquals(listOf(ActionIds.REMOVE_FROM_QUEUE), l.danger.map { it.key })
-        assertEquals(5, l.hidden)
+        assertEquals(4, l.hidden)
         // Nowhere to go: no go-to rows.
         assertTrue(sheetLayout(song).primary.none { it is MenuEntry.GoTo })
     }
@@ -112,7 +112,7 @@ class MenuLogicTest {
         val extras = listOf(remove, sleep, timing)
         val l = sheetLayout(menu, extras, canGoToAlbum = true, canGoToArtist = true, snoozed = false)
         assertEquals("sleep", l.primary.first().key)
-        assertEquals(listOf("pin", ActionIds.PREVIEW, "info", "genius", "timing", ActionIds.SNOOZE), l.more.map { it.key })
+        assertEquals(listOf("pin", "info", "genius", "timing", ActionIds.SNOOZE), l.more.map { it.key })
         // The extra stands in for the row it replaces.
         assertEquals(listOf("rm"), l.danger.map { it.key })
         // What the query is asked with: the extras that count, and the app items.
@@ -120,6 +120,15 @@ class MenuLogicTest {
         assertEquals(listOf(MenuItemIds.SHARE, MenuItemIds.INFO, MenuItemIds.GENIUS, MenuItemIds.LYRICS_TIMING), menuAppItems(MenuKind.Song, 1, hasInfo = true, extras))
         assertEquals(listOf(MenuItemIds.SHARE), menuAppItems(MenuKind.Songs, 3, hasInfo = false))
         assertEquals(emptyList<String>(), menuAppItems(MenuKind.Artist, 1, hasInfo = false))
+    }
+
+    @Test
+    fun anExtraUnderMoreLeadsMoreAndLeavesTheShortListsRoom() {
+        val sleep = SongMenuExtra("Sleep timer", app.hocket.ui.icons.HocketIcons.Filled.Bedtime, {}, testTag = "sleep", underMore = true)
+        val l = sheetLayout(song, listOf(sleep), canGoToAlbum = true, canGoToArtist = true, snoozed = false)
+        assertTrue(l.primary.none { it.key == "sleep" })
+        assertEquals("sleep", l.more.first().key)
+        assertEquals(0, menuExtraCount(listOf(sleep)))
     }
 
     @Test

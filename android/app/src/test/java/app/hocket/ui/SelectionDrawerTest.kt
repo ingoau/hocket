@@ -72,6 +72,8 @@ class SelectionDrawerTest {
     @Test
     fun theRatingStartsMixedAndRatesEverySelectedSong() {
         val core = TestCore(startPlaying = false)
+        // The stars are hidden by default: the user has added them.
+        core.fake.dispatch(app.hocket.core.Commands.setMenuItem(app.hocket.core.MenuItemIds.RATING, app.hocket.core.api.MenuTier.Shown))
         val ids = selectThree(core)
         assertTrue(compose.onAllNodesWithText("3 songs", substring = true).fetchSemanticsNodes().isNotEmpty())
         val state = compose.onNodeWithTag("rating").fetchSemanticsNode().config[SemanticsProperties.StateDescription]
@@ -86,6 +88,8 @@ class SelectionDrawerTest {
     @Test
     fun theStarsCanClearTheRatingAndLoveLovesThemAll() {
         val core = TestCore(startPlaying = false)
+        // The stars are hidden by default: the user has added them.
+        core.fake.dispatch(app.hocket.core.Commands.setMenuItem(app.hocket.core.MenuItemIds.RATING, app.hocket.core.api.MenuTier.Shown))
         val ids = selectThree(core)
         compose.onNodeWithTag("rating").performSemanticsAction(SemanticsActions.SetProgress) { it(4f) }
         compose.waitUntil(5_000) { ratings(core, ids) == listOf(4, 4, 4) }

@@ -1,4 +1,4 @@
-import { completeSetup, expect, playFirstAlbum, test, openPlace } from "./fixtures";
+import { completeSetup, expect, playFirstAlbum, showMenuRows, test, openPlace } from "./fixtures";
 
 test.describe("keyboard", () => {
   test("space toggles play, Q toggles the queue, shortcuts stay out of text fields", async ({ hocket }) => {
@@ -54,6 +54,8 @@ test.describe("keyboard", () => {
   test("a shortcut pressed while a context menu is open acts on the menu's item", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);
+    // The stars (hidden by default) put the digits in the menu.
+    await showMenuRows(page, "rating");
     await playFirstAlbum(page);
     await openPlace(page, "songs");
     // Right-click a song that isn't the one playing; Ctrl+L loves it, and only it.

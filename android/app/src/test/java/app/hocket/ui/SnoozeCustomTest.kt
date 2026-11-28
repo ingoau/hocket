@@ -33,6 +33,8 @@ class SnoozeCustomTest {
         val lib = core.fake.library
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
+        // Snooze is hidden by default: put it under More, as a user would.
+        core.client.dispatch(app.hocket.core.Commands.setMenuItem(ActionIds.SNOOZE, app.hocket.core.api.MenuTier.More))
         val trackId = lib.playlistTracks.getValue("pl0").first()
         val title = lib.track(trackId)!!.title
         compose.setThemedContent(core) {

@@ -178,7 +178,7 @@ class FakeCore(
         def(SettingKeys.DISPLAY_LYRICS_FPS, "30", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_THEME, "\"system\"", SettingScope.DeviceLocal)
         def(SettingKeys.DISPLAY_IMMERSIVE_ARTWORK, "\"automatic\"", SettingScope.DeviceLocal)
-        def(SettingKeys.DISPLAY_PLAYER_RATING, "true", SettingScope.AccountSynced)
+        def(SettingKeys.DISPLAY_PLAYER_RATING, "false", SettingScope.AccountSynced)
         def(SettingKeys.DISPLAY_ALBUM_TRACK_ARTISTS, "false", SettingScope.AccountSynced)
         def(SettingKeys.PLAYBACK_RESUME_ALBUMS, "true", SettingScope.AccountSynced)
         def(SettingKeys.DISPLAY_FLOATING_NAV_BAR, "true", SettingScope.DeviceLocal)

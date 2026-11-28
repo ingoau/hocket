@@ -156,7 +156,7 @@ fun trackSwipeAction(id: String, track: TrackSummary, target: ActionTarget, onAd
             action(id) {
                 // The preview stops when that menu closes. Don't start one
                 // there is no menu to show it in.
-                if (menu?.open(track, target) == true) client.dispatch(Commands.previewStart(track.ref))
+                if (menu?.open(track, target) == true) client.dispatch(Commands.previewStart(track.ref, clip = true))
             }
         }
         ActionIds.DOWNLOAD -> if (track.offline == OfflineState.Downloaded) null

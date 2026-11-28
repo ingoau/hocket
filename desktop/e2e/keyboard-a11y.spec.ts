@@ -4,7 +4,7 @@
 // traps and focus return for menus, dialogs, the palette and the fullscreen
 // player, the queue listbox and selector, and the seek/volume/splitter sliders.
 import type { Page } from "@playwright/test";
-import { expect, openPlace, test } from "./fixtures";
+import { expect, openPlace, setSettings, showMenuRows, test } from "./fixtures";
 import { focused, hasRing, keyboardSetup, type FocusInfo } from "./a11y-helpers";
 
 /** Press Tab (or Shift+Tab) until the focused element matches; fails after `max` presses. */
@@ -52,6 +52,8 @@ test.describe("keyboard only", () => {
   test("skip link, then a full Tab cycle in landmark order with a visible ring on every stop", async ({ hocket }) => {
     const { page } = hocket;
     await keyboardSetup(page);
+    // The player bar's stars are off by default; with them on, they're a stop of their own.
+    await setSettings(page, { "display.playerRating": true });
     // The first Tab in the library lands on the skip link, which shows itself and jumps to the content.
     await page.keyboard.press("Tab");
     const skip = await focused(page);
@@ -162,6 +164,7 @@ test.describe("keyboard only", () => {
   test("songs table: roving rows, Enter plays, digits rate, Shift+F10 and the menu key open the menu, Escape returns focus, dialogs trap Tab", async ({ hocket }) => {
     const { page } = hocket;
     await keyboardSetup(page);
+    await showMenuRows(page, "rating");
     await openPlaceByKeyboard(page, "songs");
     await expect(page.getByTestId("track-row").first()).toBeVisible();
     await tabTo(page, (f) => f.role === "row", "the songs grid");
@@ -185,7 +188,13 @@ test.describe("keyboard only", () => {
     const activeCell = async () => page.locator(`#${await menu.getAttribute("aria-activedescendant")}`);
     await expect(menu).toBeVisible();
     await expect(menu).toBeFocused();
-    await expect(menu).toHaveAttribute("aria-activedescendant", "cm-item-0");
+    // Cell 0 is the cover (it plays a preview); the keyboard starts past it, on Play.
+    await expect(menu).toHaveAttribute("aria-activedescendant", "cm-item-1");
+    expect(await (await activeCell()).getAttribute("aria-label")).toBe("Play");
+    // ↑ reaches the cover, a button of its own; ↓ comes back to the strip.
+    await page.keyboard.press("ArrowUp");
+    expect(await (await activeCell()).getAttribute("aria-label")).toBe("Play a preview");
+    await page.keyboard.press("ArrowDown");
     expect(await (await activeCell()).getAttribute("aria-label")).toBe("Play");
     // → moves along the strip; ↓ goes to the rating, landing on its current star.
     await page.keyboard.press("ArrowRight");

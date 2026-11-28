@@ -93,18 +93,12 @@ class MenuScreenshotTest {
         step {
             openSongMenu()
             shot(dir, "$prefix-01-song-menu")
-            compose.onNodeWithTag("songMenu.action.preview").performSemanticsAction(SemanticsActions.OnClick)
+            compose.onNodeWithTag("songMenu.artwork").performSemanticsAction(SemanticsActions.OnClick)
             settle()
             shot(dir, "$prefix-01d-preview-playing")
-            compose.onNodeWithTag("songMenu.action.preview").performSemanticsAction(SemanticsActions.OnClick)
+            compose.onNodeWithTag("songMenu.artwork").performSemanticsAction(SemanticsActions.OnClick)
             settle()
             shot(dir, "$prefix-01e-preview-paused")
-            compose.onNodeWithTag("songMenu.share").performSemanticsAction(SemanticsActions.OnClick)
-            awaitTag("songMenu.share.navidrome")
-            settle()
-            shot(dir, "$prefix-01c-share")
-            compose.onNodeWithTag("songMenu.share.back").performSemanticsAction(SemanticsActions.OnClick)
-            settle()
             // Held part way through a swipe up: the rest opening with the finger, More folding away.
             compose.mainClock.autoAdvance = false
             compose.onNodeWithTag("songMenu.header").performTouchInput { down(center); repeat(4) { moveBy(androidx.compose.ui.geometry.Offset(0f, -40f)) } }
@@ -116,6 +110,13 @@ class MenuScreenshotTest {
             compose.onNodeWithTag("songMenu.more").performSemanticsAction(SemanticsActions.OnClick)
             settle()
             shot(dir, "$prefix-02-song-menu-expanded")
+            // Share is under More by default.
+            compose.onNodeWithTag("songMenu.share").performSemanticsAction(SemanticsActions.OnClick)
+            awaitTag("songMenu.share.navidrome")
+            settle()
+            shot(dir, "$prefix-01c-share")
+            compose.onNodeWithTag("songMenu.share.back").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
             dismissSheet()
         }
         step {

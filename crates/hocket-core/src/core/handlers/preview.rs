@@ -13,6 +13,23 @@ use crate::core::state::{PreviewHandoff, PreviewHold, PreviewSession};
 /// Where a preview starts: past the intro.
 pub(crate) const PREVIEW_START: f64 = 0.30;
 
+/// How long a clipped preview (the menu's) plays before it stops by itself.
+pub(crate) const PREVIEW_CLIP_MS: Ms = 30_000;
+
+/// The stretch a clipped preview plays from `start_ms`: [`PREVIEW_CLIP_MS`],
+/// or up to the end of a shorter song.
+pub(crate) fn preview_clip(start_ms: Ms, duration_ms: Ms) -> PreviewClip {
+    let end_ms = start_ms.saturating_add(PREVIEW_CLIP_MS);
+    PreviewClip {
+        start_ms,
+        end_ms: if duration_ms > 0 {
+            end_ms.min(duration_ms)
+        } else {
+            end_ms
+        },
+    }
+}
+
 /// Position a preview opens at. Unknown durations start at the top and are
 /// moved once the player reports a duration.
 pub(crate) fn preview_start_ms(duration_ms: Ms) -> Ms {
@@ -63,7 +80,7 @@ pub(crate) fn command_ends_preview(cmd: &Command) -> bool {
 }
 
 impl Actor {
-    pub(crate) fn preview_start(&mut self, track_ref: TrackRef) {
+    pub(crate) fn preview_start(&mut self, track_ref: TrackRef, clip: bool) {
         let track_id = track_ref.id.clone();
         if self
             .preview
@@ -102,6 +119,8 @@ impl Actor {
             positioned: duration_ms > 0,
             position_at: self.now(),
             handoff: None,
+            clipped: clip,
+            clip_start_ms: position_ms,
         });
         if let Err(e) = self.backend.preview_load(source, position_ms) {
             self.log("debug", format!("preview load: {e}"));
@@ -148,6 +167,7 @@ impl Actor {
         preview.position_ms = position_ms;
         preview.position_at = now;
         preview.positioned = true;
+        preview.clip_start_ms = position_ms;
         if let Err(e) = self.backend.preview_seek(position_ms) {
             self.log("debug", format!("preview seek: {e}"));
         }
@@ -331,6 +351,7 @@ impl Actor {
             preview.position_ms = position_ms;
             preview.position_at = now;
             preview.positioned = true;
+            preview.clip_start_ms = position_ms;
             if let Err(e) = self.backend.preview_seek(position_ms) {
                 self.log("debug", format!("preview seek: {e}"));
             }
@@ -351,11 +372,21 @@ impl Actor {
             position_ms
         };
         preview.playing = playing;
-        if cap > 0 && preview.position_ms >= cap {
+        let clip_over = preview.clipped
+            && preview.handoff.is_none()
+            && preview.positioned
+            && preview.position_ms >= Self::clip_of(preview).end_ms;
+        if (cap > 0 && preview.position_ms >= cap) || clip_over {
             self.stop_preview(true);
             return;
         }
         self.emit_preview();
+    }
+
+    /// A clipped preview's stretch: from where it opened (30% in, or where a
+    /// seek put it) for [`PREVIEW_CLIP_MS`].
+    fn clip_of(p: &PreviewSession) -> PreviewClip {
+        preview_clip(p.clip_start_ms, p.duration_ms)
     }
 
     pub(crate) fn emit_preview(&mut self) {
@@ -367,6 +398,7 @@ impl Actor {
             position_ms: p.position_ms,
             playing: p.playing,
             taken_at: now,
+            clip: p.clipped.then(|| Self::clip_of(p)),
         });
         self.emit(Event::PreviewChanged { preview });
     }

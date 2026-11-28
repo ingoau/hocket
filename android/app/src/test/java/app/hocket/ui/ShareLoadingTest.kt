@@ -78,6 +78,9 @@ class ShareLoadingTest {
         }
         compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("More options for $title").fetchSemanticsNodes().isNotEmpty() }
         compose.onAllNodesWithContentDescription("More options for $title")[0].performSemanticsAction(SemanticsActions.OnClick)
+        // Share is under More by default.
+        awaitTag("songMenu.more")
+        compose.onNodeWithTag("songMenu.more").performSemanticsAction(SemanticsActions.OnClick)
         awaitTag("songMenu.share")
         compose.onNodeWithTag("songMenu.share").performSemanticsAction(SemanticsActions.OnClick)
         awaitTag("songMenu.share.navidrome")

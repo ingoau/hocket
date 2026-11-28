@@ -437,27 +437,32 @@ test.describe("now playing", () => {
     }
   });
 
-  test("turning the player's rating off hides the stars in the bar and the fullscreen player, not in About", async ({ hocket }) => {
+  test("the player's rating is off by default: turning it on shows the stars in the bar and the fullscreen player; About always has them", async ({ hocket }) => {
     const { page } = hocket;
     await completeSetup(page);
     await playFirstAlbum(page);
     const barStars = page.getByTestId("player-bar").getByRole("radiogroup");
-    await expect(barStars).toHaveCount(1);
+    await expect(barStars).toHaveCount(0);
     await page.getByTestId("toggle-fullscreen").click();
     const fs = page.getByTestId("fullscreen-player");
-    await expect(fs.getByTestId("np-stars")).toBeVisible();
+    await expect(fs.getByTestId("fs-controls")).toBeVisible();
+    await expect(fs.getByTestId("np-stars")).toHaveCount(0);
     await page.keyboard.press("Escape");
     await page.getByTestId("nav-settings").click();
     await page.getByTestId("settings-nav-appearance").click();
     const toggle = page.getByTestId("setting-display.playerRating");
+    await expect(toggle).not.toBeChecked();
+    await toggle.click();
     await expect(toggle).toBeChecked();
+    await expect(barStars).toHaveCount(1);
+    await page.getByTestId("toggle-fullscreen").click();
+    await expect(fs.getByTestId("np-stars")).toBeVisible();
+    await page.keyboard.press("Escape");
+    // And off again: the song's details keep it.
     await toggle.click();
     await expect(toggle).not.toBeChecked();
     await expect(barStars).toHaveCount(0);
     await page.getByTestId("toggle-fullscreen").click();
-    await expect(fs.getByTestId("fs-controls")).toBeVisible();
-    await expect(fs.getByTestId("np-stars")).toHaveCount(0);
-    // The song's details keep it.
     await fs.getByTestId("fs-mode-about").click();
     await expect(fs.getByTestId("np-about").getByRole("radiogroup")).toHaveCount(1);
   });

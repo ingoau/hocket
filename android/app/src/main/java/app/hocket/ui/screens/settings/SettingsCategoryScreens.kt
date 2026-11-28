@@ -165,7 +165,7 @@ fun AppearanceSettingsScreen(nav: NavHostController) {
         OptionCards(immersiveOptions, isSelected = { (immersive.string ?: "automatic") == it }, onSelect = { immersive.setString(it) }, tag = "display.immersiveArtwork.choices", previewHeight = 72.dp)
         SwitchRow(stringResource(R.string.settings_animated_background), animated.bool ?: true, { animated.setBool(it) }, scope = animated.scope, tag = "display.animatedBackground")
         val playerRating = setting(SettingKeys.DISPLAY_PLAYER_RATING)
-        SwitchRow(stringResource(R.string.settings_player_rating), playerRating.bool ?: true, { playerRating.setBool(it) }, scope = playerRating.scope, tag = "display.playerRating")
+        SwitchRow(stringResource(R.string.settings_player_rating), playerRating.bool ?: false, { playerRating.setBool(it) }, scope = playerRating.scope, tag = "display.playerRating")
         val floatingBar = setting(SettingKeys.DISPLAY_FLOATING_NAV_BAR)
         SwitchRow(stringResource(R.string.settings_floating_nav_bar), floatingBar.bool ?: true, { floatingBar.setBool(it) }, scope = floatingBar.scope, tag = "display.floatingNavBar")
         val albumArtists = setting(SettingKeys.DISPLAY_ALBUM_TRACK_ARTISTS)

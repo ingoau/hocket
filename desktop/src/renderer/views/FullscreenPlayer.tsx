@@ -142,7 +142,7 @@ function Player({ closing, motion, exitProps }: PlayerProps) {
   const covered = useApp((s) => !!s.dialog || s.paletteOpen);
   const menuOpen = useApp((s) => !!s.contextMenu);
   const windowFullscreen = useApp((s) => s.windowState.fullscreen);
-  const showRating = useSetting(SK.displayPlayerRating, true);
+  const showRating = useSetting(SK.displayPlayerRating, false);
   const reducedMotion = usePrefersReducedMotion();
   const closeRef = useRef<HTMLButtonElement>(null);
   const bigArt = useRef<HTMLDivElement>(null);

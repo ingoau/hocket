@@ -67,6 +67,8 @@ class FullPlayerLayoutTest {
     private val dp get() = compose.activity.resources.displayMetrics.density
 
     private fun startExpanded() {
+        // The stars are off by default; these layouts are measured with them (and without, where a test turns them off).
+        core.fake.dispatch(app.hocket.core.Commands.setSetting(app.hocket.core.SettingKeys.DISPLAY_PLAYER_RATING, "true"))
         compose.setThemedContent(core) { AppRoot(core.client) }
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
@@ -734,6 +736,8 @@ class FullPlayerLayoutTest {
      */
     @Test
     fun theLyricsTimingIsInTheSongMenuWhileTheLyricsShow() {
+        // Hidden by default: the user has put it under More.
+        core.fake.dispatch(Commands.setMenuItem(app.hocket.core.MenuItemIds.LYRICS_TIMING, app.hocket.core.api.MenuTier.More))
         startExpanded()
         // Not offered over the artwork.
         tap("player.more")
@@ -751,7 +755,7 @@ class FullPlayerLayoutTest {
             assertFalse("no timing row under the lyrics", exists("lyrics.offset.later"))
             tap("player.more")
             repeat(60) { compose.mainClock.advanceTimeByFrame() }
-            // The core folds it under More by default.
+            // Under More, where the user put it.
             tap("songMenu.more")
             repeat(60) { compose.mainClock.advanceTimeByFrame() }
             assertTrue(exists("player.lyricsTiming"))

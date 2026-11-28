@@ -44,6 +44,7 @@ class PlayerAccessibilityTest {
     private val core = TestCore(now = { clock })
 
     private fun start() {
+        core.fake.dispatch(app.hocket.core.Commands.setSetting(app.hocket.core.SettingKeys.DISPLAY_PLAYER_RATING, "true"))
         compose.setThemedContent(core) { AppRoot(core.client) }
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
@@ -159,7 +160,7 @@ class PlayerAccessibilityTest {
     fun theRatingIsOneAdjustableControlThatSaysHowManyStars() {
         start()
         expand()
-        // The rating sits under the title (display.playerRating, on by default).
+        // The rating sits under the title (display.playerRating, on for this test).
         compose.waitUntil(5_000) { exists("rating") }
         compose.waitForIdle()
         val id = core.client.nowPlaying.value!!.track.id

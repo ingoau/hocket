@@ -90,6 +90,18 @@ export async function completeSetup(page: Page): Promise<void> {
   await expect(page.getByTestId("app")).toBeVisible({ timeout: 15_000 });
 }
 
+/** Sets settings through the core (each value JSON-encoded), as the settings page would. */
+export async function setSettings(page: Page, values: Record<string, unknown>): Promise<void> {
+  await page.evaluate((values) => {
+    for (const [key, value] of Object.entries(values)) window.hocket.dispatch({ type: "setSetting", data: { key, value: JSON.stringify(value) } });
+  }, values);
+}
+
+/** Puts item menu rows that are hidden by default (Rating, Genius, Snooze, Lyrics timing) back in the menu. */
+export async function showMenuRows(page: Page, ...ids: string[]): Promise<void> {
+  await setSettings(page, { "menu.overrides": Object.fromEntries(ids.map((id) => [id, "shown"])) });
+}
+
 /** A place in the Library, reached as a user would: the sidebar's Library, then its tile or link. */
 export type Place = "albums" | "artists" | "playlists" | "songs" | "genres" | "filters" | "queues" | "offline" | "downloads" | "stats";
 

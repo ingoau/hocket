@@ -8,9 +8,6 @@
 /* Never taller than the window: a long menu in a short window scrolls rather than running off it. */
 .menu.cm:not(.cm-sub) { max-height: calc(100vh - 8px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 .menu.cm .mi { flex: 0 0 auto; height: 28px; padding: 0 8px; gap: 8px; border-radius: 9px; }
-.menu.cm .mi.cm-preview { position: relative; overflow: hidden; }
-.menu.cm .cm-preview-bar { position: absolute; left: 0; top: 0; bottom: 0; background: color-mix(in srgb, var(--accent) 42%, transparent); pointer-events: none; z-index: 0; }
-.menu.cm .mi.cm-preview > :not(.cm-preview-bar) { position: relative; z-index: 1; }
 .menu.cm .mi:hover, .menu.cm .mi.active { border-radius: 9px; }
 .menu.cm .sep { flex: 0 0 auto; margin: 4px 6px; }
 .menu.cm .menu-heading { padding: 6px 8px 2px; }
@@ -37,6 +34,21 @@
 .cm-covers.stacked .cm-cover:nth-last-child(1) { left: 18px; top: 0; }
 .cm-covers.stacked .cm-cover:nth-last-child(2) { left: 9px; top: 5px; }
 .cm-covers.stacked .cm-cover:nth-last-child(3) { left: 0; top: 10px; }
+/* A single song's cover plays a preview: a quiet scrim and glyph on hover (or the keyboard), and
+   while it plays a thin accent ring that fills through the clip. Like the rest of the menu, no motion. */
+.cm-cover-btn { position: relative; flex: 0 0 auto; width: 36px; height: 36px; margin-right: 8px; padding: 0; border: 0; border-radius: 9px; background: none; color: #fff; cursor: default; overflow: hidden; }
+.cm-cover-btn .cm-cover-art, .cm-cover-btn .cm-cover { position: absolute; inset: 0; width: 36px; height: 36px; border-radius: 9px; object-fit: cover; }
+.cm-cover-btn .cm-cover.placeholder { display: flex; align-items: center; justify-content: center; background: var(--bg-sunken); color: var(--fg-faint); }
+.cm-cover-scrim { position: absolute; inset: 0; border-radius: 9px; background: rgb(0 0 0 / 0.45); opacity: 0; }
+.cm-cover-glyph { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; opacity: 0; }
+.cm-cover-btn:hover .cm-cover-scrim, .cm-cover-btn.active .cm-cover-scrim, .cm-cover-btn.on .cm-cover-scrim,
+.cm-cover-btn:hover .cm-cover-glyph, .cm-cover-btn.active .cm-cover-glyph, .cm-cover-btn.on .cm-cover-glyph { opacity: 1; }
+.cm-ring { position: absolute; inset: 0; pointer-events: none; }
+.cm-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.cm-ring circle { fill: none; stroke-width: 2.5; }
+.cm-ring-track { stroke: rgb(255 255 255 / 0.28); }
+.cm-ring-fill { stroke: #fff; stroke-linecap: round; }
+.menu.cm.keys .cm-cover-btn.active { outline: 2px solid var(--focus-ring); outline-offset: 1px; overflow: visible; }
 .cm-head-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 auto; }
 .cm-head-title { font-weight: 600; }
 .cm-head-sub { font-size: var(--fs-sm); color: var(--fg-muted); }
