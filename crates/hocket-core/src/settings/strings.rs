@@ -20,6 +20,7 @@ pub const TEXTS: &[SettingText] = &[
     t("transcoding.profiles", "Transcoding profiles", "Format and bitrate per network, plus formats this device can't decode natively."),
     t("lyrics.external.enabled", "Fetch lyrics online", "Look lyrics up on an external service when the server has none. Off by default because it reveals what you're listening to."),
     t("lyrics.external.provider", "Lyrics provider", "Which external service to use when online lyrics are enabled."),
+    t("lyrics.playerLine", "Lyrics in the player", "Show the line being sung above the song's title in the full player, word by word where the lyrics are timed that way."),
     t("lyrics.defaultOffsetMs", "Lyrics timing offset", "Global timing adjustment in milliseconds applied to every track. Positive shows lyrics later."),
     t("ratings.loveBridge.enabled", "Love highly rated tracks", "When you rate a track at or above the threshold, also mark it loved. One-way; lowering a rating never unloves."),
     t("ratings.loveBridge.threshold", "Love threshold", "Star rating at or above which a track is marked loved."),

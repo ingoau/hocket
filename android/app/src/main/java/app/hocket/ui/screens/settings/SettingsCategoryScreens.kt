@@ -362,14 +362,16 @@ fun DownloadsSettingsScreen(nav: NavHostController) {
     }
 }
 
-/** Lyrics: external lookups, the default timing offset, translations. */
+/** Lyrics: external lookups, the line being sung in the player, the default timing offset, translations. */
 @Composable
 fun LyricsSettingsScreen(nav: NavHostController) {
     val client = LocalCoreClient.current
     val externalLyrics = setting(SettingKeys.LYRICS_EXTERNAL_ENABLED)
     val offset = setting(SettingKeys.LYRICS_DEFAULT_OFFSET_MS)
+    val playerLine = setting(SettingKeys.LYRICS_PLAYER_LINE)
     SubScreen(nav, stringResource(R.string.settings_section_lyrics)) {
         SwitchRow(stringResource(R.string.settings_external_lyrics), externalLyrics.bool ?: false, { client.dispatch(Commands.setExternalLyricsEnabled(it)) }, stringResource(R.string.settings_external_lyrics_privacy), externalLyrics.scope, tag = "lyrics.external")
+        SwitchRow(stringResource(R.string.settings_lyrics_player_line), playerLine.bool ?: false, { playerLine.setBool(it) }, stringResource(R.string.settings_lyrics_player_line_body), playerLine.scope, tag = "lyrics.playerLine")
         val ms = offset.int ?: 0
         StepperRow(
             stringResource(R.string.settings_lyrics_default_offset), stringResource(R.string.lyrics_offset_value, ms),

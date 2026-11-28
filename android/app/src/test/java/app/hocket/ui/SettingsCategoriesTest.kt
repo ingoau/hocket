@@ -70,7 +70,7 @@ class SettingsCategoriesTest {
     private val advancedRows = setOf("connect.headphone_handoff", "developer.mode", "developer.open")
 
     /** Registry settings the old page did not show, now in their category. */
-    private val added = setOf("queue.section", "playback.resumeAlbums", "downloads.wifiOnly", "lyrics.defaultOffsetMs",
+    private val added = setOf("queue.section", "playback.resumeAlbums", "downloads.wifiOnly", "lyrics.defaultOffsetMs", "lyrics.playerLine",
         "media.externalControl", "storage.cacheUsage", "storage.cacheMaxBytes", "storage.prefetchOnMobileData", "storage.dataSaved", "display.immersiveArtwork", "display.playerRating", "display.floatingNavBar", "display.albumTrackArtists", "battery.customise", "battery.autoLevel", "server.section", "account.add",
         "network.offlineMode", "network.dataSaver", "library.syncIntervalMinutes", "library.fullReconcileDays", "search.includeServer") + pebbleRows + advancedRows
 
@@ -85,7 +85,7 @@ class SettingsCategoriesTest {
         SettingsCategory.Appearance to setOf("display.theme", "display.accent", "display.artworkColour", "display.animatedBackground", "display.immersiveArtwork", "display.playerRating", "display.floatingNavBar", "display.albumTrackArtists"),
         SettingsCategory.Playback to setOf("queue.section", "queue.savedCap", "queue.autoplay", "playback.resumeAlbums", "media.externalControl"),
         SettingsCategory.Downloads to setOf("open.downloads", "downloads.wifiOnly", "storage.clearCache", "storage.warnThreshold", "storage.cacheUsage", "storage.cacheMaxBytes", "storage.prefetchOnMobileData", "storage.dataSaved", "network.offlineMode", "network.dataSaver"),
-        SettingsCategory.Lyrics to setOf("lyrics.external", "lyrics.defaultOffsetMs"),
+        SettingsCategory.Lyrics to setOf("lyrics.external", "lyrics.playerLine", "lyrics.defaultOffsetMs"),
         SettingsCategory.Library to setOf("ratings.loveThreshold", "open.filters", "open.stats", "library.syncIntervalMinutes", "library.fullReconcileDays", "search.includeServer"),
         SettingsCategory.Battery to setOf("battery.level", "battery.customise", "battery.autoEngage", "battery.autoLevel"),
         SettingsCategory.Pebble to pebbleRows,

@@ -65,6 +65,10 @@ pub mod keys {
     pub const LYRICS_EXTERNAL_ENABLED: &str = "lyrics.external.enabled";
     pub const LYRICS_EXTERNAL_PROVIDER: &str = "lyrics.external.provider";
     pub const LYRICS_DEFAULT_OFFSET_MS: &str = "lyrics.defaultOffsetMs";
+    /// The phone's full player shows the line being sung, word by word where the lyrics are timed
+    /// that way, centred just above the song's title (the artwork moves up to make room). Off by
+    /// default. Local: a phone's own look.
+    pub const LYRICS_PLAYER_LINE: &str = "lyrics.playerLine";
     pub const RATINGS_LOVE_BRIDGE_ENABLED: &str = "ratings.loveBridge.enabled";
     pub const RATINGS_LOVE_BRIDGE_THRESHOLD: &str = "ratings.loveBridge.threshold";
     pub const BATTERY_AUTO_ENGAGE: &str = "battery.autoEngage";
@@ -554,6 +558,9 @@ pub static REGISTRY: &[SettingDef] = &[
         },
         || json!(0),
     ),
+    def(LYRICS_PLAYER_LINE, Local, SettingKind::Bool, || {
+        json!(false)
+    }),
     def(
         RATINGS_LOVE_BRIDGE_ENABLED,
         Synced,
