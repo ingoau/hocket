@@ -306,7 +306,11 @@ h3 { font-size: var(--fs-lg); }
 
 /* ---- App shell ---------------------------------------------------------- */
 .app { display: grid; grid-template-rows: auto 1fr var(--player-h); height: 100%; background: var(--bg); }
-.app-body { display: grid; grid-template-columns: var(--sidebar-w, 220px) minmax(0, 1fr) var(--right-w, auto); min-height: 0; }
+/* The side panel gives way before the content does: it keeps to its own width only while the
+   content still has --content-min (NowPlayingSidebar's drag stops there too), never under 300px. */
+.app-body { --content-min: 400px; display: grid; grid-template-columns: var(--sidebar-w, 220px) minmax(0, 1fr) min(var(--right-w, 0px), max(300px, 100% - var(--sidebar-w, 220px) - var(--content-min))); min-height: 0; }
+/* While a pane's edge is dragged the pointer keeps the resize cursor, wherever it wanders. */
+.app:has(.resize-handle.dragging), .app:has(.resize-handle.dragging) * { cursor: col-resize !important; }
 .dev-banner { background: #f0b04a; color: #201400; font-size: var(--fs-xs); padding: 2px 10px; text-align: center; }
 .offline-banner { background: var(--bg-active); color: var(--fg-muted); font-size: var(--fs-xs); padding: 2px 10px; display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; }
 .offline-banner .link-button { display: inline; color: var(--fg); text-decoration: underline; font-size: inherit; }
@@ -316,7 +320,7 @@ h3 { font-size: var(--fs-lg); }
 .report-bar.failed svg { color: var(--warn); }
 .report-bar .link-button { display: inline; color: var(--fg); text-decoration: underline; font-size: inherit; }
 .report-bar .report-progress { width: 160px; }
-.dialog.dialog-report { width: 560px; max-height: 90vh; overflow-y: auto; }
+.dialog.dialog-report { width: 560px; }
 .report-dialog .report-note { font-family: inherit; font-size: var(--fs-md); min-height: 96px; }
 .report-section { display: flex; flex-direction: column; gap: 6px; }
 .report-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -500,9 +504,13 @@ h3 { font-size: var(--fs-lg); }
    divider, Material 3 Expressive icon buttons (40px, a round state layer; a
    toggle that is on fills tonally and squares off), and a wide filled
    play/pause that morphs from a pill (paused) to a rounded square (playing). */
+/* The song's side is held at least as wide as the right side's controls (--player-side, measured by
+   PlayerBar), so the transport stays centred in the window; when the centre would drop under its
+   260px, the song's side gives way instead. */
 .player {
-  display: grid; grid-template-columns: minmax(180px, 1fr) minmax(260px, 1.2fr) minmax(max-content, 1fr); align-items: center; gap: 16px;
-  padding: 0 16px 0 12px; background: var(--bg); position: relative; container: player / inline-size;
+  display: grid; align-items: center; gap: 16px;
+  grid-template-columns: minmax(max(180px, min(var(--player-side, 0px), 100% - var(--player-side, 0px) - 292px)), 1fr) minmax(260px, 1.2fr) minmax(max-content, 1fr);
+  padding: 0 14px; background: var(--bg); position: relative; container: player / inline-size;
 }
 
 .player .now { display: flex; align-items: center; gap: 14px; min-width: 0; }
@@ -555,7 +563,7 @@ h3 { font-size: var(--fs-lg); }
 .seek .bar .knob { position: absolute; top: 50%; width: 10px; height: 10px; border-radius: 50%; background: var(--fg); transform: translate(-50%, -50%); opacity: 0; transition: opacity var(--dur-short) var(--ease-emphasized); }
 .seek .bar:hover .knob, .seek .bar.dragging .knob { opacity: 1; }
 .seek .bar .hover-time { position: absolute; bottom: 14px; transform: translateX(-50%); background: var(--bg-elev); border: 1px solid var(--border); padding: 1px 5px; border-radius: 3px; font-size: var(--fs-xs); pointer-events: none; white-space: nowrap; }
-.player .right { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.player .right { display: flex; align-items: center; justify-content: flex-end; gap: 4px; justify-self: end; }
 .volume { display: flex; align-items: center; gap: 0; margin-right: 6px; }
 .volume input { width: 80px; }
 /* The Connect pill: the device icon in a round button here; another device's name on the accent while it plays. */
@@ -745,7 +753,7 @@ button.qrow { width: 100%; }
 .menu.closing, .popover.closing, .search-popover.closing { animation: pop-out var(--dur-short) var(--ease-emphasized-accel) forwards; }
 @keyframes pop-out { to { opacity: 0; transform: scale(0.95); } }
 
-.overlay { position: fixed; inset: 0; z-index: 90; background: rgba(0, 0, 0, 0.35); display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh; animation: scrim-in var(--dur-short) var(--ease-emphasized); }
+.overlay { position: fixed; inset: 0; z-index: 90; background: rgba(0, 0, 0, 0.35); display: flex; align-items: flex-start; justify-content: center; padding: 12vh 16px 16px; animation: scrim-in var(--dur-short) var(--ease-emphasized); }
 @keyframes scrim-in { from { background: transparent; } }
 /* The scrim lifts over the same time as the sheet on it. */
 .overlay.closing { animation: scrim-out var(--dur-exit) var(--ease-emphasized-accel) forwards; }
@@ -771,7 +779,7 @@ button.qrow { width: 100%; }
 
 /* Dialogs: extra-large corners, a spring in. The surface stays --bg-elev (not
    tonal) because the buttons, lists and fields inside use the pressed overlay. */
-.dialog { width: 440px; max-width: 90vw; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--shape-xl); box-shadow: var(--shadow); padding: 24px; display: flex; flex-direction: column; gap: 14px; }
+.dialog { width: 440px; max-width: 90vw; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--shape-xl); box-shadow: var(--shadow); padding: 24px; display: flex; flex-direction: column; gap: 14px; max-height: 100%; overflow-y: auto; overscroll-behavior: contain; }
 .dialog.fade-in { animation: sheet-in var(--dur-spring-long) var(--spring-fast); }
 .dialog h3 { margin: 0; }
 .dialog .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
@@ -898,6 +906,9 @@ button.qrow { width: 100%; }
 .mini .controls { display: flex; align-items: center; gap: 2px; }
 .mini .controls .spacer { flex: 1; }
 .mini .seek { font-size: 10px; }
+/* The times keep their width as the digits change, so the bar between them holds still. */
+.seek > span { flex: 0 0 auto; min-width: 5ch; }
+.seek > span:first-child { text-align: right; }
 
 /* Home (and the search page's album row): horizontal carousels. */
 .home-section .scroller { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 6px; }

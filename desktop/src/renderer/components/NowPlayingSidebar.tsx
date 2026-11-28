@@ -46,6 +46,21 @@ function nowDrag(ref: TrackRef, title: string): DragPayload {
 
 const MIN_W = 300;
 const MAX_W = 560;
+/** A double-click on the edge goes back to this (store/app's default). */
+const DEFAULT_W = 360;
+
+/**
+ * The panel's column as laid out, and the widest it can go: the window holds it narrower than the
+ * width chosen while the content would drop under --content-min (global.css .app-body).
+ */
+function shownWidth(): { width: number; max: number } {
+  const body = document.querySelector<HTMLElement>('[data-testid="app-body"]');
+  if (!body) return { width: useApp.getState().panels.rightWidth, max: MAX_W };
+  const style = getComputedStyle(body);
+  const [, content = 0, right = 0] = style.gridTemplateColumns.split(" ").map(parseFloat);
+  const contentMin = parseFloat(style.getPropertyValue("--content-min")) || 400;
+  return { width: Math.round(right), max: Math.max(MIN_W, Math.min(MAX_W, Math.floor(right + content - contentMin))) };
+}
 /** Where each drill-in goes back to. */
 const PARENT: Record<Exclude<SideView, "overview">, SideView> = { lyrics: "overview", queue: "overview", about: "overview", recent: "queue" };
 const TITLES: Record<Exclude<SideView, "overview">, Parameters<typeof t>[0]> = { lyrics: "lyrics.title", queue: "queue.title", about: "nowPlaying.aboutSong", recent: "queue.recentTitle" };
@@ -53,11 +68,11 @@ const TITLES: Record<Exclude<SideView, "overview">, Parameters<typeof t>[0]> = {
 export function NowPlayingSidebar() {
   const panels = useApp((s) => s.panels);
   const setPanels = useApp((s) => s.setPanels);
-  const [widthDrag, setWidthDrag] = useState<{ x: number; w: number } | undefined>(undefined);
+  const [widthDrag, setWidthDrag] = useState<{ x: number; w: number; max: number } | undefined>(undefined);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!widthDrag) return;
-    const move = (e: MouseEvent) => setPanels({ rightWidth: Math.max(MIN_W, Math.min(MAX_W, widthDrag.w - (e.clientX - widthDrag.x))) });
+    const move = (e: MouseEvent) => setPanels({ rightWidth: Math.max(MIN_W, Math.min(widthDrag.max, widthDrag.w - (e.clientX - widthDrag.x))) });
     const up = () => setWidthDrag(undefined);
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
@@ -77,8 +92,12 @@ export function NowPlayingSidebar() {
   return (
     <aside {...presence.exitProps} id="side-panel" className={`right-panel ${narrow ? "drawer" : ""} ${presence.closing ? "closing" : ""}`} aria-label={t("a11y.sidePanel")} data-view={view} data-drop-reveal={reveal || undefined} data-testid="right-panel"
       onKeyDown={narrow ? (e) => { if (e.key === "Escape" && !e.defaultPrevented) { e.preventDefault(); e.stopPropagation(); setDrawerOpen(false); document.querySelector<HTMLElement>('[data-testid="toggle-side-panel"]')?.focus(); } } : undefined}>
-      <div className="resize-handle" style={{ left: -3, right: "auto" }} onMouseDown={(e) => { e.preventDefault(); setWidthDrag({ x: e.clientX, w: panels.rightWidth }); }} role="separator" aria-orientation="vertical" aria-label={t("a11y.resizeSidePanel")} aria-valuenow={panels.rightWidth} aria-valuemin={MIN_W} aria-valuemax={MAX_W} tabIndex={0}
-        onKeyDown={(e) => { const d = e.key === "ArrowLeft" ? 16 : e.key === "ArrowRight" ? -16 : 0; if (!d) return; e.preventDefault(); e.stopPropagation(); setPanels({ rightWidth: Math.max(MIN_W, Math.min(MAX_W, panels.rightWidth + d)) }); }} data-testid="side-panel-resize" />
+      <div className={`resize-handle ${widthDrag ? "dragging" : ""}`} style={{ left: -3, right: "auto" }}
+        // From the width shown (the window may hold it under the one chosen), so the edge never lags the pointer.
+        onMouseDown={(e) => { if (e.button !== 0) return; e.preventDefault(); const shown = shownWidth(); setWidthDrag({ x: e.clientX, w: shown.width, max: shown.max }); }}
+        onDoubleClick={() => setPanels({ rightWidth: DEFAULT_W })}
+        role="separator" aria-orientation="vertical" aria-label={t("a11y.resizeSidePanel")} aria-valuenow={panels.rightWidth} aria-valuemin={MIN_W} aria-valuemax={MAX_W} tabIndex={0}
+        onKeyDown={(e) => { const d = e.key === "ArrowLeft" ? 16 : e.key === "ArrowRight" ? -16 : 0; if (!d) return; e.preventDefault(); e.stopPropagation(); const shown = shownWidth(); setPanels({ rightWidth: Math.max(MIN_W, Math.min(shown.max, shown.width + d)) }); }} data-testid="side-panel-resize" />
       <div className="side-pane">
         <SideViews view={view} />
       </div>
