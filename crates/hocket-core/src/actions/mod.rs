@@ -43,6 +43,7 @@ use crate::api::{
 
 pub mod chord;
 mod defs;
+pub mod menu;
 
 pub use chord::{normalise, to_portable, ChordError};
 pub use defs::{ActionDef, Category, TargetKind};
@@ -81,6 +82,12 @@ impl Surface {
 
     pub fn parse(s: &str) -> Option<Surface> {
         Surface::ALL.iter().copied().find(|x| x.as_str() == s)
+    }
+
+    /// Surfaces whose order the user chooses. Item menus are laid out by
+    /// [`menu::menu_layout`] and customised through `menu.overrides`.
+    pub fn customisable(&self) -> bool {
+        !matches!(self, Surface::ContextMenu | Surface::Palette)
     }
 
     /// Surfaces where global (target-less) actions show regardless of the
@@ -314,26 +321,12 @@ fn migrate_order(surface: Surface, version: u32, mut ids: Vec<String>) -> Vec<St
             .map_or(ids.len(), |i| i + 1);
         ids.splice(at..at, missing);
     };
-    if version < 2 {
-        match surface {
-            Surface::Sidebar => insert_after("navigateHome", &["navigateLibrary"]),
-            Surface::ContextMenu => {
-                insert_after("goToArtist", &["pinToLibrary", "unpinFromLibrary"])
-            }
-            _ => {}
-        }
+    if version < 2 && surface == Surface::Sidebar {
+        insert_after("navigateHome", &["navigateLibrary"]);
     }
     // 3: Stash, after Add to playlist.
-    if version < 3 && matches!(surface, Surface::ContextMenu | Surface::NowPlaying) {
+    if version < 3 && surface == Surface::NowPlaying {
         insert_after("addToPlaylist", &["stash"]);
-    }
-    // 4: Snooze, on the song menu. Shown unless the listener takes it off.
-    if version < 4 && surface == Surface::ContextMenu {
-        for id in ["snooze", "unsnooze"] {
-            if !ids.iter().any(|existing| existing == id) {
-                ids.push(id.to_string());
-            }
-        }
     }
     ids
 }
@@ -440,6 +433,9 @@ impl ActionRegistry {
     /// Choose-and-order customisation. Unknown ids are dropped; passing the
     /// default order clears the customisation.
     pub fn set_order(&mut self, surface: Surface, ids: Vec<String>) {
+        if !surface.customisable() {
+            return;
+        }
         let mut seen = std::collections::HashSet::new();
         let ids: Vec<String> = ids
             .into_iter()
@@ -454,8 +450,9 @@ impl ActionRegistry {
     }
 
     pub fn set_order_str(&mut self, surface: &str, ids: Vec<String>) -> Result<(), ActionError> {
-        let s =
-            Surface::parse(surface).ok_or_else(|| ActionError::UnknownSurface(surface.into()))?;
+        let s = Surface::parse(surface)
+            .filter(Surface::customisable)
+            .ok_or_else(|| ActionError::UnknownSurface(surface.into()))?;
         self.set_order(s, ids);
         Ok(())
     }

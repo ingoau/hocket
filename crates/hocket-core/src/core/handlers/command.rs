@@ -394,6 +394,7 @@ impl Actor {
                 surface,
                 action_ids,
             } => self.set_action_order(&surface, action_ids),
+            Command::SetMenuItem { id, tier } => self.set_menu_item(&id, tier),
             Command::SetSelection { target } => self.selection = target,
             Command::Touch { target } => self.touch(target),
         }
