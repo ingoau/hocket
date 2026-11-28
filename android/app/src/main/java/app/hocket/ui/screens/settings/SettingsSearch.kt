@@ -99,6 +99,7 @@ val SETTINGS_INDEX: List<SettingEntry> = listOf(
     SettingEntry("storage.dataSaved", SettingsCategory.Downloads, R.string.settings_data_saved, keywords = R.string.settings_search_kw_data),
     SettingEntry("storage.clearCache", SettingsCategory.Downloads, R.string.downloads_clear_cache, keywords = R.string.settings_search_kw_cache),
     SettingEntry("lyrics.external", SettingsCategory.Lyrics, R.string.settings_external_lyrics, R.string.settings_external_lyrics_privacy, R.string.settings_search_kw_lyrics),
+    SettingEntry("lyrics.playerLine", SettingsCategory.Lyrics, R.string.settings_lyrics_player_line, R.string.settings_lyrics_player_line_body, R.string.settings_search_kw_lyrics),
     SettingEntry("lyrics.defaultOffsetMs", SettingsCategory.Lyrics, R.string.settings_lyrics_default_offset, keywords = R.string.settings_search_kw_lyrics),
     SettingEntry("ratings.loveThreshold", SettingsCategory.Library, R.string.settings_love_threshold, keywords = R.string.settings_search_kw_rating),
     SettingEntry("open.filters", SettingsCategory.Library, R.string.nav_filters),

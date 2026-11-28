@@ -20,6 +20,8 @@ object SettingKeys {
     const val LYRICS_EXTERNAL_ENABLED = "lyrics.external.enabled"
     const val LYRICS_EXTERNAL_PROVIDER = "lyrics.external.provider"
     const val LYRICS_DEFAULT_OFFSET_MS = "lyrics.defaultOffsetMs"
+    /** Bool, off by default: the line being sung above the song's title in the full player (a phone's own). */
+    const val LYRICS_PLAYER_LINE = "lyrics.playerLine"
     const val RATINGS_LOVE_BRIDGE_ENABLED = "ratings.loveBridge.enabled"
     const val RATINGS_LOVE_BRIDGE_THRESHOLD = "ratings.loveBridge.threshold"
     const val BATTERY_AUTO_ENGAGE = "battery.autoEngage"

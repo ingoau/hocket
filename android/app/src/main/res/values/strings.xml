@@ -985,6 +985,8 @@
     <string name="report_upload_channel">Report uploads</string>
     <string name="report_upload_notification_text">Saving your report on the coordinator</string>
     <string name="settings_lyrics_default_offset">Default timing offset</string>
+    <string name="settings_lyrics_player_line">Lyrics in the player</string>
+    <string name="settings_lyrics_player_line_body">Show the line being sung above the song\'s title, word by word where the lyrics are timed that way.</string>
     <string name="settings_downloads_wifi_only">Download on Wi‑Fi only</string>
     <string name="settings_downloads_wifi_only_body">Downloads wait on metered connections, like mobile data or a hotspot, and continue by themselves once off them.</string>
     <string name="settings_section_connection">Connection</string>
