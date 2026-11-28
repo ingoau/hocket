@@ -88,6 +88,11 @@ export function HomeSpotlight({ stats, statsReady, dynamic, onAccent, onEmpty }:
         // Stay on the slide in view if it's still there.
         const keep = shownKey.current ? s.findIndex((x) => slideKey(x) === shownKey.current) : -1;
         setIndex(keep >= 0 ? keep : 0);
+      })
+      // Picks that fail to load leave Spotlight out (not a placeholder for ever); the next load tries again.
+      .catch((err: unknown) => {
+        console.error("spotlight failed to load", err);
+        if (live) setSlides((s) => s ?? []);
       });
     return () => { live = false; };
   }, [serverId, statsReady, statsKey, resumeKey, playingAlbum]);
@@ -109,6 +114,8 @@ export function HomeSpotlight({ stats, statsReady, dynamic, onAccent, onEmpty }:
     setIndex(i);
     if (role) requestAnimationFrame(() => section.current?.querySelector<HTMLElement>(`.spot-slide.active [data-spot="${role}"]`)?.focus({ preventScroll: true }));
   }, reducedMotion);
+  // While the picks load, a quiet slide holds their place, so the shelves don't jump down under the pointer when they arrive.
+  if (!slides && serverId) return <div className="home-spotlight spot-loading" aria-hidden="true"><div className="spot-slide" /></div>;
   if (!slides || !list.length) return null;
   const go = (i: number) => setIndex((i + list.length) % list.length);
   const onKey = (e: React.KeyboardEvent) => {

@@ -211,6 +211,8 @@
 .setup-buttons { display: flex; gap: 10px; margin-top: 14px; }
 .setup-buttons .btn { flex: 1 1 0; height: 52px; border-radius: var(--shape-full); font-size: 15px; font-weight: 600; }
 @media (max-width: 560px) { .setup-pair { grid-template-columns: minmax(0, 1fr); } .setup .brand.setup-lockup { font-size: 40px; } }
+/* A short window (the smallest is 600px): a smaller lockup, closer to the card, so the form starts higher. */
+@media (max-height: 760px) { .setup { gap: 24px; } .setup .brand.setup-lockup { font-size: 40px; gap: 13px; } .setup .setup-heading { font-size: 26px; } }
 .setup .spin { animation: spin 1.2s linear infinite; }
 
 /* ---- Downloads -------------------------------------------------------------- */
@@ -396,6 +398,9 @@
 .home-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); column-gap: 16px; }
 .home-list-row { display: flex; align-items: center; gap: 4px; border-radius: var(--shape-md); padding: 0 4px 0 6px; }
 .home-list-row:hover { background: var(--bg-hover); }
+/* A row's ⋯ shows on hover or keyboard focus, as a track row's does; right-click has the same menu. */
+.home-list-row > .btn.icon { opacity: 0; transition: opacity var(--dur-short) var(--ease-emphasized); }
+.home-list-row:hover > .btn.icon, .home-list-row:focus-within > .btn.icon { opacity: 1; }
 .home-list-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; height: 60px; border: 0; background: none; padding: 0; text-align: left; }
 .home-list-main .art { width: 44px; height: 44px; border-radius: var(--shape-sm); flex: 0 0 auto; }
 .home-list-main .text { display: flex; flex-direction: column; min-width: 0; }
@@ -943,6 +948,7 @@ button.m3-switch { border: 0; padding: 0; background: none; }
 .spot-dot { width: 8px; height: 8px; padding: 0; border: 0; border-radius: 4px; background: color-mix(in srgb, var(--fg) 45%, transparent); transition: width var(--dur-short, 160ms) var(--ease-emphasized, ease), background-color var(--dur-short, 160ms); }
 .spot-dot.on { width: 22px; background: var(--accent-text); }
 .customise-row.pinned .grip { visibility: hidden; }
+.spot-loading .spot-slide { --spot-surface: var(--surface-tonal); }
 /* A short window: a compact slide, so the sections below still show under it. */
 @media (max-height: 760px) {
   .spot-slide { height: clamp(240px, 40vh, 300px); }

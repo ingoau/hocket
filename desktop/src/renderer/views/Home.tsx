@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { t } from "@shared/strings";
 import type { ActionTarget, Album, Artist, Filter, ListeningStats, SavedQueue, TrackSummary } from "@core/api";
 import { useApp, useJsonSetting, useSetting, type MenuItem } from "../store/app";
@@ -36,6 +36,52 @@ const REDISCOVER = {
   ],
 } as const;
 
+/**
+ * Where Home was scrolled, and whether the next visit came by Back or Forward: those return to
+ * the same place in the feed, as a browser does; going to Home afresh starts at the top.
+ */
+let homeScrollTop = 0;
+let homeByHistory = false;
+useApp.subscribe((s, prev) => {
+  if (s.route !== prev.route) homeByHistory = s.history.length < prev.history.length || s.future.length < prev.future.length;
+});
+
+/** Keeps [main] (Home's scroller) where it was when Home is come back to by Back or Forward. */
+function useHomeScrollMemory(main: React.RefObject<HTMLDivElement | null>): void {
+  useLayoutEffect(() => {
+    const el = main.current;
+    if (!el) return;
+    const target = homeByHistory ? homeScrollTop : 0;
+    homeScrollTop = target;
+    // The sections arrive one by one, so the feed may not be tall enough yet: try again as it
+    // grows, until it gets there, the user scrolls, or a moment has passed.
+    let done = target <= 0;
+    const restore = () => {
+      if (done) return;
+      el.scrollTop = target;
+      if (Math.abs(el.scrollTop - target) < 2) done = true;
+    };
+    restore();
+    const stop = () => { done = true; };
+    const ro = new ResizeObserver(restore);
+    for (const child of el.children) ro.observe(child);
+    const timer = setTimeout(stop, 1500);
+    const onScroll = () => { if (done) homeScrollTop = el.scrollTop; };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    el.addEventListener("wheel", stop, { passive: true });
+    el.addEventListener("pointerdown", stop);
+    el.addEventListener("keydown", stop);
+    return () => {
+      ro.disconnect();
+      clearTimeout(timer);
+      el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("wheel", stop);
+      el.removeEventListener("pointerdown", stop);
+      el.removeEventListener("keydown", stop);
+    };
+  }, [main]);
+}
+
 /** One thing a section shows, ready to draw in any style. */
 interface Item {
   key: string;
@@ -68,7 +114,9 @@ export function Home() {
   const setSetting = useApp((s) => s.setSetting);
   const sync = useApp((s) => s.syncProgress);
   const [customising, setCustomising] = useState(false);
-  const save = (next: SectionPref[]) => setSetting(HOME_SECTIONS_KEY, sectionsValue(next));
+  const main = useRef<HTMLDivElement>(null);
+  useHomeScrollMemory(main);
+  const save =(next: SectionPref[]) => setSetting(HOME_SECTIONS_KEY, sectionsValue(next));
   const shown = prefs.filter((p) => p.on && sectionDef(p.id));
   const [empties, setEmpties] = useState<Record<string, boolean>>({});
   const reportEmpty = (id: string, empty: boolean) => setEmpties((m) => (m[id] === empty ? m : { ...m, [id]: empty }));
@@ -108,7 +156,7 @@ export function Home() {
   return (
     <div className={`view page-home ${customising ? "customising" : ""} ${pageVars ? "spot-tinted" : ""}`} style={pageVars} data-testid="view-home">
       <div className="home-layout">
-        <div className="home-main">
+        <div className="home-main" ref={main}>
           <div className="view-header">
             <h1 className="brand-lockup"><BrandMark /><span aria-hidden="true">hocket</span><span className="sr-only">{t("home.title")}</span></h1>
             {sync && !sync.finished ? <span className="badge">{t("sync.syncing", { phase: sync.phase })}</span> : null}
