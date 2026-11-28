@@ -37,13 +37,11 @@ import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import app.hocket.R
@@ -53,7 +51,10 @@ import app.hocket.ui.components.contentMaxWidth
 import app.hocket.core.Commands
 import app.hocket.core.api.SettingScope
 import app.hocket.ui.LocalCoreClient
-import app.hocket.ui.components.Badge
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.unit.em
 
 /** Reads a setting's raw JSON value and offers a setter through the core. */
 class SettingHandle(val key: String, val raw: String?, val scope: SettingScope?, private val set: (String) -> Unit) {
@@ -78,14 +79,6 @@ fun setting(key: String): SettingHandle {
 }
 
 @Composable
-fun ScopeBadge(scope: SettingScope?, modifier: Modifier = Modifier) {
-    when (scope) {
-        SettingScope.AccountSynced -> Badge(scopeLabel(scope), modifier, container = MaterialTheme.colorScheme.tertiaryContainer)
-        SettingScope.DeviceLocal, null -> Badge(scopeLabel(scope), modifier)
-    }
-}
-
-@Composable
 private fun scopeLabel(scope: SettingScope?): String =
     stringResource(if (scope == SettingScope.AccountSynced) R.string.settings_scope_synced else R.string.settings_scope_local)
 
@@ -94,38 +87,48 @@ private fun scopeLabel(scope: SettingScope?): String =
 private fun titleStyle(): TextStyle = MaterialTheme.typography.bodyLarge.copy(lineHeight = 20.sp)
 
 /**
- * A setting's title with its scope badge INLINE after the last word: when the title wraps, the
- * badge follows it on the last line instead of sitting in a column of its own between the text
- * and the trailing switch. The badge is drawn only; its text is part of the title's text (", This
- * device"), so a screen reader reads it once, after the title.
+ * Set by a settings screen ([SubScreen]): flipped on when one of its rows is a synced setting, so
+ * the page ends with the one line saying what the sync mark means.
+ */
+internal val LocalSyncedMark = androidx.compose.runtime.staticCompositionLocalOf<androidx.compose.runtime.MutableState<Boolean>?> { null }
+
+/**
+ * A setting's title. A synced setting (one that follows the account to the other devices) carries
+ * a small sync mark INLINE after the last word, so it wraps with the title instead of taking a
+ * column of its own; a device-local one, the common case, carries nothing. The mark is drawn only;
+ * its meaning is part of the title's text (", Synced"), so a screen reader reads it once.
  */
 @Composable
 fun SettingTitle(title: String, scope: SettingScope?, color: Color = Color.Unspecified, modifier: Modifier = Modifier) {
     val style = titleStyle()
-    if (scope == null) { Text(title, style = style, color = color, modifier = modifier); return }
-    val badgeText = scopeLabel(scope)
-    val badgeStyle = MaterialTheme.typography.labelSmall
-    val measurer = rememberTextMeasurer()
-    val density = LocalDensity.current
-    val size = remember(badgeText, badgeStyle, density) { measurer.measure(badgeText, badgeStyle).size }
-    // The space and a small gap before the badge + the badge's own padding (6 dp each side, 2 dp top and bottom).
-    val (width, height) = with(density) { (BadgeGap + size.width.toDp() + 12.dp).toSp() to (size.height.toDp() + 4.dp).toSp() }
-    // A breaking space before the badge: when it does not fit it starts the next line flush left.
+    if (scope != SettingScope.AccountSynced) { Text(title, style = style, color = color, modifier = modifier); return }
+    val mark = LocalSyncedMark.current
+    androidx.compose.runtime.SideEffect { mark?.value = true }
+    val label = scopeLabel(scope)
     val text = buildAnnotatedString {
         append(title)
         append(' ')
-        appendInlineContent(SCOPE_BADGE, ", $badgeText")
+        appendInlineContent(SYNC_MARK, ", $label")
     }
     val inline = mapOf(
-        SCOPE_BADGE to InlineTextContent(Placeholder(width, height, PlaceholderVerticalAlign.TextCenter)) {
-            Row(Modifier.clearAndSetSemantics { }, verticalAlignment = Alignment.CenterVertically) { Spacer(Modifier.width(BadgeGap)); ScopeBadge(scope) }
+        SYNC_MARK to InlineTextContent(Placeholder(1.1.em, 1.em, PlaceholderVerticalAlign.TextCenter)) {
+            Icon(HocketIcons.Filled.Sync, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.fillMaxSize().clearAndSetSemantics { }.testTag("setting.syncedMark"))
         },
     )
     Text(text, style = style, color = color, inlineContent = inline, modifier = modifier)
 }
 
-private const val SCOPE_BADGE = "scopeBadge"
-private val BadgeGap = 2.dp
+private const val SYNC_MARK = "syncMark"
+
+/** The line at the foot of a page with synced settings: the mark and what it means. */
+@Composable
+private fun SyncedLegend() {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 20.dp).testTag("settings.syncedLegend"), verticalAlignment = Alignment.CenterVertically) {
+        Icon(HocketIcons.Filled.Sync, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(stringResource(R.string.settings_synced_legend), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
 
 /** Test tag of a settings row with the stable id [id] (see the settings screens' `tag` arguments). */
 fun settingTag(id: String) = "setting.$id"
@@ -195,10 +198,14 @@ fun SubScreen(nav: NavHostController, title: String, content: @Composable androi
         },
     ) { padding ->
         // Top only: the shell already keeps content clear of the navigation bar.
-        androidx.compose.runtime.CompositionLocalProvider(LocalJumpTarget provides jump) {
+        val synced = remember { mutableStateOf(false) }
+        androidx.compose.runtime.CompositionLocalProvider(LocalJumpTarget provides jump, LocalSyncedMark provides synced) {
             // The scroll spans the screen; the rows stop at ContentMaxWidth, centred.
             Column(Modifier.padding(top = padding.calculateTopPadding()).verticalScroll(scrollState).padding(bottom = BottomContentInset)) {
-                Column(Modifier.contentMaxWidth()) { content() }
+                Column(Modifier.contentMaxWidth()) {
+                    content()
+                    if (synced.value) SyncedLegend()
+                }
             }
         }
     }

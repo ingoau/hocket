@@ -1,5 +1,8 @@
 package app.hocket.ui
 
+import org.junit.Assert.assertTrue
+import app.hocket.ui.screens.settings.SettingsPageScreen
+import androidx.compose.ui.test.assertIsSelected
 import app.hocket.core.groupEntries
 import app.hocket.core.historyEntries
 import app.hocket.core.restEntries
@@ -193,24 +196,40 @@ class SwipeActionsTest {
     @Test
     fun customiseSetsEachDirectionPerSurface() {
         val core = TestCore(startPlaying = false)
-        compose.setThemedContent(core) { CustomiseSettingsScreen(rememberNavController()) }
+        compose.setThemedContent(core) { SettingsPageScreen(rememberNavController(), "customise.swipe") }
         core.start()
         compose.waitUntil(5_000) { core.client.started.value }
         compose.onNodeWithText("Swipe actions").assertExists()
+        fun open(key: String) {
+            compose.onNodeWithTag("setting.customise.$key").performScrollTo().performClick()
+            compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag("choice.cancel").assertExists() }.isSuccess }
+        }
+        fun option(key: String, id: String) = compose.onNodeWithTag("customise.$key.option.$id")
         // Lists never offer "Remove from queue"; the queue does.
-        val list = compose.onNodeWithTag("customise.${SettingKeys.SWIPE_LIST_END_TO_START}").performScrollTo()
-        assertFalse(list.onChildren().fetchSemanticsNodes().any { it.config.getOrNull(SemanticsProperties.Text)?.joinToString() == "Remove from queue" })
-        compose.onNodeWithTag("customise.${SettingKeys.SWIPE_QUEUE_END_TO_START}").performScrollTo().onChildren().filterToOne(hasText("Remove from queue")).assertIsOn()
-        list.onChildren().filterToOne(hasText("Add to playlist")).performClick()
+        open(SettingKeys.SWIPE_LIST_END_TO_START)
+        assertTrue(compose.onAllNodes(hasTestTag("customise.${SettingKeys.SWIPE_LIST_END_TO_START}.option.${ActionIds.REMOVE_FROM_QUEUE}")).fetchSemanticsNodes().isEmpty())
+        option(SettingKeys.SWIPE_LIST_END_TO_START, ActionIds.ADD_TO_PLAYLIST).performClick()
         compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.SWIPE_LIST_END_TO_START]?.value == "\"${ActionIds.ADD_TO_PLAYLIST}\"" }
-        compose.onNodeWithTag("customise.${SettingKeys.SWIPE_QUEUE_START_TO_END}").performScrollTo().onChildren().filterToOne(hasText("None")).performClick()
+        open(SettingKeys.SWIPE_QUEUE_END_TO_START)
+        option(SettingKeys.SWIPE_QUEUE_END_TO_START, ActionIds.REMOVE_FROM_QUEUE).assertIsSelected()
+        compose.onNodeWithTag("choice.cancel").performClick()
+        open(SettingKeys.SWIPE_QUEUE_START_TO_END)
+        option(SettingKeys.SWIPE_QUEUE_START_TO_END, SwipeOptions.NONE).performClick()
         compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.SWIPE_QUEUE_START_TO_END]?.value == "\"${SwipeOptions.NONE}\"" }
+    }
+
+    @Test
+    fun customiseSetsThePlayersSwipeUp() {
+        val core = TestCore(startPlaying = false)
+        compose.setThemedContent(core) { CustomiseSettingsScreen(rememberNavController()) }
+        core.start()
+        compose.waitUntil(5_000) { core.client.started.value }
         // The player's swipe up: the queue by default, any of the four choosable.
-        val playerUp = compose.onNodeWithTag("customise.${SettingKeys.SWIPE_PLAYER_UP}").performScrollTo()
-        playerUp.onChildren().filterToOne(hasText("Queue")).assertIsOn()
-        playerUp.onChildren().filterToOne(hasText("Play on")).performClick()
+        val playerUp = "customise.${SettingKeys.SWIPE_PLAYER_UP}"
+        compose.onNodeWithTag("$playerUp.${SwipeOptions.PLAYER_UP_QUEUE}").performScrollTo().assertIsSelected()
+        compose.onNodeWithTag("$playerUp.${SwipeOptions.PLAYER_UP_CONNECT}").performClick()
         compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.SWIPE_PLAYER_UP]?.value == "\"${SwipeOptions.PLAYER_UP_CONNECT}\"" }
-        playerUp.onChildren().filterToOne(hasText("Song menu")).performClick()
+        compose.onNodeWithTag("$playerUp.${SwipeOptions.PLAYER_UP_MENU}").performClick()
         compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.SWIPE_PLAYER_UP]?.value == "\"${SwipeOptions.PLAYER_UP_MENU}\"" }
     }
 }

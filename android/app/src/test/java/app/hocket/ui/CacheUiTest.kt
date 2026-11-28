@@ -1,5 +1,6 @@
 package app.hocket.ui
 
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -195,15 +196,19 @@ class CacheUiTest {
 
         // Automatic is storage.cacheMaxBytes null; a custom size (2 GB included) sets it.
         assertEquals("null", core.client.settings.value[SettingKeys.STORAGE_CACHE_MAX_BYTES]!!.value)
-        choice("4 GB").performScrollTo().performClick()
+        choice("4 GB").performClick()
         compose.waitUntil(5_000) { core.client.storage.value.cacheBudgetAuto == false }
         assertEquals(4e9, core.client.settings.value[SettingKeys.STORAGE_CACHE_MAX_BYTES]!!.value.toDouble(), 1.0)
         rowHas("storage.cacheMaxBytes", "Custom: 4.00 GB")
-        choice("Automatic").performScrollTo().performClick()
+        // The dialog opens with that size picked.
+        choice("4 GB").assertIsSelected()
+        compose.onNodeWithTag("choice.cancel").performClick()
+        compose.waitForIdle()
+        choice("Automatic").performClick()
         compose.waitUntil(5_000) { core.client.storage.value.cacheBudgetAuto == true }
         assertEquals("null", core.client.settings.value[SettingKeys.STORAGE_CACHE_MAX_BYTES]!!.value)
         rowHas("storage.cacheMaxBytes", "Automatic (currently 2.15 GB)")
-        choice("2 GB").performScrollTo().performClick()
+        choice("2 GB").performClick()
         compose.waitUntil(5_000) { core.client.storage.value.cacheBudgetAuto == false }
         assertEquals(2e9, core.client.settings.value[SettingKeys.STORAGE_CACHE_MAX_BYTES]!!.value.toDouble(), 1.0)
         rowHas("storage.cacheMaxBytes", "Custom: 2.00 GB")
@@ -211,7 +216,8 @@ class CacheUiTest {
         // Prefetch on mobile data: a device-local switch, off by default.
         val prefetch = compose.onNodeWithTag("setting.storage.prefetchOnMobileData")
         assertEquals(androidx.compose.ui.state.ToggleableState.Off, prefetch.fetchSemanticsNode().config[SemanticsProperties.ToggleableState])
-        assertTrue("scope badge read with the title", prefetch.fetchSemanticsNode().config[SemanticsProperties.Text].joinToString(" ") { it.text }.contains("This device"))
+        // Device-local settings carry no mark; only synced ones read ", Synced" with their title.
+        assertFalse("no sync mark on a device-local setting", prefetch.fetchSemanticsNode().config[SemanticsProperties.Text].joinToString(" ") { it.text }.contains("Synced"))
         prefetch.performScrollTo().performClick()
         compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.STORAGE_PREFETCH_ON_MOBILE_DATA]?.value == "true" }
     }
@@ -219,7 +225,12 @@ class CacheUiTest {
     private fun rowHas(tag: String, text: String) =
         compose.onNode(hasAnyAncestor(hasTestTag("setting.$tag")).or(hasTestTag("setting.$tag")).and(hasText(text))).assertExists()
 
-    private fun choice(label: String) = compose.onNode(hasAnyAncestor(hasTestTag("storage.cacheMaxBytes.choices")).and(hasText(label)).and(hasClickAction()))
+    /** Opens the cache size dialog and returns its option labelled [label]. */
+    private fun choice(label: String): androidx.compose.ui.test.SemanticsNodeInteraction {
+        compose.onNodeWithTag("setting.storage.cacheMaxBytes").performScrollTo().performClick()
+        compose.waitUntil(5_000) { runCatching { compose.onNodeWithTag("choice.cancel").assertExists() }.isSuccess }
+        return compose.onNode(hasText(label).and(hasClickAction()).and(hasAnyAncestor(androidx.compose.ui.test.isDialog())))
+    }
 
     // -- available offline -------------------------------------------------------------------------
 

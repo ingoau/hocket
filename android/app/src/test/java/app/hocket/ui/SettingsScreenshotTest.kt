@@ -18,6 +18,8 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onLast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -170,6 +172,8 @@ class SettingsScreenshotTest {
         core.start()
         compose.openSettingsFromAccount()
         compose.onNodeWithTag("settings.category.customise").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
+        awaitTag("setting.customise.mediaSessionSection")
+        compose.onNodeWithTag("setting.customise.mediaSessionSection").performClick()
         awaitTag("customise.mediaSession")
         compose.onNodeWithTag("customise.mediaSession.stash").performScrollTo()
         compose.waitForIdle()
@@ -184,6 +188,75 @@ class SettingsScreenshotTest {
         save(compose.onRoot().captureToImage().asAndroidBitmap(), File(dir, "android-settings-$theme-media-buttons-stash-on.png"))
     }
 
+    @Test
+    @Config(qualifiers = "+notnight")
+    fun pagesLight() = captureSubPages("light")
+
+    @Test
+    @Config(qualifiers = "+night")
+    fun pagesDark() = captureSubPages("dark")
+
+    /**
+     * The settings' own sub-pages (customise editors, a streaming profile, a Pebble list) and a
+     * choice dialog of each kind, opened from their category's screen.
+     */
+    private fun captureSubPages(theme: String) {
+        val dir = outDir
+        assumeTrue("set HOCKET_SCREENSHOT_DIR (or -Dhocket.screenshotDir) to write settings screenshots", dir != null)
+        dir!!.mkdirs()
+        val prefix = "android-settings-$theme-page"
+        val core = TestCore(startPlaying = false)
+        compose.setThemedContent(core) { CompositionLocalProvider(LocalFakeCoreBanner provides false) { AppRoot(core.client) } }
+        core.start()
+        compose.openSettingsFromAccount()
+        fun category(id: String) {
+            compose.onNodeWithTag("settings.category.$id").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
+            awaitTag("settings.screen")
+        }
+        fun page(row: String, name: String) {
+            compose.onNodeWithTag("setting.$row").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
+            compose.waitForIdle()
+            compose.mainClock.advanceTimeBy(1_000)
+            capturePages(File(dir, "$prefix-$name"))
+            compose.onAllNodesWithTag("settings.back").onLast().performClick()
+            compose.waitForIdle()
+            compose.mainClock.advanceTimeBy(1_000)
+        }
+        fun dialog(row: String, name: String) {
+            compose.onNodeWithTag("setting.$row").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
+            awaitTag("choice.cancel")
+            captureDialog(File(dir, "$prefix-dialog-$name"))
+            compose.onNodeWithTag("choice.cancel").performClick()
+            compose.waitForIdle()
+        }
+        category("customise")
+        page("customise.bottomBar", "bottom-bar")
+        page("customise.contextMenuSection", "context-menu")
+        page("customise.mediaSessionSection", "media-buttons")
+        compose.onNodeWithTag("setting.customise.swipe").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
+        awaitTag("setting.customise.${app.hocket.core.SettingKeys.SWIPE_QUEUE_START_TO_END}")
+        capturePages(File(dir, "$prefix-swipe"))
+        dialog("customise.${app.hocket.core.SettingKeys.SWIPE_LIST_START_TO_END}", "swipe")
+        compose.onAllNodesWithTag("settings.back").onLast().performClick()
+        awaitTag("settings.screen")
+        compose.onNodeWithTag("settings.back").performClick()
+        awaitTag("settings.categories")
+        scrollToTop()
+        category("streaming")
+        page("transcoding.default", "streaming-wifi")
+        compose.onNodeWithTag("settings.back").performClick()
+        awaitTag("settings.categories")
+        scrollToTop()
+        category("pebble")
+        page(app.hocket.core.SettingKeys.PEBBLE_MENU, "pebble-menu")
+        dialog(app.hocket.core.SettingKeys.PEBBLE_GESTURE_UP, "pebble-gesture")
+        compose.onNodeWithTag("settings.back").performClick()
+        awaitTag("settings.categories")
+        scrollToTop()
+        category("downloads")
+        dialog("storage.cacheMaxBytes", "cache-budget")
+    }
+
     private fun captureAll(theme: String) {
         val dir = outDir
         assumeTrue("set HOCKET_SCREENSHOT_DIR (or -Dhocket.screenshotDir) to write settings screenshots", dir != null)
@@ -191,7 +264,7 @@ class SettingsScreenshotTest {
         val prefix = "android-settings-$theme"
 
         val core = TestCore(startPlaying = false)
-        compose.setThemedContent(core) { AppRoot(core.client) }
+        compose.setThemedContent(core) { CompositionLocalProvider(LocalFakeCoreBanner provides false) { AppRoot(core.client) } }
         core.start()
         compose.openSettingsFromAccount()
         capturePages(File(dir, "$prefix-categories"))

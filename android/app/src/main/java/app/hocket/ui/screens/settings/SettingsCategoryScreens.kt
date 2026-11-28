@@ -3,6 +3,7 @@ package app.hocket.ui.screens.settings
 import app.hocket.core.api.AccountInfo
 import androidx.compose.material3.IconButton
 import androidx.compose.foundation.layout.Row
+import androidx.compose.ui.semantics.role
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -124,7 +125,7 @@ fun AccountSettingsScreen(nav: NavHostController) {
             SettingRow(stringResource(R.string.settings_full_sync), onClick = { client.dispatch(Commands.syncLibrary(s.id, full = true)) }, tag = tag("server.fullSync"))
             SettingRow(stringResource(R.string.settings_remove_server), onClick = { signOut = s }, tag = tag("server.remove"), destructive = true) { Icon(HocketIcons.AutoMirrored.Filled.Logout, null, tint = MaterialTheme.colorScheme.error) }
         }
-        SettingRow(stringResource(R.string.settings_accounts_add), stringResource(R.string.settings_accounts_add_body), onClick = { app.hocket.ui.screens.setup.SetupRequests.addAccount() }, tag = "account.add") { Icon(HocketIcons.Filled.Add, null) }
+        SettingRow(stringResource(R.string.settings_accounts_add), onClick = { app.hocket.ui.screens.setup.SetupRequests.addAccount() }, tag = "account.add") { Icon(HocketIcons.Filled.Add, null) }
         SwitchRow(stringResource(R.string.settings_sync_master), sync.bool ?: true, { client.dispatch(Commands.setSettingsSync(it)) }, stringResource(R.string.settings_sync_master_body), scope = sync.scope ?: SettingScope.DeviceLocal, tag = "sync.master")
     }
     // Removal goes through CoreHost.removeAccount: the stored login is removed before RemoveAccount,
@@ -140,9 +141,10 @@ fun AppearanceSettingsScreen(nav: NavHostController) {
     val dynamicColour = setting(SettingKeys.DISPLAY_DYNAMIC_COLOUR)
     val animated = setting(SettingKeys.DISPLAY_ANIMATED_BACKGROUND)
     SubScreen(nav, stringResource(R.string.settings_section_appearance)) {
-        val themeOptions = listOf("system" to stringResource(R.string.settings_theme_system), "light" to stringResource(R.string.settings_theme_light), "dark" to stringResource(R.string.settings_theme_dark))
+        val themeOptions = listOf("system" to R.string.settings_theme_system, "light" to R.string.settings_theme_light, "dark" to R.string.settings_theme_dark)
+            .map { (mode, label) -> VisualOption(mode, stringResource(label)) { selected -> ThemePreview(mode, selected) } }
         SettingRow(stringResource(R.string.settings_theme), scope = theme.scope, tag = "display.theme")
-        ChoiceRow(themeOptions, isSelected = { (theme.string ?: "system") == it }, onSelect = { theme.setString(it) }, modifier = Modifier.padding(horizontal = 16.dp))
+        OptionCards(themeOptions, isSelected = { (theme.string ?: "system") == it }, onSelect = { theme.setString(it) }, tag = "display.theme.choices", previewHeight = 72.dp)
         // display.accent: null = follow the wallpaper (dynamic) / the artwork; a #RRGGBB overrides it.
         val accentValue = accent.string
         val dynamicLabel = stringResource(R.string.settings_accent_dynamic)
@@ -152,21 +154,22 @@ fun AppearanceSettingsScreen(nav: NavHostController) {
             swatches = ACCENTS.map { (hex, name) -> hex to stringResource(name) },
             selected = accentValue,
             onSelect = { hex -> if (hex == null) accent.setRaw("null") else accent.setString(hex) },
-            modifier = Modifier.padding(horizontal = 16.dp),
+            modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 8.dp),
         )
         SwitchRow(stringResource(R.string.settings_accent_artwork), dynamicColour.bool ?: true, { dynamicColour.setBool(it) }, scope = dynamicColour.scope, tag = "display.artworkColour")
-        SwitchRow(stringResource(R.string.settings_animated_background), animated.bool ?: true, { animated.setBool(it) }, stringResource(R.string.settings_animated_background_body), animated.scope, tag = "display.animatedBackground")
         // display.immersiveArtwork: the full player's artwork edge to edge (mirrored or carried on in its colours).
         val immersive = setting(SettingKeys.DISPLAY_IMMERSIVE_ARTWORK)
-        val immersiveOptions = listOf("automatic" to stringResource(R.string.settings_immersive_automatic), "always" to stringResource(R.string.settings_immersive_always), "never" to stringResource(R.string.settings_immersive_never))
-        SettingRow(stringResource(R.string.settings_immersive), stringResource(R.string.settings_immersive_body), scope = immersive.scope, tag = "display.immersiveArtwork")
-        ChoiceRow(immersiveOptions, isSelected = { (immersive.string ?: "automatic") == it }, onSelect = { immersive.setString(it) }, modifier = Modifier.padding(horizontal = 16.dp))
+        val immersiveOptions = listOf("automatic" to R.string.settings_immersive_automatic, "always" to R.string.settings_immersive_always, "never" to R.string.settings_immersive_never)
+            .map { (mode, label) -> VisualOption(mode, stringResource(label)) { selected -> ImmersivePreview(mode, selected) } }
+        SettingRow(stringResource(R.string.settings_immersive), scope = immersive.scope, tag = "display.immersiveArtwork")
+        OptionCards(immersiveOptions, isSelected = { (immersive.string ?: "automatic") == it }, onSelect = { immersive.setString(it) }, tag = "display.immersiveArtwork.choices", previewHeight = 72.dp)
+        SwitchRow(stringResource(R.string.settings_animated_background), animated.bool ?: true, { animated.setBool(it) }, scope = animated.scope, tag = "display.animatedBackground")
         val playerRating = setting(SettingKeys.DISPLAY_PLAYER_RATING)
-        SwitchRow(stringResource(R.string.settings_player_rating), playerRating.bool ?: true, { playerRating.setBool(it) }, stringResource(R.string.settings_player_rating_body), playerRating.scope, tag = "display.playerRating")
+        SwitchRow(stringResource(R.string.settings_player_rating), playerRating.bool ?: true, { playerRating.setBool(it) }, scope = playerRating.scope, tag = "display.playerRating")
         val floatingBar = setting(SettingKeys.DISPLAY_FLOATING_NAV_BAR)
-        SwitchRow(stringResource(R.string.settings_floating_nav_bar), floatingBar.bool ?: true, { floatingBar.setBool(it) }, stringResource(R.string.settings_floating_nav_bar_body), floatingBar.scope, tag = "display.floatingNavBar")
+        SwitchRow(stringResource(R.string.settings_floating_nav_bar), floatingBar.bool ?: true, { floatingBar.setBool(it) }, scope = floatingBar.scope, tag = "display.floatingNavBar")
         val albumArtists = setting(SettingKeys.DISPLAY_ALBUM_TRACK_ARTISTS)
-        SwitchRow(stringResource(R.string.settings_album_track_artists), albumArtists.bool ?: false, { albumArtists.setBool(it) }, stringResource(R.string.settings_album_track_artists_body), albumArtists.scope, tag = "display.albumTrackArtists")
+        SwitchRow(stringResource(R.string.settings_album_track_artists), albumArtists.bool ?: false, { albumArtists.setBool(it) }, scope = albumArtists.scope, tag = "display.albumTrackArtists")
     }
 }
 
@@ -176,34 +179,39 @@ internal val ACCENTS = listOf("#6750A4" to R.string.settings_accent_purple, "#1B
 internal fun accentColour(hex: String): Color = Color(android.graphics.Color.parseColor(hex))
 
 /**
- * "Dynamic" as a toggle button, then one round swatch per preset in its real colour. The swatches
- * are radio buttons spoken by their colour name ("Teal, selected"); the selected one has a ring and
- * a check.
+ * One round swatch per choice: "Dynamic" first, drawn as a colour wheel, then each preset in its
+ * real colour. The swatches are radio buttons spoken by their name ("Teal, selected"); the
+ * selected one has a ring and a check.
  */
 @Composable
 private fun AccentChoices(dynamicLabel: String, swatches: List<Pair<String, String>>, selected: String?, onSelect: (String?) -> Unit, modifier: Modifier = Modifier) {
+    val wheel = androidx.compose.ui.graphics.Brush.sweepGradient(listOf(Color(0xFFE8A0BF), Color(0xFFB8A0E8), Color(0xFF8FC1E3), Color(0xFF9ED9A8), Color(0xFFF2D58C), Color(0xFFE8A0BF)))
     FlowRow(modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp), itemVerticalAlignment = Alignment.CenterVertically) {
-        ToggleButton(checked = selected == null, onCheckedChange = { onSelect(null) }) { Text(dynamicLabel, maxLines = 1) }
+        Swatch(dynamicLabel, selected == null, Modifier.background(wheel), tag = "accent.dynamic", icon = HocketIcons.Filled.AutoAwesome) { onSelect(null) }
         swatches.forEach { (hex, name) ->
-            val isSelected = selected.equals(hex, ignoreCase = true)
-            val colour = accentColour(hex)
-            Box(
-                Modifier.size(48.dp)
-                    .selectable(selected = isSelected, role = Role.RadioButton, onClick = { onSelect(hex) })
-                    .semantics { contentDescription = name }
-                    .testTag("accent.$hex"),
-                contentAlignment = Alignment.Center,
-            ) {
-                Box(
-                    Modifier.size(40.dp).clip(CircleShape)
-                        .then(if (isSelected) Modifier.border(3.dp, MaterialTheme.colorScheme.onSurface, CircleShape) else Modifier)
-                        .padding(if (isSelected) 5.dp else 0.dp)
-                        .clip(CircleShape).background(colour),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (isSelected) Icon(HocketIcons.Filled.Check, null, tint = Color.White, modifier = Modifier.size(18.dp))
-                }
-            }
+            Swatch(name, selected.equals(hex, ignoreCase = true), Modifier.background(accentColour(hex)), tag = "accent.$hex") { onSelect(hex) }
+        }
+    }
+}
+
+@Composable
+private fun Swatch(name: String, isSelected: Boolean, fill: Modifier, tag: String, icon: androidx.compose.ui.graphics.vector.ImageVector? = null, onClick: () -> Unit) {
+    Box(
+        Modifier.size(56.dp)
+            .selectable(selected = isSelected, role = Role.RadioButton, onClick = onClick)
+            .semantics { contentDescription = name }
+            .testTag(tag),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier.size(48.dp).clip(CircleShape)
+                .then(if (isSelected) Modifier.border(3.dp, MaterialTheme.colorScheme.onSurface, CircleShape) else Modifier)
+                .padding(if (isSelected) 6.dp else 0.dp)
+                .clip(CircleShape).then(fill),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (isSelected) Icon(HocketIcons.Filled.Check, null, tint = if (icon != null) Color(0xFF1D1B20) else Color.White, modifier = Modifier.size(20.dp))
+            else if (icon != null) Icon(icon, null, tint = Color(0xFF1D1B20), modifier = Modifier.size(22.dp))
         }
     }
 }
@@ -237,8 +245,7 @@ fun PlaybackSettingsScreen(nav: NavHostController) {
         )
         SwitchRow(stringResource(R.string.settings_autoplay), queue.autoplay, { client.dispatch(Commands.setAutoplay(it)) }, tag = "queue.autoplay")
         val resumeAlbums = setting(SettingKeys.PLAYBACK_RESUME_ALBUMS)
-        SwitchRow(stringResource(R.string.settings_resume_albums), resumeAlbums.bool ?: true, { resumeAlbums.setBool(it) },
-            subtitle = stringResource(R.string.settings_resume_albums_body), scope = resumeAlbums.scope, tag = "playback.resumeAlbums")
+        SwitchRow(stringResource(R.string.settings_resume_albums), resumeAlbums.bool ?: true, { resumeAlbums.setBool(it) }, scope = resumeAlbums.scope, tag = "playback.resumeAlbums")
         SwitchRow(stringResource(R.string.settings_external_control), externalControl.bool ?: false, { externalControl.setBool(it) },
             subtitle = stringResource(R.string.settings_external_control_summary), scope = externalControl.scope, tag = "media.externalControl")
         HomeScreenSection()
@@ -262,7 +269,7 @@ private fun HomeScreenSection() {
     val widgets = androidx.compose.runtime.remember { android.appwidget.AppWidgetManager.getInstance(context) }
     if (widgets?.isRequestPinAppWidgetSupported == true) {
         SettingsSection(stringResource(R.string.settings_home_screen))
-        SettingRow(stringResource(R.string.settings_widget_add), stringResource(R.string.settings_widget_add_body), onClick = {
+        SettingRow(stringResource(R.string.settings_widget_add), onClick = {
             runCatching { widgets.requestPinAppWidget(android.content.ComponentName(context, app.hocket.playback.NowPlayingWidget::class.java), null, null) }
         }, tag = "widget.add")
     }
@@ -308,17 +315,20 @@ fun DownloadsSettingsScreen(nav: NavHostController) {
     SubScreen(nav, stringResource(R.string.settings_category_downloads)) {
         SettingRow(stringResource(R.string.nav_downloads), formatBytes(storage.downloadsBytes) + dot + stringResource(R.string.settings_cache_images, formatBytes(storage.imagesBytes)), onClick = { nav.navigate(Route.Downloads) }, tag = "open.downloads") { Chevron() }
         val warn = storage.warnThresholdBytes
-        SettingRow(stringResource(R.string.downloads_threshold), warn?.let { formatBytes(it) } ?: stringResource(R.string.downloads_threshold_none), tag = "storage.warnThreshold")
         val noLimit = stringResource(R.string.downloads_threshold_none)
-        ChoiceRow(listOf(null, 2.0, 4.0, 8.0, 16.0).map { gb -> gb to (gb?.let { stringResource(R.string.size_gb_whole, it.toInt()) } ?: noLimit) }, isSelected = { gb -> (gb?.let { it * 1e9 }) == warn },
-            onSelect = { gb -> client.dispatch(Commands.setStorageWarnThreshold(gb?.let { it * 1e9 })) }, modifier = Modifier.padding(horizontal = 16.dp))
+        ChoiceDialogRow(
+            stringResource(R.string.downloads_threshold),
+            listOf(null, 2.0, 4.0, 8.0, 16.0).map { gb -> DialogOption(gb, gb?.let { stringResource(R.string.size_gb_whole, it.toInt()) } ?: noLimit) },
+            selected = warn?.let { it / 1e9 }, onSelect = { gb -> client.dispatch(Commands.setStorageWarnThreshold(gb?.let { it * 1e9 })) },
+            tag = "storage.warnThreshold", valueText = warn?.let { formatBytes(it) } ?: noLimit,
+        )
 
         // Metered = mobile data, a hotspot or metered Wi-Fi, as the system reports it.
         SettingsSection(stringResource(R.string.settings_section_connection))
         SwitchRow(stringResource(R.string.settings_offline_mode), offlineMode.bool ?: false, { offlineMode.setBool(it) }, stringResource(R.string.settings_offline_mode_body), offlineMode.scope, tag = "network.offlineMode")
-        SwitchRow(stringResource(R.string.settings_data_saver), dataSaver.bool ?: true, { dataSaver.setBool(it) }, stringResource(R.string.settings_data_saver_body), dataSaver.scope, tag = "network.dataSaver")
-        SwitchRow(stringResource(R.string.settings_downloads_wifi_only), wifiOnly.bool ?: true, { wifiOnly.setBool(it) }, stringResource(R.string.settings_downloads_wifi_only_body), wifiOnly.scope, tag = "downloads.wifiOnly")
-        SwitchRow(stringResource(R.string.settings_prefetch_mobile), prefetchMobile.bool ?: false, { prefetchMobile.setBool(it) }, stringResource(R.string.settings_prefetch_mobile_body), prefetchMobile.scope, tag = "storage.prefetchOnMobileData")
+        SwitchRow(stringResource(R.string.settings_data_saver), dataSaver.bool ?: true, { dataSaver.setBool(it) }, scope = dataSaver.scope, tag = "network.dataSaver")
+        SwitchRow(stringResource(R.string.settings_downloads_wifi_only), wifiOnly.bool ?: true, { wifiOnly.setBool(it) }, scope = wifiOnly.scope, tag = "downloads.wifiOnly")
+        SwitchRow(stringResource(R.string.settings_prefetch_mobile), prefetchMobile.bool ?: false, { prefetchMobile.setBool(it) }, scope = prefetchMobile.scope, tag = "storage.prefetchOnMobileData")
 
         SettingsSection(stringResource(R.string.settings_cache_usage))
         // Usage: complete entries play offline; partial ones (seeks, skips, primed starts) do not.
@@ -333,14 +343,15 @@ fun DownloadsSettingsScreen(nav: NavHostController) {
         // included, is the user's own.
         val auto = storage.cacheBudgetAuto ?: (cacheMax.double == null)
         val autoLabel = stringResource(R.string.settings_cache_budget_auto, formatBytes(budget))
-        SettingRow(stringResource(R.string.settings_cache_budget), if (auto) autoLabel else stringResource(R.string.settings_cache_budget_custom, formatBytes(budget)), cacheMax.scope, tag = "storage.cacheMaxBytes")
-        ChoiceRow(
-            listOf<Pair<Double?, String>>(null to stringResource(R.string.settings_cache_budget_auto_short)) + CACHE_BUDGET_CHOICES.map { it to budgetChoiceLabel(it) },
-            isSelected = { b -> if (b == null) auto else !auto && kotlin.math.abs(budget - b) < 1e6 },
-            onSelect = { b -> if (b == null) cacheMax.setNull() else cacheMax.setDouble(b) },
-            modifier = Modifier.padding(horizontal = 16.dp).testTag("storage.cacheMaxBytes.choices"),
+        // The dialog's pick: Automatic (null), or the size the budget is set to (snapped to the nearest choice).
+        val picked = if (auto) null else CACHE_BUDGET_CHOICES.firstOrNull { kotlin.math.abs(budget - it) < 1e6 } ?: budget
+        ChoiceDialogRow(
+            stringResource(R.string.settings_cache_budget),
+            listOf(DialogOption<Double?>(null, stringResource(R.string.settings_cache_budget_auto_short))) + CACHE_BUDGET_CHOICES.map { DialogOption<Double?>(it, budgetChoiceLabel(it)) },
+            selected = picked, onSelect = { b -> if (b == null) cacheMax.setNull() else cacheMax.setDouble(b) },
+            scope = cacheMax.scope, tag = "storage.cacheMaxBytes",
+            valueText = if (auto) autoLabel else stringResource(R.string.settings_cache_budget_custom, formatBytes(budget)),
         )
-        Text(stringResource(R.string.settings_cache_budget_body), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
         SettingRow(stringResource(R.string.settings_data_saved), stringResource(R.string.settings_data_saved_body, formatBytes(storage.servedFromDiskBytes ?: 0.0), formatBytes(storage.fetchedBytes ?: 0.0)), tag = "storage.dataSaved") {
             Text(formatBytes(storage.dataSavedBytes ?: 0.0), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
         }
@@ -360,11 +371,13 @@ fun LyricsSettingsScreen(nav: NavHostController) {
     SubScreen(nav, stringResource(R.string.settings_section_lyrics)) {
         SwitchRow(stringResource(R.string.settings_external_lyrics), externalLyrics.bool ?: false, { client.dispatch(Commands.setExternalLyricsEnabled(it)) }, stringResource(R.string.settings_external_lyrics_privacy), externalLyrics.scope, tag = "lyrics.external")
         val ms = offset.int ?: 0
-        val earlier = stringResource(R.string.lyrics_offset_earlier)
-        val reset = stringResource(R.string.lyrics_offset_reset)
-        val later = stringResource(R.string.lyrics_offset_later)
-        SettingRow(stringResource(R.string.settings_lyrics_default_offset), stringResource(R.string.lyrics_offset_value, ms), offset.scope, tag = "lyrics.defaultOffsetMs")
-        ActionRow(listOf(earlier to { offset.setInt((ms - 100).coerceAtLeast(-10_000)) }, reset to { offset.setInt(0) }, later to { offset.setInt((ms + 100).coerceAtMost(10_000)) }), modifier = Modifier.padding(horizontal = 16.dp))
+        StepperRow(
+            stringResource(R.string.settings_lyrics_default_offset), stringResource(R.string.lyrics_offset_value, ms),
+            onLess = { offset.setInt((ms - 100).coerceAtLeast(-10_000)) }, onMore = { offset.setInt((ms + 100).coerceAtMost(10_000)) },
+            lessLabel = stringResource(R.string.lyrics_offset_earlier_a11y), moreLabel = stringResource(R.string.lyrics_offset_later_a11y),
+            scope = offset.scope, tag = "lyrics.defaultOffsetMs",
+            onReset = { offset.setInt(0) }.takeIf { ms != 0 }, resetLabel = stringResource(R.string.lyrics_offset_reset_a11y),
+        )
     }
 }
 
@@ -385,26 +398,63 @@ fun LibrarySettingsScreen(nav: NavHostController) {
         // ratings.loveBridge.enabled + threshold (1..5): "off" is the bridge disabled.
         val bridgeOn = loveBridge.bool ?: false
         val threshold = loveThreshold.int ?: 4
-        SettingRow(stringResource(R.string.settings_love_threshold), if (!bridgeOn) stringResource(R.string.settings_love_threshold_off) else stringResource(R.string.rating_set, threshold), loveThreshold.scope, tag = "ratings.loveThreshold")
-        val offLabel = stringResource(R.string.settings_love_threshold_off)
-        ChoiceRow(listOf<Pair<Int?, String>>(null to offLabel) + (1..5).map { it to "$it★" }, isSelected = { n -> if (n == null) !bridgeOn else bridgeOn && threshold == n },
-            onSelect = { n -> if (n == null) loveBridge.setBool(false) else { loveThreshold.setInt(n); loveBridge.setBool(true) } },
-            describe = { n -> n?.let { resources.getQuantityString(R.plurals.a11y_stars, it, it) } }, modifier = Modifier.padding(horizontal = 16.dp))
+        SettingRow(stringResource(R.string.settings_love_threshold), if (!bridgeOn) stringResource(R.string.settings_love_threshold_off) else stringResource(R.string.settings_love_threshold_value, threshold), loveThreshold.scope, tag = "ratings.loveThreshold")
+        LoveThresholdPicker(if (bridgeOn) threshold else null,
+            onSelect = { n -> if (n == null) loveBridge.setBool(false) else { loveThreshold.setInt(n); loveBridge.setBool(true) } })
         SettingRow(stringResource(R.string.nav_filters), onClick = { nav.navigate(Route.Filters) }, tag = "open.filters") { Chevron() }
         SettingRow(stringResource(R.string.nav_stats), onClick = { nav.navigate(Route.Stats) }, tag = "open.stats") { Chevron() }
 
         SettingsSection(stringResource(R.string.settings_section_library_sync))
         // library.syncIntervalMinutes (5..1440, default 60) and library.fullReconcileDays (1..90, default 7).
         val minutes = syncInterval.int ?: 60
-        SettingRow(stringResource(R.string.settings_sync_interval), stringResource(R.string.settings_sync_interval_value, intervalLabel(minutes)), syncInterval.scope, tag = "library.syncIntervalMinutes")
-        ChoiceRow(SYNC_INTERVAL_CHOICES.map { it to intervalLabel(it) }, isSelected = { minutes == it }, onSelect = { syncInterval.setInt(it) },
-            describe = { m -> if (m < 60) resources.getQuantityString(R.plurals.a11y_minutes, m, m) else resources.getQuantityString(R.plurals.a11y_hours, m / 60, m / 60) },
-            modifier = Modifier.padding(horizontal = 16.dp))
+        ChoiceDialogRow(
+            stringResource(R.string.settings_sync_interval),
+            SYNC_INTERVAL_CHOICES.map { m -> DialogOption(m, if (m < 60) resources.getQuantityString(R.plurals.a11y_minutes, m, m) else resources.getQuantityString(R.plurals.a11y_hours, m / 60, m / 60)) },
+            selected = minutes, onSelect = { syncInterval.setInt(it) }, scope = syncInterval.scope, tag = "library.syncIntervalMinutes",
+            valueText = stringResource(R.string.settings_sync_interval_value, intervalLabel(minutes)),
+        )
         val days = reconcileDays.int ?: 7
-        SettingRow(stringResource(R.string.settings_full_reconcile), pluralStringResource(R.plurals.settings_full_reconcile_value, days, days), reconcileDays.scope, tag = "library.fullReconcileDays")
-        ChoiceRow(RECONCILE_DAY_CHOICES.map { it to stringResource(R.string.time_days, it) }, isSelected = { days == it }, onSelect = { reconcileDays.setInt(it) },
-            describe = { d -> resources.getQuantityString(R.plurals.a11y_days, d, d) }, modifier = Modifier.padding(horizontal = 16.dp))
-        SwitchRow(stringResource(R.string.settings_search_include_server), searchServer.bool ?: true, { searchServer.setBool(it) }, stringResource(R.string.settings_search_include_server_body), searchServer.scope, tag = "search.includeServer")
+        ChoiceDialogRow(
+            stringResource(R.string.settings_full_reconcile),
+            RECONCILE_DAY_CHOICES.map { d -> DialogOption(d, resources.getQuantityString(R.plurals.a11y_days, d, d)) },
+            selected = days, onSelect = { reconcileDays.setInt(it) }, scope = reconcileDays.scope, tag = "library.fullReconcileDays",
+            valueText = pluralStringResource(R.plurals.settings_full_reconcile_value, days, days),
+        )
+        SwitchRow(stringResource(R.string.settings_search_include_server), searchServer.bool ?: true, { searchServer.setBool(it) }, scope = searchServer.scope, tag = "search.includeServer")
+    }
+}
+
+/**
+ * The love threshold as stars: tapping the third star loves songs rated three or more, so the
+ * stars up to it fill; "Off" turns the bridge off. Each is one radio button ("3 stars, selected").
+ */
+@Composable
+private fun LoveThresholdPicker(threshold: Int?, onSelect: (Int?) -> Unit) {
+    val resources = androidx.compose.ui.platform.LocalResources.current
+    val scheme = MaterialTheme.colorScheme
+    // Off and the stars wrap as two pieces (at a large font, the stars move under Off rather than squeeze).
+    FlowRow(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 8.dp).selectableGroup().testTag("ratings.loveThreshold.stars"),
+        horizontalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically,
+    ) {
+        androidx.compose.material3.FilterChip(
+            selected = threshold == null, onClick = { onSelect(null) },
+            label = { Text(stringResource(R.string.settings_love_threshold_off)) },
+            modifier = Modifier.semantics { role = Role.RadioButton }.testTag("ratings.loveThreshold.off"),
+        )
+        Row { (1..5).forEach { n ->
+            val filled = threshold != null && n <= threshold
+            Box(
+                Modifier.size(48.dp).clip(CircleShape)
+                    .selectable(selected = threshold == n, role = Role.RadioButton, onClick = { onSelect(n) })
+                    .semantics { contentDescription = resources.getQuantityString(R.plurals.a11y_stars, n, n) }
+                    .testTag("ratings.loveThreshold.$n"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(if (filled) HocketIcons.Filled.Star else HocketIcons.Filled.StarOutline, null,
+                    tint = if (filled) scheme.primary else scheme.onSurfaceVariant, modifier = Modifier.size(32.dp))
+            }
+        } }
     }
 }
 
@@ -480,7 +530,7 @@ fun BatterySettingsScreen(nav: NavHostController) {
 
         var expanded by rememberSaveable { mutableStateOf(chosen == SaverLevel.Custom) }
         val turn by animateFloatAsState(if (expanded) 180f else 0f, label = "customiseArrow")
-        SettingRow(stringResource(R.string.settings_battery_customise), stringResource(R.string.settings_battery_customise_body), onClick = { expanded = !expanded }, tag = "battery.customise") {
+        SettingRow(stringResource(R.string.settings_battery_customise), onClick = { expanded = !expanded }, tag = "battery.customise") {
             Icon(HocketIcons.Filled.KeyboardArrowDown, null, Modifier.graphicsLayer { rotationZ = turn })
         }
         AnimatedVisibility(expanded) {
@@ -504,9 +554,10 @@ fun BatterySettingsScreen(nav: NavHostController) {
         SwitchRow(stringResource(R.string.settings_battery_auto), autoOn, { autoSaver.setBool(it) }, scope = autoSaver.scope, tag = "battery.autoEngage")
         if (autoOn) {
             val autoLevel = Saver.parseLevel(autoLevelSetting.raw)?.takeIf { it != SaverLevel.Off } ?: SaverLevel.Medium
-            SettingRow(stringResource(R.string.settings_battery_auto_level), saverLevelName(autoLevel), autoLevelSetting.scope, tag = "battery.autoLevel")
-            val options = listOf(SaverLevel.Light, SaverLevel.Medium, SaverLevel.Max, SaverLevel.Custom).map { it to saverLevelName(it) }
-            ChoiceRow(options, isSelected = { it == autoLevel }, onSelect = { autoLevelSetting.setRaw(Saver.levelValue(it)) }, modifier = Modifier.padding(horizontal = 16.dp))
+            SettingRow(stringResource(R.string.settings_battery_auto_level), scope = autoLevelSetting.scope, tag = "battery.autoLevel")
+            val options = listOf(SaverLevel.Light to 1, SaverLevel.Medium to 2, SaverLevel.Max to 3, SaverLevel.Custom to 0)
+                .map { (level, leaves) -> VisualOption(level, saverLevelName(level)) { selected -> SaverPreview(leaves, selected) } }
+            OptionCards(options, isSelected = { it == autoLevel }, onSelect = { autoLevelSetting.setRaw(Saver.levelValue(it)) }, tag = "battery.autoLevel.choices", previewHeight = 48.dp)
         }
     }
 }

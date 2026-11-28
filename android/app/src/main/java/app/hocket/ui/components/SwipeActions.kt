@@ -96,6 +96,32 @@ fun swipeActionIds(surface: SwipeSurface): Pair<String, String> {
     return id(surface.startToEndKey, setting(surface.startToEndKey).string) to id(surface.endToStartKey, setting(surface.endToStartKey).string)
 }
 
+/** How a swipe action's revealed side looks: its icon on its colours. */
+@Immutable
+class SwipeLook(val icon: ImageVector, val container: Color, val content: Color)
+
+/**
+ * The look of the swipe action [id] ([loved]: "love" on a loved song shows unlove), shared by the
+ * rows and the settings that preview them; null for none or an id without one.
+ */
+@Composable
+fun swipeLook(id: String, loved: Boolean = false): SwipeLook? {
+    val scheme = MaterialTheme.colorScheme
+    return when (id) {
+        ActionIds.REMOVE_FROM_QUEUE -> SwipeLook(HocketIcons.Filled.Delete, scheme.errorContainer, scheme.onErrorContainer)
+        ActionIds.PLAY_NEXT -> SwipeLook(HocketIcons.AutoMirrored.Filled.PlaylistPlay, scheme.primaryContainer, scheme.onPrimaryContainer)
+        ActionIds.PLAY_LATER -> SwipeLook(HocketIcons.AutoMirrored.Filled.QueueMusic, scheme.secondaryContainer, scheme.onSecondaryContainer)
+        ActionIds.ADD_TO_QUEUE -> SwipeLook(HocketIcons.AutoMirrored.Filled.QueueMusic, scheme.primaryContainer, scheme.onPrimaryContainer)
+        ActionIds.LOVE, ActionIds.UNLOVE -> SwipeLook(if (loved || id == ActionIds.UNLOVE) HocketIcons.Filled.FavoriteBorder else HocketIcons.Filled.Favorite, scheme.tertiaryContainer, scheme.onTertiaryContainer)
+        ActionIds.ADD_TO_PLAYLIST -> SwipeLook(HocketIcons.AutoMirrored.Filled.PlaylistAdd, scheme.secondaryContainer, scheme.onSecondaryContainer)
+        ActionIds.STASH -> SwipeLook(HocketIcons.Filled.Inventory2, scheme.tertiaryContainer, scheme.onTertiaryContainer)
+        ActionIds.PREVIEW -> SwipeLook(HocketIcons.Filled.Headphones, scheme.primaryContainer, scheme.onPrimaryContainer)
+        ActionIds.DOWNLOAD -> SwipeLook(HocketIcons.Filled.Download, scheme.primaryContainer, scheme.onPrimaryContainer)
+        ActionIds.SNOOZE, ActionIds.UNSNOOZE -> SwipeLook(HocketIcons.Filled.Snooze, scheme.secondaryContainer, scheme.onSecondaryContainer)
+        else -> null
+    }
+}
+
 /**
  * The [SwipeAction] a swipe setting's [id] means for one song row, or null (none, or nothing to do:
  * "download" on a row that is already downloaded). Everything runs through the core's action
@@ -106,31 +132,35 @@ fun swipeActionIds(surface: SwipeSurface): Pair<String, String> {
 @Composable
 fun trackSwipeAction(id: String, track: TrackSummary, target: ActionTarget, onAddToPlaylist: () -> Unit): SwipeAction? {
     val client = LocalCoreClient.current
-    val scheme = MaterialTheme.colorScheme
     val run = { action: String -> { client.dispatch(Commands.runAction(action, target)) } }
+    // The row's action for [id], in its shared look.
+    @Composable fun action(id: String, dismisses: Boolean = false, run: () -> Unit): SwipeAction {
+        val look = swipeLook(id)!!
+        return SwipeAction(id, actionLabel(id), look.icon, look.container, look.content, dismisses, run)
+    }
     return when (id) {
-        ActionIds.REMOVE_FROM_QUEUE -> SwipeAction(id, actionLabel(id), HocketIcons.Filled.Delete, scheme.errorContainer, scheme.onErrorContainer, dismisses = true, run(id))
-        ActionIds.PLAY_NEXT -> SwipeAction(id, actionLabel(id), HocketIcons.AutoMirrored.Filled.PlaylistPlay, scheme.primaryContainer, scheme.onPrimaryContainer, dismisses = false, run(id))
-        ActionIds.PLAY_LATER -> SwipeAction(id, actionLabel(id), HocketIcons.AutoMirrored.Filled.QueueMusic, scheme.secondaryContainer, scheme.onSecondaryContainer, dismisses = false, run(id))
+        ActionIds.REMOVE_FROM_QUEUE -> action(id, dismisses = true, run = run(id))
+        ActionIds.PLAY_NEXT -> action(id, run = run(id))
+        ActionIds.PLAY_LATER -> action(id, run = run(id))
         // Without the queue section there is no queue to add to: the song goes to the end, as play later.
         ActionIds.ADD_TO_QUEUE -> if (!queueSectionOn()) trackSwipeAction(ActionIds.PLAY_LATER, track, target, onAddToPlaylist)
-            else SwipeAction(id, actionLabel(id), HocketIcons.AutoMirrored.Filled.QueueMusic, scheme.primaryContainer, scheme.onPrimaryContainer, dismisses = false, run(id))
+            else action(id, run = run(id))
         ActionIds.LOVE -> {
-            val action = if (track.loved) ActionIds.UNLOVE else ActionIds.LOVE
-            SwipeAction(action, actionLabel(action), if (track.loved) HocketIcons.Filled.FavoriteBorder else HocketIcons.Filled.Favorite, scheme.tertiaryContainer, scheme.onTertiaryContainer, dismisses = false, run(action))
+            val which = if (track.loved) ActionIds.UNLOVE else ActionIds.LOVE
+            action(which, run = run(which))
         }
-        ActionIds.ADD_TO_PLAYLIST -> SwipeAction(id, actionLabel(id), HocketIcons.AutoMirrored.Filled.PlaylistAdd, scheme.secondaryContainer, scheme.onSecondaryContainer, dismisses = false, onAddToPlaylist)
-        ActionIds.STASH -> SwipeAction(id, actionLabel(id), HocketIcons.Filled.Inventory2, scheme.tertiaryContainer, scheme.onTertiaryContainer, dismisses = false, run(id))
+        ActionIds.ADD_TO_PLAYLIST -> action(id, run = onAddToPlaylist)
+        ActionIds.STASH -> action(id, run = run(id))
         ActionIds.PREVIEW -> {
             val menu = LocalSongMenu.current
-            SwipeAction(id, actionLabel(id), HocketIcons.Filled.Headphones, scheme.primaryContainer, scheme.onPrimaryContainer, dismisses = false) {
+            action(id) {
                 // The preview stops when that menu closes. Don't start one
                 // there is no menu to show it in.
                 if (menu?.open(track, target) == true) client.dispatch(Commands.previewStart(track.ref))
             }
         }
         ActionIds.DOWNLOAD -> if (track.offline == OfflineState.Downloaded) null
-            else SwipeAction(id, actionLabel(id), HocketIcons.Filled.Download, scheme.primaryContainer, scheme.onPrimaryContainer, dismisses = false, run(id))
+            else action(id, run = run(id))
         else -> null
     }
 }

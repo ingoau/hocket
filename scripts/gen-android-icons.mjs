@@ -52,6 +52,8 @@ const SYMBOLS = {
   NestWifiPoint: "nest_wifi_point",
   OpenInNew: "open_in_new", Laptop: "laptop_windows", DesktopWindows: "desktop_windows", Warning: "warning", Equalizer: "equalizer",
   QrCode2: "qr_code_2", QrCodeScanner: "qr_code_scanner",
+  AutoAwesome: "auto_awesome", SwipeLeft: "swipe_left",
+  SwipeRight: "swipe_right", Eco: "eco", Snooze: "snooze", Block: "block", AddCircle: "add_circle",
 };
 
 /** Which glyphs each group emits. AutoMirrored ones flip in right-to-left layouts. */
@@ -79,6 +81,8 @@ const GROUPS = [
     "ChromecastDevice", "NestWifiPoint",
     // Set up another device: the account sheet's entry, and scanning a code at setup.
     "QrCode2", "QrCodeScanner",
+    // Settings: option previews and the swipe and list editors.
+    "AutoAwesome", "Eco", "Snooze", "Block", "AddCircle",
   ] },
   { path: ["Outlined"], fill: false, mirror: false, names: [
     "Album", "BarChart", "Category", "CloudOff", "Download", "FilterAlt", "History", "Home", "Info", "LibraryMusic", "MusicNote",
@@ -93,7 +97,7 @@ const GROUPS = [
     "ChromecastDevice", "NestWifiPoint",
   ] },
   { path: ["AutoMirrored", "Filled"], fill: true, mirror: true, names: [
-    "ArrowBack", "Logout", "PlaylistAdd", "PlaylistPlay", "QueueMusic", "Redo", "Undo",
+    "ArrowBack", "Logout", "PlaylistAdd", "PlaylistPlay", "QueueMusic", "Redo", "Undo", "SwipeLeft", "SwipeRight",
   ] },
   { path: ["AutoMirrored", "Outlined"], fill: false, mirror: true, names: ["QueueMusic"] },
 ];

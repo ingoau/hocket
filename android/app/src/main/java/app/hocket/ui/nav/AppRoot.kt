@@ -1048,6 +1048,7 @@ private fun AppNavHost(nav: NavHostController, transitions: ShellTransitionInfo,
         screen<Route.TranscodingSettings>(transitions) { TranscodingSettingsScreen(nav) }
         screen<Route.ConnectSettings>(transitions) { ConnectSettingsScreen(nav) }
         screen<Route.CustomiseSettings>(transitions) { CustomiseSettingsScreen(nav) }
+        screen<Route.SettingsPage>(transitions) { entry -> app.hocket.ui.screens.settings.SettingsPageScreen(nav, entry.toRoute<Route.SettingsPage>().page) }
         screen<Route.About>(transitions) { AboutScreen(nav) }
         screen<Route.SettingsAccount>(transitions) { AccountSettingsScreen(nav) }
         screen<Route.SettingsAppearance>(transitions) { AppearanceSettingsScreen(nav) }
