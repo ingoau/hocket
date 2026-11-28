@@ -280,11 +280,14 @@
 @container (max-width: 960px) { .page-stats .stat-top { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .page-stats .stat-heroes { grid-column: 1 / -1; grid-template-rows: none; grid-template-columns: 1fr 1fr; } .page-stats .stat-hero:first-child { border-radius: var(--shape-xl) var(--shape-xs) var(--shape-xs) var(--shape-xl); } .page-stats .stat-hero:last-child { border-radius: var(--shape-xs) var(--shape-xl) var(--shape-xl) var(--shape-xs); } .page-stats .stat-tops { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
 
 /* ---- Mini player window: compact, with a round play button ------------------ */
-.mini .art-wrap { width: 104px; padding: 8px 0 8px 8px; }
-.mini .art { border-radius: var(--shape-md); }
-.mini .body { padding: 8px 10px 6px 12px; }
-.mini .title { font-weight: 700; }
-.mini .btn.mini-play { width: 32px; height: 32px; background: var(--accent); color: var(--accent-fg); border-radius: 50%; transition: border-radius var(--dur-spring) var(--spring-fast), transform var(--dur-spring) var(--spring-bouncy), filter var(--dur-short) var(--ease-emphasized); }
+/* The artwork is square at any height the window takes (96 to 160px), and the text, seek and
+   controls fit down to the smallest. */
+.mini .art-wrap { width: calc(100vh - 8px); padding: 8px 0 8px 8px; }
+.mini .art { display: block; border-radius: var(--shape-md); }
+.mini .body { padding: 6px 10px 6px 12px; gap: 2px; }
+.mini .title { font-weight: 700; line-height: 1.3; }
+.mini .artist { line-height: 1.3; }
+.mini .btn.mini-play { width: 28px; height: 28px; background: var(--accent); color: var(--accent-fg); border-radius: 50%; transition: border-radius var(--dur-spring) var(--spring-fast), transform var(--dur-spring) var(--spring-bouncy), filter var(--dur-short) var(--ease-emphasized); }
 .mini .btn.mini-play:hover { background: var(--accent); filter: brightness(1.08); }
 
 /* ---- Reduced motion: no spatial feedback here either ------------------------ */

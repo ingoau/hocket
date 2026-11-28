@@ -41,6 +41,10 @@ import { previewPosition, seekFraction } from "../lib/preview-seek";
 /** Where focus goes back to when the menu closes. */
 let returnFocus: HTMLElement | null = null;
 let openedByKeyboard = false;
+/** The button the open menu came from: a press on it closes the menu, and its click doesn't reopen it. */
+let opener: HTMLElement | null = null;
+/** That button, while its press has just closed the menu. */
+let closedFrom: HTMLElement | null = null;
 
 /** Where the right button went down, while it's held. */
 let rightHeld: { x: number; y: number } | null = null;
@@ -58,8 +62,9 @@ const LIBRARY_PIN_IDS = new Set(["pinToLibrary", "unpinFromLibrary"]);
 const CHORD_OF: Record<string, string> = { removeFromPlaylist: "remove", removeFromQueue: "remove" };
 
 /** Open the menu for a target at the pointer. Call from an onContextMenu handler. */
-export async function openContextMenu(e: { clientX: number; clientY: number; preventDefault(): void }, target: ActionTarget, context?: ActionContext, items?: MenuItem[]): Promise<void> {
+export async function openContextMenu(e: MenuOpening, target: ActionTarget, context?: ActionContext, items?: MenuItem[]): Promise<void> {
   e.preventDefault();
+  opener = e.opener ?? null;
   const keyboard = openedByKeyboard;
   openedByKeyboard = false;
   const active = document.activeElement;
@@ -70,26 +75,49 @@ export async function openContextMenu(e: { clientX: number; clientY: number; pre
   if (!actions.length && !items?.length) return;
   // Still held once the actions are in (Linux and macOS open on the press; Windows on the release).
   pressedAt = keyboard ? null : rightHeld;
-  useApp.getState().openContextMenu({ x: e.clientX, y: e.clientY, target, actions, items, context, keyboard, facts });
+  useApp.getState().openContextMenu({ x: e.clientX, y: e.clientY, above: e.above, target, actions, items, context, keyboard, facts });
+}
+
+/** Where a menu opens: at the pointer, or under a button (and above it when there's no room under it). */
+interface MenuOpening {
+  clientX: number;
+  clientY: number;
+  preventDefault(): void;
+  /** The button's top: the menu's bottom when it doesn't fit under the button. */
+  above?: number;
+  opener?: HTMLElement;
+}
+
+/** A "More" button's opening: under the button, or above it near the window's bottom (the player bar's). */
+function fromButton(e: React.MouseEvent<HTMLElement>): MenuOpening | undefined {
+  const button = e.currentTarget;
+  openedByKeyboard = e.detail === 0;
+  // The press that closed this button's menu: its click leaves it closed, as a native menu button does.
+  if (closedFrom === button && !openedByKeyboard) {
+    closedFrom = null;
+    e.preventDefault();
+    return undefined;
+  }
+  closedFrom = null;
+  const r = button.getBoundingClientRect();
+  return { clientX: Math.round(r.left), clientY: Math.round(r.bottom + 2), above: Math.round(r.top - 2), opener: button, preventDefault: () => e.preventDefault() };
 }
 
 /** A menu of renderer-run items only (things the registry has no target for: genres, filters, Home sections). */
-export function openItemsMenu(e: { clientX: number; clientY: number; preventDefault(): void }, items: MenuItem[]): void {
+export function openItemsMenu(e: MenuOpening, items: MenuItem[]): void {
   void openContextMenu(e, { type: "none" }, undefined, items);
 }
 
 /** As [openItemsMenu], under a "More" button. */
 export function openItemsMenuFromButton(e: React.MouseEvent<HTMLElement>, items: MenuItem[]): void {
-  const r = e.currentTarget.getBoundingClientRect();
-  openedByKeyboard = e.detail === 0;
-  openItemsMenu({ clientX: Math.round(r.left), clientY: Math.round(r.bottom + 2), preventDefault: () => e.preventDefault() }, items);
+  const at = fromButton(e);
+  if (at) openItemsMenu(at, items);
 }
 
 /** A "More" button's menu: under the button, first item active when opened from the keyboard. */
 export function openMenuFromButton(e: React.MouseEvent<HTMLElement>, target: ActionTarget, context?: ActionContext, items?: MenuItem[]): void {
-  const r = e.currentTarget.getBoundingClientRect();
-  openedByKeyboard = e.detail === 0;
-  void openContextMenu({ clientX: Math.round(r.left), clientY: Math.round(r.bottom + 2), preventDefault: () => e.preventDefault() }, target, context, items);
+  const at = fromButton(e);
+  if (at) void openContextMenu(at, target, context, items);
 }
 
 /**
@@ -135,7 +163,7 @@ export function ContextMenu() {
   // The menu has no exit animation (menus.css), so a closed one unmounts at once. Everything
   // below that positions, focuses or listens is keyed on the live state.
   const { value: menu, motion, exitProps } = usePresence(live, ref);
-  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const [pos, setPos] = useState({ x: 0, y: 0, up: false });
   const [active, setActive] = useState(-1);
   /** The active cell was reached by keyboard (it gets a ring), not the pointer. */
   const [keys, setKeys] = useState(false);
@@ -172,8 +200,10 @@ export function ContextMenu() {
     // Layout size, not getBoundingClientRect(): placement ignores any transform on the menu.
     const r = { width: ref.current.offsetWidth, height: ref.current.offsetHeight };
     const x = Math.min(live.x, window.innerWidth - r.width - 6);
-    const y = Math.min(live.y, window.innerHeight - r.height - 6);
-    setPos({ x: Math.max(4, x), y: Math.max(4, y) });
+    // Under its button when it fits, else above it when that fits (the player bar's), else as low as it goes.
+    const fitsBelow = live.y + r.height <= window.innerHeight - 6;
+    const y = !fitsBelow && live.above !== undefined && live.above - r.height >= 4 ? live.above - r.height : Math.min(live.y, window.innerHeight - r.height - 6);
+    setPos({ x: Math.max(4, x), y: Math.max(4, y), up: y < live.y });
     setSub(null);
     cancelPendingSub();
     setKeys(!!live.keyboard);
@@ -181,6 +211,11 @@ export function ContextMenu() {
     setActive(live.keyboard ? firstEnabled(ref.current) : -1);
     ref.current.focus();
   }, [live]);
+
+  // In a window too short for all of it the menu scrolls: the keyboard's item stays in view.
+  useEffect(() => {
+    if (keys && active >= 0) document.getElementById(`cm-item-${active}`)?.scrollIntoView({ block: "nearest" });
+  }, [keys, active]);
 
   // Closing the menu (or opening a different one) ends the preview.
   useEffect(() => {
@@ -240,14 +275,26 @@ export function ContextMenu() {
     const onDown = (e: MouseEvent) => {
       const at = e.target as Element | null;
       if (at?.closest?.("[data-context-layer]") || (subOpen.current && at?.closest?.('[data-testid="toasts"]'))) return;
+      // A press on the button that opened it closes it, and that button's click then leaves it closed.
+      if (opener && at instanceof Node && opener.contains(at)) {
+        closedFrom = opener;
+        // Only for this press's own click (which comes straight after its release), if any.
+        window.addEventListener("mouseup", () => window.setTimeout(() => { closedFrom = null; }), { once: true, capture: true });
+      }
       close();
+    };
+    // Scrolling what's under it would leave it floating beside nothing: it goes, as a native menu does.
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.target as Element | null)?.closest?.("[data-context-layer]")) close();
     };
     const onBlur = () => close();
     window.addEventListener("mousedown", onDown, true);
+    window.addEventListener("wheel", onWheel, { capture: true, passive: true });
     window.addEventListener("blur", onBlur);
     window.addEventListener("resize", onBlur);
     return () => {
       window.removeEventListener("mousedown", onDown, true);
+      window.removeEventListener("wheel", onWheel, true);
       window.removeEventListener("blur", onBlur);
       window.removeEventListener("resize", onBlur);
     };
@@ -590,7 +637,7 @@ export function ContextMenu() {
         aria-label={facts?.header?.title}
         aria-activedescendant={active >= 0 ? `cm-item-${active}` : undefined}
         tabIndex={-1}
-        style={{ left: pos.x, top: pos.y }}
+        style={{ left: pos.x, top: pos.y, transformOrigin: pos.up ? "bottom left" : undefined }}
         onKeyDown={onKey}
         onMouseUp={(e) => {
           // The mouse's back button: back out of the submenu, else close the menu.

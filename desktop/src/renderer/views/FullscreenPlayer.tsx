@@ -114,7 +114,7 @@ const WIDE_IMMERSIVE = "(min-aspect-ratio: 3/2) and (min-height: 480px)";
 /** Room for the controls under a full-width artwork: at most 2:3. */
 const TALL_IMMERSIVE = "(max-aspect-ratio: 2/3)";
 /** Room for the artwork column beside a view; anything narrower, shorter or taller than wide stacks. */
-const COLUMNS = "(min-width: 1000px) and (min-height: 600px) and (min-aspect-ratio: 1/1)";
+const COLUMNS = "(min-width: 900px) and (min-height: 600px) and (min-aspect-ratio: 1/1)";
 
 export type FullscreenLayout = "columns" | "immersive" | "stacked";
 

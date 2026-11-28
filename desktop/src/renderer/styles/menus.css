@@ -5,6 +5,8 @@
    Play filled with the accent); the rating is a row of small stars. Highlights stay the opaque tonal
    --state-selected, never a tint stacked on the tinted surface (see the menu notes in global.css). */
 .menu.cm { width: 256px; min-width: 0; max-width: calc(100vw - 8px); padding: 6px; border-radius: 16px; display: flex; flex-direction: column; gap: 1px; }
+/* Never taller than the window: a long menu in a short window scrolls rather than running off it. */
+.menu.cm:not(.cm-sub) { max-height: calc(100vh - 8px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 .menu.cm .mi { flex: 0 0 auto; height: 28px; padding: 0 8px; gap: 8px; border-radius: 9px; }
 .menu.cm .mi.cm-preview { position: relative; overflow: hidden; }
 .menu.cm .cm-preview-bar { position: absolute; left: 0; top: 0; bottom: 0; background: color-mix(in srgb, var(--accent) 42%, transparent); pointer-events: none; z-index: 0; }

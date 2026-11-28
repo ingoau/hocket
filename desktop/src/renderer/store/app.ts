@@ -62,6 +62,8 @@ export interface MenuItem {
 export interface ContextMenuState {
   x: number;
   y: number;
+  /** Opened from a button: where the menu's bottom goes when there is no room under it (the button's top). */
+  above?: number;
   target: ActionTarget;
   actions: ActionDescriptor[];
   /** Renderer-run items shown above the registry's actions (or alone). */
