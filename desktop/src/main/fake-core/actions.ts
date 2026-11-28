@@ -130,6 +130,8 @@ export interface ActionContext {
   anyDownloaded?: boolean;
   savedQueuePinned?: boolean;
   inPlaylist?: boolean;
+  /** A song of the target is in the stash (the core's `in_stash`). */
+  inStash?: boolean;
   /** One album, artist, playlist or song: whether it's pinned to the Library (undefined otherwise). */
   libraryPinned?: boolean;
   /** `library.pins` is at its limit (the core's LIBRARY_PINS_MAX). */
@@ -167,6 +169,7 @@ export function describeActions(surface: string, target: ActionTarget, order: st
       if (e.id === "pinSavedQueue" && ctx.savedQueuePinned) return false;
       if (e.id === "unpinSavedQueue" && !ctx.savedQueuePinned) return false;
       if (e.id === "removeFromPlaylist" && !ctx.inPlaylist) return false;
+      if (e.id === "removeFromStash" && !ctx.inStash) return false;
       // Like the core: offered for one album, artist, playlist or song; the one that doesn't apply is disabled.
       if ((e.id === "pinToLibrary" || e.id === "unpinFromLibrary") && ctx.libraryPinned === undefined) return false;
       if (e.id === "resumeHere" && !ctx.hasResumeOffer) return false;

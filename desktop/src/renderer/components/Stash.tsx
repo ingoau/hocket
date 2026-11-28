@@ -137,6 +137,12 @@ function StashPopover({ items, exitProps, motion, close }: { items: StashItem[];
     showToast(next ? (n === 1 ? t("stash.addedNextOne") : t("stash.addedNext", { count: n })) : n === 1 ? t("stash.addedOne") : t("stash.added", { count: n }));
   };
   const remove = (entryIds: string[]) => bridge().dispatch({ type: "stashRemove", data: { entry_ids: entryIds } });
+  /** Once these entries leave the list, focus the row after (or before) the last of them. */
+  const focusAfterRemoving = (entryIds: string[]) => {
+    const gone = new Set(entryIds);
+    const at = Math.max(...items.map((x, i) => (gone.has(x.entryId) ? i : -1)));
+    refocus.current = items.slice(at + 1).find((x) => !gone.has(x.entryId))?.entryId ?? [...items.slice(0, at)].reverse().find((x) => !gone.has(x.entryId))?.entryId;
+  };
   // Two-finger swipes on a row run the swipe.stash.* settings' actions on that one song, whatever is
   // selected (remove by default, which slides the row out; the core's toast offers Undo).
   const swipeTuning = useSurfaceTuning("stash");
@@ -172,12 +178,18 @@ function StashPopover({ items, exitProps, motion, close }: { items: StashItem[];
       const ref = refOf(item.track);
       const run = () => runRowSwipe(a, { type: "tracks", data: { tracks: [ref] } }, ref, row);
       if (!a.dismisses) return run();
+      // Focus on the row (it has it when the popover opens) moves on, so Escape and the arrows still work.
+      if (row?.contains(document.activeElement)) focusAfterRemoving([id]);
       setLeaving({ id, side });
       // Let the row slide out before the list drops it.
       window.setTimeout(run, reducedMotion ? 0 : 200);
       window.setTimeout(() => setLeaving((l) => (l?.id === id ? undefined : l)), 1500);
     },
   });
+  // Gone from the list: done leaving (an Undo brings it back at rest).
+  useEffect(() => {
+    if (leaving && !live.has(leaving.id)) setLeaving(undefined);
+  }, [live, leaving]);
   /** Where a row's content is drawn while swiped or sliding out, and what it uncovers. */
   const swipeOf = (item: StashItem): { reveal: RowSwipeAction | null; side: Side; armed: boolean; style: React.CSSProperties } | undefined => {
     if (leaving?.id === item.entryId) {
@@ -205,9 +217,7 @@ function StashPopover({ items, exitProps, motion, close }: { items: StashItem[];
   };
   /** Remove from the keyboard: focus moves to the row after (or before) the last one removed. */
   const removeFromKeyboard = (entryIds: string[]) => {
-    const gone = new Set(entryIds);
-    const at = Math.max(...items.map((x, i) => (gone.has(x.entryId) ? i : -1)));
-    refocus.current = items.slice(at + 1).find((x) => !gone.has(x.entryId))?.entryId ?? [...items.slice(0, at)].reverse().find((x) => !gone.has(x.entryId))?.entryId;
+    focusAfterRemoving(entryIds);
     remove(entryIds);
   };
   return (
@@ -277,7 +287,7 @@ function StashPopover({ items, exitProps, motion, close }: { items: StashItem[];
               onDragEnd={() => setDrag(undefined)}
             >
               {swiped?.reveal ? <SwipeReveal action={swiped.reveal} side={swiped.side} armed={swiped.armed} /> : null}
-              <span className="stash-row-body" style={swiped?.style}>
+              <div className="stash-row-body" style={swiped?.style}>
               <Icon name="grip" size={16} className="stash-grip" />
               <Artwork id={item.track.coverArt ?? undefined} size={ARTWORK_SIZES.thumb} className="art" />
               <span className="stash-text">
@@ -296,7 +306,7 @@ function StashPopover({ items, exitProps, motion, close }: { items: StashItem[];
               >
                 <Icon name="close" size={16} />
               </button>
-              </span>
+              </div>
             </li>
           );
         })}

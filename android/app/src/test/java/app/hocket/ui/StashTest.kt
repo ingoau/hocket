@@ -27,6 +27,8 @@ import app.hocket.core.Commands
 import app.hocket.core.SettingKeys
 import app.hocket.core.api.Command
 import app.hocket.core.api.CommandStashAddInner
+import app.hocket.core.api.CommandStashRestoreInner
+import app.hocket.ui.a11y.performCustomAction
 import app.hocket.ui.nav.AppRoot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -151,6 +153,13 @@ class StashTest {
         compose.waitUntil(5_000) { core.client.stash.value.size == 1 }
         compose.waitForIdle()
         compose.onAllNodesWithTag("stash.row").assertCountEquals(1)
+        // TalkBack has the same as a row action.
+        val stays = core.client.stash.value.single()
+        compose.onAllNodesWithTag("stash.row")[0].performCustomAction(compose, "Remove from stash")
+        compose.waitUntil(5_000) { core.client.stash.value.isEmpty() }
+        core.client.dispatch(Command.StashRestore(CommandStashRestoreInner(listOf(stays.entryId))))
+        compose.waitUntil(5_000) { core.client.stash.value.size == 1 }
+        compose.waitForIdle()
         // The stash's own setting: swiping right now loves (or unloves), and the song stays.
         core.client.dispatch(Commands.setSetting(SettingKeys.SWIPE_STASH_START_TO_END, "\"${ActionIds.LOVE}\""))
         compose.waitUntil(5_000) { core.client.settings.value[SettingKeys.SWIPE_STASH_START_TO_END]?.value == "\"${ActionIds.LOVE}\"" }

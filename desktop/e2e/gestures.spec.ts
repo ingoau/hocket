@@ -96,6 +96,8 @@ test.describe("trackpad swipes", () => {
 
     // Short of the threshold: springs back.
     await swipeOver(page, rows.first(), -width * 0.08);
+    await expect(rows.first()).not.toHaveClass(/swiping/);
+    await page.waitForTimeout(500);
     await expect(rows).toHaveCount(3);
 
     // Left: out of the stash, with the core's Undo.
@@ -104,6 +106,8 @@ test.describe("trackpad swipes", () => {
     await expect(rows).toHaveCount(2);
     await expect(page.locator(`[data-testid=stash-row][data-entry="${first}"]`)).toHaveCount(0);
     await expect(page.getByTestId("toast").filter({ hasText: "Removed 1 song from the stash" })).toBeVisible();
+    // Focus moved on to the next row, so the keyboard still works there.
+    await expect(rows.first()).toBeFocused();
 
     // Right, on a row while another is selected: that row goes, the selection stays.
     await rows.first().click();
@@ -114,10 +118,19 @@ test.describe("trackpad swipes", () => {
     await expect(page.locator(`[data-testid=stash-row][data-entry="${second}"]`)).toHaveCount(0);
     await expect(rows.first()).toHaveClass(/selected/);
 
+    // Undo brings it back at rest, swipeable again.
+    await page.getByTestId("toast").filter({ hasText: "Removed 1 song from the stash" }).last().getByTestId("toast-action").click();
+    const back = page.locator(`[data-testid=stash-row][data-entry="${second}"]`);
+    await expect(back).toHaveCount(1);
+    await expect(back).not.toHaveClass(/swiping/);
+
     // The stash's own setting: nothing for a swipe right, and the song stays.
     await page.evaluate(() => window.hocket.dispatch({ type: "setSetting", data: { key: "swipe.stash.startToEnd", value: JSON.stringify("none") } }));
-    await swipeOver(page, rows.first(), width * 0.5);
-    await expect(rows).toHaveCount(1);
+    await page.waitForTimeout(300);
+    await swipeOver(page, back, width * 0.5);
+    await expect(back).not.toHaveClass(/swiping/);
+    await page.waitForTimeout(500);
+    await expect(rows).toHaveCount(2);
   });
 
   test("a swipe over the page goes back; with page swipes off it does not", async ({ hocket }) => {

@@ -3307,6 +3307,7 @@ export class FakeCore implements CoreHandle {
       anyDownloaded,
       savedQueuePinned: sq?.pinned,
       inPlaylist: true,
+      inStash: target.type === "tracks" && this.stashItems().some((x) => target.data.tracks.some((r) => r.id === x.track.id)),
       libraryPinned: this.libraryPinned(target),
       libraryFull: this.libraryPins().length >= 200,
     });
