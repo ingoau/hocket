@@ -454,9 +454,9 @@ fun AlbumDetailScreen(nav: NavHostController, id: String, embedded: Boolean = fa
         overlay = {
             SelectionDrawer(Modifier.matchParentSize(), kinds = paneSelectionKinds(embedded),
                 onSelectAll = tracks?.takeIf { it.isNotEmpty() }?.let { list -> { client.selectTracks(list.map { it.ref }) } })
-            // Opens on the song that's playing, when it's this album's.
+            // Opens on the song that's playing when it's this album's, else past an intro.
             AlbumPreviewOverlay(preview, previewTracks, a.coverArt, a.artist,
-                startIndex = previewTracks.indexOfFirst { it.id == nowPlaying?.track?.id }.coerceAtLeast(0),
+                startIndex = albumPreviewStart(previewTracks, nowPlaying?.track?.id),
                 onPlayFrom = { i -> client.dispatch(Commands.playContext(context, startIndex = i)) })
         },
     ) {
