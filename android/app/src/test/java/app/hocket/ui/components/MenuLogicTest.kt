@@ -143,6 +143,18 @@ class MenuLogicTest {
     }
 
     @Test
+    fun theSavedQueuePinIsOneRowAndLibraryKeepsBothHalves() {
+        val saved = CoreMenu(listOf(
+            row(ActionIds.RESTORE_SAVED_QUEUE, MenuSection.Organise),
+            item(ActionIds.PIN_SAVED_QUEUE, MenuSection.Organise, false, d(ActionIds.PIN_SAVED_QUEUE), d(ActionIds.UNPIN_SAVED_QUEUE)),
+            item(ActionIds.ADD_TO_LIBRARY, MenuSection.Organise, false, d(ActionIds.ADD_TO_LIBRARY), d(ActionIds.REMOVE_FROM_LIBRARY)),
+        ))
+        assertEquals(listOf(ActionIds.RESTORE_SAVED_QUEUE, ActionIds.UNPIN_SAVED_QUEUE, ActionIds.ADD_TO_LIBRARY, ActionIds.REMOVE_FROM_LIBRARY), sheetLayout(saved, queuePinned = true).primary.map { it.key })
+        assertEquals(listOf(ActionIds.RESTORE_SAVED_QUEUE, ActionIds.PIN_SAVED_QUEUE, ActionIds.ADD_TO_LIBRARY, ActionIds.REMOVE_FROM_LIBRARY), sheetLayout(saved, queuePinned = false).primary.map { it.key })
+        assertEquals(listOf(ActionIds.RESTORE_SAVED_QUEUE, ActionIds.PIN_SAVED_QUEUE, ActionIds.ADD_TO_LIBRARY, ActionIds.REMOVE_FROM_LIBRARY), sheetLayout(saved).primary.map { it.key })
+    }
+
+    @Test
     fun aMenuWithNothingInTheShortListPromotesMore() {
         val l = sheetLayout(CoreMenu(listOf(row(ActionIds.RESTORE_SAVED_QUEUE, MenuSection.Organise, folded = true), row(ActionIds.DELETE_SAVED_QUEUE, MenuSection.Danger))))
         assertEquals(listOf(ActionIds.RESTORE_SAVED_QUEUE), l.primary.map { it.key })

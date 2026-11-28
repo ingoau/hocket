@@ -141,7 +141,9 @@ enum class DrawerValue { Hidden, Peek, Open }
  * content clear of it.
  */
 @Composable
-fun SelectionDrawer(modifier: Modifier = Modifier, onSelectAll: (() -> Unit)? = null, context: String? = null, onRemoveFromContext: (() -> Unit)? = null, kinds: Set<SelectionKind>? = null, onPeekHeight: ((Int) -> Unit)? = null, screen: MenuScreen = MenuScreen.List) {
+fun SelectionDrawer(modifier: Modifier = Modifier, onSelectAll: (() -> Unit)? = null, context: String? = null, onRemoveFromContext: (() -> Unit)? = null, kinds: Set<SelectionKind>? = null, onPeekHeight: ((Int) -> Unit)? = null, screen: MenuScreen = MenuScreen.List,
+    /** On an artist's page: one of its own songs opens its menu as the page's (no Go to artist); anything else as a list's. */
+    pageArtistId: String? = null) {
     val client = LocalCoreClient.current
     val selectionAll by client.selection.collectAsStateWithLifecycleCompat()
     val kind by client.selectionKind.collectAsStateWithLifecycleCompat()
@@ -153,7 +155,7 @@ fun SelectionDrawer(modifier: Modifier = Modifier, onSelectAll: (() -> Unit)? = 
     if (selection.active) held[0] = selection
     LaunchedEffect(selection.active) { if (selection.active) leaving = true }
     if (selection.active || leaving) {
-        Drawer(selection.active, held[0], kind, onSelectAll, context, onRemoveFromContext, modifier, onPeekHeight, screen) { leaving = false }
+        Drawer(selection.active, held[0], kind, onSelectAll, context, onRemoveFromContext, modifier, onPeekHeight, screen, pageArtistId) { leaving = false }
     }
 }
 
@@ -168,6 +170,7 @@ private fun Drawer(
     modifier: Modifier,
     onPeekHeight: ((Int) -> Unit)?,
     screen: MenuScreen,
+    pageArtistId: String?,
     onHidden: () -> Unit,
 ) {
     val client = LocalCoreClient.current
@@ -176,8 +179,10 @@ private fun Drawer(
     val resources = androidx.compose.ui.platform.LocalResources.current
     val dot = stringResource(R.string.dot_separator)
     val songs = kind == SelectionKind.Tracks || kind == SelectionKind.QueueItems
-    // The core's menu for the selection; its actions also make the peek's quick buttons.
-    var coreMenu by remember { mutableStateOf(CoreMenu(emptyList())) }
+    // The core's menu for the selection (with the selection and kind it is for); its actions also
+    // make the peek's quick buttons.
+    var fetched by remember { mutableStateOf<Fetched?>(null) }
+    val coreMenu = fetched?.menu ?: CoreMenu(emptyList())
     val actions = remember(coreMenu) { coreMenu.items.flatMap { it.actions } }
     var playlistPicker by remember { mutableStateOf(false) }
     var rating by remember { mutableStateOf(false) }
@@ -186,28 +191,38 @@ private fun Drawer(
     val unknownArtist = stringResource(R.string.unknown_artist)
     val selectedCount = stringResource(R.string.selected_count, selection.count)
     // The open drawer's menu: one item's own, or several songs'; worked out again as the selection changes.
-    val menu by produceState<DrawerMenu?>(null, selection, kind, pins) {
+    // With the selection and kind it was worked out for.
+    val resolved by produceState<Pair<Pair<Selection, SelectionKind>, DrawerMenu?>?>(null, selection, kind, pins) {
         if (!active) return@produceState
-        value = singleMenu(client, selection, kind, context, pins, resources, dot, unknownArtist, selectedCount)
-            ?: if (songs) DrawerMenu(selectionSubject(client, selection, kind, context, resources, dot)) else null
+        value = (selection to kind) to (singleMenu(client, selection, kind, context, pins, resources, dot, unknownArtist, selectedCount)
+            ?: if (songs) DrawerMenu(selectionSubject(client, selection, kind, context, resources, dot)) else null)
     }
-    // Asked for as what the open drawer's menu shows: one item's own (its info row), or several songs'.
+    val menu = resolved?.second
+    // The core's menu is asked for only once the drawer's menu is known for this selection (one
+    // item's own, with its info row, or several songs'), so the open sheet never re-folds.
+    val ready = resolved?.first == (selection to kind)
     val menuKind = menu?.subject?.kind ?: if (songs) MenuKind.Songs else MenuKind.Other
     val menuCount = menu?.subject?.count ?: selection.count
     val menuInfo = menu?.track != null || menu?.album != null
-    val fetchMenu by rememberUpdatedState<suspend (ActionTarget) -> CoreMenu> { target -> client.itemMenu(target, menuKind, menuCount, screen, hasInfo = menuInfo) }
-    LaunchedEffect(selection, kind, menuKind, menuCount, menuInfo) {
-        if (active) coreMenu = fetchMenu(client.selectionTarget())
+    val menuScreen = if (pageArtistId == null) screen else if (menu?.track?.artistId == pageArtistId) MenuScreen.ArtistPage else MenuScreen.List
+    val fetchMenu by rememberUpdatedState<suspend (ActionTarget) -> CoreMenu> { target -> client.itemMenu(target, menuKind, menuCount, menuScreen, hasInfo = menuInfo) }
+    LaunchedEffect(selection, kind, ready, menuKind, menuCount, menuInfo, menuScreen) {
+        if (active && ready) fetched = Fetched(selection to kind, menu, fetchMenu(client.selectionTarget()))
     }
     LaunchedEffect(Unit) {
         client.actionsChanged.collectLatest {
             if (!client.selection.value.active) return@collectLatest
+            val was = fetched ?: return@collectLatest
             val target = client.selectionTarget()
             val fresh = fetchMenu(target)
             // The selection changed meanwhile: its own fetch (above) has the answer.
-            if (client.selectionTarget() == target) coreMenu = fresh
+            if (client.selectionTarget() == target && fetched?.key == was.key) fetched = was.copy(menu = fresh)
         }
     }
+    // The open sheet shows the drawer's menu with the core's menu fetched for it, switching to the
+    // next selection's only once both are known (the live header while they match: a download
+    // toggled there changes the pins).
+    val shownMenu = fetched?.let { f -> if (ready && f.key == resolved?.first) menu else f.drawer }
     // What one item's Song info / Album info opened (over the drawer, which keeps the selection).
     var songInfo by remember { mutableStateOf<TrackSummary?>(null) }
     var albumInfo by remember { mutableStateOf<Album?>(null) }
@@ -394,12 +409,13 @@ private fun Drawer(
                         .focusGroup()
                         .verticalScroll(rememberScrollState()),
                 ) {
-                    val m = menu
+                    val m = shownMenu
                     if (m != null) {
                         val s = m.subject
                         // A fresh sheet per selection, not per change in what it shows: the item's own
                         // Download toggle changes the pins, which mustn't reset the sheet (or stop a preview).
-                        key(kind, selection.inverted, selection.ids, s.kind) {
+                        val shownFor = fetched?.key
+                        key(shownFor?.second, shownFor?.first?.inverted, shownFor?.first?.ids, s.kind) {
                             MenuSheet(
                                 s, client.selectionTarget(), coreMenu,
                                 extras = listOfNotNull(onRemoveFromContext?.takeIf { context != null && songs }?.let { remove ->
@@ -418,7 +434,7 @@ private fun Drawer(
                                 resetKey = menuResets,
                             )
                         }
-                    } else if (rest.isNotEmpty()) {
+                    } else if (m == null && fetched != null && rest.isNotEmpty()) {
                         Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             rest.forEachIndexed { i, a ->
                                 MenuRow(AnnotatedString(label(a)), icon(a), connectedShape(i, rest.size), enabled = a.enabled, destructive = a.destructive, tag = "selection.action.${a.id}") { run(a) }
@@ -531,6 +547,9 @@ internal suspend fun selectionSubject(client: CoreClient, selection: Selection, 
     }
     return songsSubject(count, tracks, context, resources, dot, removeFromQueue = kind == SelectionKind.QueueItems)
 }
+
+/** The core's menu for a selection (its [key]) and the drawer's menu it was asked for. */
+private data class Fetched(val key: Pair<Selection, SelectionKind>, val drawer: DrawerMenu?, val menu: CoreMenu)
 
 /**
  * The open drawer's menu: its header, and what one item's info row opens (the song, or the album).

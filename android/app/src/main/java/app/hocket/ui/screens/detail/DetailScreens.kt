@@ -649,7 +649,7 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
     val playTop = { i: Int -> top?.let { list -> client.dispatch(Commands.playTracks(list.map { it.ref }, i, ar.name)) } }
     // [swipe] off where the rows page sideways (the page's shelf), so a horizontal drag scrolls it.
     val topRow = @Composable { i: Int, t: Track, segment: Pair<Int, Int>, swipe: Boolean, modifier: Modifier ->
-        TrackRow(t.toSummary(), onClick = { playTop(i) }, onMore = { songMenu.open(t.toSummary(), screen = MenuScreen.ArtistPage) }, nowPlaying = nowPlaying?.track?.id == t.id, segment = segment, rank = i + 1,
+        TrackRow(t.toSummary(), onClick = { playTop(i) }, onMore = { songMenu.open(t.toSummary(), screen = if (t.artistId == id) MenuScreen.ArtistPage else MenuScreen.List) }, nowPlaying = nowPlaying?.track?.id == t.id, segment = segment, rank = i + 1,
             subtitle = listOfNotNull(t.album, formatClock(t.durationMs.toLong())).joinToString(dot), showDuration = false, nowPlayingMark = false,
             swipe = if (swipe) app.hocket.ui.components.SwipeSurface.List else null, modifier = modifier)
     }
@@ -679,6 +679,8 @@ fun ArtistDetailScreen(nav: NavHostController, id: String, embedded: Boolean = f
             }
         }
         null -> DetailScaffold(nav, embedded, ar.name, ar.coverArt, roundArtwork = true, shareKey = shareKey,
+            // A song of this artist's opens its menu as the page's (no Go to artist); a featured one by someone else keeps it.
+            overlay = { SelectionDrawer(Modifier.matchParentSize(), kinds = paneSelectionKinds(embedded), pageArtistId = id) },
             barActions = { DetailLoveButton(ar.loved, onToggle = { client.dispatch(Commands.setArtistLoved(ar.id, it)) }) },
             below = { HeroLine(counts.ifEmpty { if (ar.albumCount == 0u && ar.songCount > 0u) pluralStringResource(R.plurals.saved_tracks, ar.songCount.toInt(), ar.songCount.toInt()) else pluralStringResource(R.plurals.library_count_albums, ar.albumCount.toInt(), ar.albumCount.toInt()) }, Modifier.padding(top = 4.dp), style = MaterialTheme.typography.bodySmall) },
             heroActions = {

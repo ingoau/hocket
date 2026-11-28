@@ -277,6 +277,8 @@ fun sheetLayout(
     canGoToAlbum: Boolean = false,
     canGoToArtist: Boolean = false,
     snoozed: Boolean? = null,
+    /** Whether the saved queue the menu is for is pinned (null: not a saved queue, or not known). */
+    queuePinned: Boolean? = null,
 ): SheetLayout {
     val replaced = extras.mapNotNull { it.replaces }.toSet()
     val play = mutableListOf<ActionDescriptor>()
@@ -313,10 +315,21 @@ fun sheetLayout(
             MenuItemIds.SHARE -> listOf(MenuEntry.Share)
             MenuItemIds.INFO -> listOf(MenuEntry.Info)
             MenuItemIds.GENIUS -> listOf(MenuEntry.Genius)
-            // Another app item is one of the context's extras (the player's Lyrics timing); a pair
-            // (pin / unpin a saved queue) shows the half that applies.
+            // Add / Remove from library: the app doesn't know what the library holds, so both
+            // halves the core offers are rows (as before), not a guess that hides one.
+            ActionIds.ADD_TO_LIBRARY -> item.actions.filter { it.enabled }.map { MenuEntry.Action(it) }
+            // A pair the core enables both halves of is one row: the saved queue's pin by its state.
+            ActionIds.PIN_SAVED_QUEUE -> listOfNotNull(
+                when (queuePinned) {
+                    true -> action(ActionIds.UNPIN_SAVED_QUEUE)
+                    false -> action(ActionIds.PIN_SAVED_QUEUE)
+                    null -> null
+                } ?: item.actions.firstOrNull { it.enabled } ?: item.actions.firstOrNull(),
+            ).map { MenuEntry.Action(it) }
+            // Another app item is one of the context's extras (the player's Lyrics timing); any
+            // other row shows its first enabled action.
             else -> if (item.actions.isEmpty()) extras.filter { it.item == item.id }.map { MenuEntry.Extra(it) }
-                else item.actions.filter { it.enabled }.ifEmpty { item.actions.take(1) }.map { MenuEntry.Action(it) }
+                else listOfNotNull(item.actions.firstOrNull { it.enabled } ?: item.actions.firstOrNull()).map { MenuEntry.Action(it) }
         }
         when {
             item.section == MenuSection.Danger -> danger += entries
@@ -410,8 +423,11 @@ fun MenuSheet(
         scope.launch { sheetState.hide() }.invokeOnCompletion { after(); onDismiss() }
     }
     val artistChoices = subject.artistChoices
-    val layout = remember(menu, extras, onGoToAlbum != null, onGoToArtist != null && artistChoices.isNotEmpty(), snoozed) {
-        sheetLayout(menu, extras, canGoToAlbum = onGoToAlbum != null, canGoToArtist = onGoToArtist != null && artistChoices.isNotEmpty(), snoozed = snoozed)
+    // A saved queue's menu pins or unpins it by whether it is pinned.
+    val savedQueues by client.savedQueues.collectAsStateWithLifecycle()
+    val queuePinned = (target as? ActionTarget.SavedQueue)?.let { t -> savedQueues.firstOrNull { it.id == t.data.id }?.pinned }
+    val layout = remember(menu, extras, onGoToAlbum != null, onGoToArtist != null && artistChoices.isNotEmpty(), snoozed, queuePinned) {
+        sheetLayout(menu, extras, canGoToAlbum = onGoToAlbum != null, canGoToArtist = onGoToArtist != null && artistChoices.isNotEmpty(), snoozed = snoozed, queuePinned = queuePinned)
     }
     val entries = layout.primary + layout.more + layout.danger
     var expanded by rememberSaveable { mutableStateOf(embedded) }
@@ -856,6 +872,7 @@ private fun HeaderSubtitle(subtitle: String, subject: MenuSubject, onArtist: (()
     val style = MaterialTheme.typography.bodyMedium
     val color = MaterialTheme.colorScheme.onSurfaceVariant
     val (artist, album) = headerLinkRanges(subtitle, subject, onArtist != null, onAlbum != null)
+    val lineHeight = with(androidx.compose.ui.platform.LocalDensity.current) { style.lineHeight.roundToPx() }
     if (artist == null && album == null) {
         Text(subtitle, style = style, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
         return
@@ -880,14 +897,25 @@ private fun HeaderSubtitle(subtitle: String, subject: MenuSubject, onArtist: (()
                 p.text, style = style, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false,
                 modifier = if (open == null) Modifier else Modifier
                     .weight(1f, fill = false)
-                    .heightIn(min = 24.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .clickable(onClickLabel = p.label) { open() }
+                    .touchTargetOverLine(lineHeight)
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable(onClickLabel = p.label, role = Role.Button) { open() }
                     .wrapContentHeight()
                     .testTag(p.tag ?: ""),
             )
         }
     }
+}
+
+/**
+ * A 48dp-tall (and at least 48dp-wide) touch target for a link in a line of text that takes only
+ * the line's [lineHeight] in the layout: the target spills over the lines above and below (which
+ * aren't tappable), so the header keeps its height.
+ */
+private fun Modifier.touchTargetOverLine(lineHeight: Int): Modifier = layout { measurable, constraints ->
+    val target = 48.dp.roundToPx()
+    val p = measurable.measure(constraints.copy(minWidth = minOf(target, constraints.maxWidth), minHeight = target, maxHeight = maxOf(target, constraints.maxHeight)))
+    layout(p.width, lineHeight) { p.place(0, (lineHeight - p.height) / 2) }
 }
 
 /** A piece of the header's subtitle; [open] set for a link. */

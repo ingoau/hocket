@@ -71,7 +71,10 @@ internal object FakeMenu {
 
     private fun tierOf(s: String?): MenuTier? = MenuTier.entries.firstOrNull { it.string == s }
 
-    /** `menu.overrides`, skipping what the core would refuse. */
+    /**
+     * `menu.overrides`, skipping a row this build doesn't know or a tier it doesn't allow there (a
+     * newer device's): they stay in the stored map ([withOverride] keeps them).
+     */
     fun parseOverrides(v: JsonObject?): Map<String, MenuTier> = v.orEmpty().mapNotNull { (id, t) ->
         val d = DEFS.firstOrNull { it.id == id } ?: return@mapNotNull null
         val tier = tierOf((t as? JsonPrimitive)?.contentOrNull) ?: return@mapNotNull null
@@ -123,7 +126,8 @@ internal object FakeMenu {
             Triple(d, actions, tier)
         }
         fun foldable(d: Def) = d.section != Play && d.section != Rate && d.section != Danger
-        val folded = BooleanArray(rows.size)
+        // A row the user put under More stays there, however short the menu.
+        val folded = BooleanArray(rows.size) { foldable(rows[it].first) && rows[it].third == MenuTier.More }
         if (rows.count { foldable(it.first) } + extras > NO_FOLD_MAX) {
             val pinned = rows.count { foldable(it.first) && it.third == MenuTier.Shown }
             var room = (SHORT_LIST_MAX - extras - pinned).coerceAtLeast(0)
@@ -133,10 +137,14 @@ internal object FakeMenu {
             rows.indices.filter { foldable(rows[it].first) && rows[it].third == null && !rows[it].first.folded }
                 .sortedByDescending { rows[it].first.priority }
                 .forEach { i -> if (room > 0) room-- else folded[i] = true }
-            if (folded.count { it } == 1) folded.fill(false)
+            // A More holding one row is a tap for nothing, unless the user put it there.
+            folded.indices.filter { folded[it] }.singleOrNull()?.let { i -> if (rows[i].third != MenuTier.More) folded[i] = false }
         }
         return MenuLayout(rows.mapIndexed { i, (d, actions, _) -> MenuItem(d.id, d.section, folded[i], actions) })
     }
+
+    /** As the core's `overrides_valid`: the shape only, an object of "shown" | "more" | "hidden". */
+    fun shapeValid(json: String): Boolean = parse(json)?.values?.all { v -> tierOf((v as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull) != null } == true
 
     fun parse(json: String?): JsonObject? = runCatching { app.hocket.core.HocketJson.json.parseToJsonElement(json ?: "{}") as? JsonObject }.getOrNull()
 }

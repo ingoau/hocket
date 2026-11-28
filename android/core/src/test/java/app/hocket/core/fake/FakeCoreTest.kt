@@ -431,6 +431,29 @@ class FakeCoreTest {
         assertTrue(menu().any { it.id == MenuItemIds.RATING })
     }
 
+    @Test
+    fun aNewerDevicesMenuOverridesAreKeptAndSkipped() {
+        assertTrue(FakeMenu.shapeValid("""{"genius":"shown","love":"hidden"}"""))
+        assertFalse(FakeMenu.shapeValid("[]"))
+        assertFalse(FakeMenu.shapeValid("""{"genius":"folded"}"""))
+        val newer = """{"nope":"shown","rating":"more","play":"hidden","genius":"shown"}"""
+        assertTrue(FakeMenu.shapeValid(newer))
+        assertEquals(mapOf("genius" to MenuTier.Shown), FakeMenu.parseOverrides(FakeMenu.parse(newer)))
+        assertEquals(FakeMenu.parse("""{"nope":"shown","rating":"more","play":"hidden"}"""), FakeMenu.withOverride(FakeMenu.parse(newer), "genius", MenuTier.More))
+    }
+
+    @Test
+    fun underMoreStaysInShortMenusAndAlone() = runTest {
+        val core = core()
+        val songs = Commands.tracks(listOf(TrackRef("fake-server", "t1"), TrackRef("fake-server", "t2")))
+        // As stored (SetMenuItem drops an entry equal to the default).
+        core.dispatchAndWait(Commands.setSetting(SettingKeys.MENU_OVERRIDES, """{"snooze":"more"}"""))
+        val items = (core.query(Queries.menu(songs, appItems = listOf(MenuItemIds.SHARE))) as QueryResult.Menu).data.items
+            .filter { it.section != MenuSection.Play && it.section != MenuSection.Rate && it.section != MenuSection.Danger }
+        assertEquals(listOf("addToPlaylist", "stash", "download", "share"), items.filter { !it.folded }.map { it.id })
+        assertEquals(listOf("snooze"), items.filter { it.folded }.map { it.id })
+    }
+
     private fun <T> kotlinx.coroutines.test.TestScope.async(block: suspend () -> T): kotlinx.coroutines.Deferred<T> =
         this.async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { block() }
 

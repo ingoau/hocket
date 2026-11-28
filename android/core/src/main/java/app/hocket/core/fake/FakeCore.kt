@@ -1633,6 +1633,10 @@ class FakeCore(
             emit(Event.Error(EventErrorInner(ErrorKind.Internal, "unknown setting '$key'", null)))
             return
         }
+        if (key == SettingKeys.MENU_OVERRIDES && !FakeMenu.shapeValid(value)) {
+            emit(Event.Error(EventErrorInner(ErrorKind.Internal, "menu.overrides: expected an object of shown, more or hidden", null)))
+            return
+        }
         settings[key] = Setting(key, value, existing.scope, now())
         emit(Event.SettingChanged(EventSettingChangedInner(settings[key]!!)))
         if (key.startsWith("battery.")) refreshBatterySaver()
