@@ -483,7 +483,7 @@ private fun QuickButton(a: ActionDescriptor, shape: Shape, face: Pair<String, Im
  * More / Show less, with expand and collapse actions for accessibility.
  */
 @Composable
-private fun DrawerHandle(open: Boolean, canOpen: Boolean, onToggle: () -> Unit) {
+internal fun DrawerHandle(open: Boolean, canOpen: Boolean, tag: String = "selection.handle", onToggle: () -> Unit) {
     val label = stringResource(if (!canOpen) R.string.menu_handle else if (open) R.string.menu_show_less else R.string.menu_more)
     val toggle by rememberUpdatedState(onToggle)
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -497,7 +497,7 @@ private fun DrawerHandle(open: Boolean, canOpen: Boolean, onToggle: () -> Unit) 
                     contentDescription = label
                     if (canOpen) { if (open) collapse { toggle(); true } else expand { toggle(); true } }
                 }
-                .testTag("selection.handle"),
+                .testTag(tag),
             contentAlignment = Alignment.Center,
         ) {
             Box(Modifier.size(width = 32.dp, height = 4.dp).clip(RoundedCornerShape(2.dp)).background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)))

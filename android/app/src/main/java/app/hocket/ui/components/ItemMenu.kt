@@ -353,6 +353,8 @@ fun MenuSheet(
     showPlay: Boolean = true,
     showHeader: Boolean = true,
     onPlay: ((ActionDescriptor) -> Unit)? = null,
+    /** On the play group (the stash drawer measures where it ends, to rest with it at its foot). */
+    playGroupModifier: Modifier = Modifier,
     /** Embedded: a change sends the menu back to its first page (the host has closed it to a peek). */
     resetKey: Any? = null,
 ) {
@@ -637,7 +639,7 @@ fun MenuSheet(
             }
             MenuPage.Main -> Column {
             extraTop?.let { it(); androidx.compose.foundation.layout.Spacer(Modifier.height(8.dp)) }
-            if (showPlay && layout.play.isNotEmpty()) PlayGroup(layout.play, tag) { a -> if (onPlay != null) { onPlay(a); hideThen(onRan) } else runAndClose(a) }
+            if (showPlay && layout.play.isNotEmpty()) PlayGroup(layout.play, tag, playGroupModifier) { a -> if (onPlay != null) { onPlay(a); hideThen(onRan) } else runAndClose(a) }
             if (layout.rating) {
                 RatingRow(rating) { stars ->
                     rating = stars
@@ -840,10 +842,10 @@ private fun LoveButton(state: Tick, lovedCount: Int, total: Int, enabled: Boolea
  * Play later below, as one connected group: rounded outer corners, tight inner ones, Play filled and wider.
  */
 @Composable
-private fun PlayGroup(play: List<ActionDescriptor>, tag: String, onRun: (ActionDescriptor) -> Unit) {
+private fun PlayGroup(play: List<ActionDescriptor>, tag: String, modifier: Modifier = Modifier, onRun: (ActionDescriptor) -> Unit) {
     val groupLabel = stringResource(R.string.menu_play_group)
     val rows = play.partition { it.id == ActionIds.PLAY || it.id == ActionIds.PLAY_SHUFFLED }.toList().filter { it.isNotEmpty() }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).semantics { isTraversalGroup = true; contentDescription = groupLabel }, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+    Column(modifier.fillMaxWidth().padding(horizontal = 16.dp).semantics { isTraversalGroup = true; contentDescription = groupLabel }, verticalArrangement = Arrangement.spacedBy(3.dp)) {
         rows.forEachIndexed { r, row ->
             val top = r == 0
             val bottom = r == rows.lastIndex

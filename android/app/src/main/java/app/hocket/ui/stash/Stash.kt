@@ -1,5 +1,44 @@
 package app.hocket.ui.stash
 
+import androidx.activity.compose.PredictiveBackHandler
+import androidx.compose.animation.core.animate
+import androidx.compose.foundation.MutatePriority
+import androidx.compose.foundation.gestures.AnchoredDraggableDefaults
+import androidx.compose.foundation.gestures.AnchoredDraggableState
+import androidx.compose.foundation.gestures.DraggableAnchors
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.anchoredDraggable
+import androidx.compose.foundation.gestures.animateTo
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.Velocity
+import app.hocket.ui.components.DrawerHandle
+import app.hocket.ui.theme.Motion
+import kotlin.math.abs
+import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
@@ -251,28 +290,59 @@ object StashChipDefaults {
  * it too. Clear empties it (the core's toast has an Undo).
  */
 @Composable
-fun StashSheet(onDismiss: () -> Unit, navigator: DetailNavigator? = LocalDetailNavigator.current) {
+fun StashSheet(onDismiss: () -> Unit, modifier: Modifier = Modifier, navigator: DetailNavigator? = LocalDetailNavigator.current) {
     val client = LocalCoreClient.current
     val items by client.stash.collectAsStateWithLifecycle()
     val haptics = LocalHapticFeedback.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    // The sheet is a window over the shell's snackbars: they (and their Undo) show in it instead.
+    val density = LocalDensity.current
+    val state = remember { AnchoredDraggableState(StashAt.Hidden) }
+    val spec = Motion.sheet
+    // The drawer is over the shell's snackbars: they (and their Undo) show over it instead.
     val sheetSnackbars = remember { SnackbarHostState() }
     val snackbar = remember(scope) { AppSnackbar(sheetSnackbars, scope) }
     DisposableEffect(Unit) {
         app.hocket.ui.components.SnackbarRedirect.host = sheetSnackbars
         onDispose { if (app.hocket.ui.components.SnackbarRedirect.host === sheetSnackbars) app.hocket.ui.components.SnackbarRedirect.host = null }
     }
-    fun close() { scope.launch { sheetState.hide() }.invokeOnCompletion { onDismiss() } }
+    // Closing: slides off the bottom edge (overriding a finger still on it), then gone.
+    var closing by remember { mutableStateOf(false) }
+    fun close() {
+        if (closing) return
+        closing = true
+        scope.launch {
+            if (state.anchors.hasPositionFor(StashAt.Hidden)) state.anchoredDrag(StashAt.Hidden, MutatePriority.PreventUserInput) { anchors, target ->
+                val from = state.offset.takeUnless { it.isNaN() } ?: anchors.positionOf(target)
+                animate(from, anchors.positionOf(target), animationSpec = spec) { v, velocity -> dragTo(v, velocity) }
+            }
+        }.invokeOnCompletion { onDismiss() }
+    }
+    fun settleTo(value: StashAt) { scope.launch { state.animateTo(value, spec) } }
+    // Swiped off the bottom edge: closed.
+    LaunchedEffect(state) {
+        var risen = false
+        snapshotFlow { state.settledValue }.collect { v ->
+            if (v != StashAt.Hidden) risen = true
+            else if (risen && !closing) { closing = true; onDismiss() }
+        }
+    }
+    val hasPeek by remember { derivedStateOf { state.anchors.hasPositionFor(StashAt.Peek) } }
+    // Back: from open to the rest at the buttons (when it has one), else closed. (A sub-page of the
+    // menu takes back first: its handler is added after this one.)
+    PredictiveBackHandler { progress ->
+        try {
+            progress.collect { }
+            if (state.targetValue == StashAt.Open && hasPeek) settleTo(StashAt.Peek) else close()
+        } catch (e: kotlinx.coroutines.CancellationException) { }
+    }
     var picked by remember { mutableStateOf(setOf<String>()) }
     // Emptied (here or on another device) after having songs: it slides away. (Restored before the
     // stash has arrived, it waits for it rather than closing at once.)
     var hadSongs by remember { mutableStateOf(false) }
     LaunchedEffect(items.isEmpty()) {
         if (items.isNotEmpty()) hadSongs = true
-        else if (hadSongs) { sheetState.hide(); onDismiss() }
+        else if (hadSongs) close()
     }
     val selection = items.filter { it.entryId in picked }
     val acting = selection.ifEmpty { items }
@@ -326,11 +396,115 @@ fun StashSheet(onDismiss: () -> Unit, navigator: DetailNavigator? = LocalDetailN
             )
         }
     }
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState, modifier = Modifier.testTag("stash.sheet")) {
-        CompositionLocalProvider(LocalAppSnackbar provides snackbar, LocalDetailNavigator provides songNavigator) {
-        Box {
-        Column(Modifier.navigationBarsPadding()) {
+    val listState = rememberLazyListState()
+    val velocityThreshold = with(density) { 125.dp.toPx() }
+    /** Settles a release of [velocity] (px/s, down positive): a flick goes on to the next anchor its way, else the nearest. */
+    suspend fun settle(velocity: Float) {
+        val at = state.offset
+        if (at.isNaN() || state.isAnimationRunning || closing) return
+        val anchors = StashAt.entries.filter { state.anchors.hasPositionFor(it) }.map { it to state.anchors.positionOf(it) }
+        if (anchors.any { abs(it.second - at) < 0.5f }) return
+        val target = when {
+            velocity > velocityThreshold -> anchors.filter { it.second > at }.minByOrNull { it.second }
+            velocity < -velocityThreshold -> anchors.filter { it.second < at }.maxByOrNull { it.second }
+            else -> null
+        } ?: anchors.minByOrNull { abs(it.second - at) } ?: return
+        state.animateTo(target.first, spec)
+    }
+    fun openAt() = if (state.anchors.hasPositionFor(StashAt.Open)) state.anchors.positionOf(StashAt.Open) else Float.NaN
+    // The list: dragging up opens the drawer before the list scrolls; dragging down past the list's
+    // top brings the drawer down with it (to its rest at the buttons, or away).
+    val followDrag = remember(state) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                val open = openAt()
+                return if (source == NestedScrollSource.UserInput && available.y < 0f && !open.isNaN() && state.offset > open) Offset(0f, state.dispatchRawDelta(available.y)) else Offset.Zero
+            }
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset =
+                if (source == NestedScrollSource.UserInput && available.y > 0f) Offset(0f, state.dispatchRawDelta(available.y)) else Offset.Zero
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                val open = openAt()
+                return if (available.y < 0f && !open.isNaN() && state.offset > open + 0.5f) { settle(available.y); available } else Velocity.Zero
+            }
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity { settle(available.y); return available }
+        }
+    }
+    val fling = AnchoredDraggableDefaults.flingBehavior(state, positionalThreshold = { d -> d * 0.5f }, animationSpec = spec)
+    val closeLabel = stringResource(R.string.action_close)
+    CompositionLocalProvider(LocalAppSnackbar provides snackbar, LocalDetailNavigator provides songNavigator) {
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        val pageH = constraints.maxHeight
+        val topRoom = WindowInsets.statusBars.getTop(density) + with(density) { 12.dp.roundToPx() }
+        val navBottom = WindowInsets.navigationBars.getBottom(density)
+        val margin = with(density) { 16.dp.roundToPx() }
+        var sheetH by remember { mutableIntStateOf(0) }
+        // How far down the drawer the play group ends, with the list at its top (px; -1 not yet
+        // known, 0 none: the menu's actions never came).
+        var playFoot by remember { mutableIntStateOf(-1) }
+        val sheetAt = remember { arrayOfNulls<LayoutCoordinates>(1) }
+        LaunchedEffect(Unit) { delay(1_000); if (playFoot < 0) playFoot = 0 }
+        // Where it rests: open (as tall as it all is, up to under the status bar), and, when the songs
+        // and buttons fit with more menu below, at the buttons: they sit at the screen's foot and the
+        // rest of the menu is a drag (or the handle) away. A long stash just opens, at its top.
+        LaunchedEffect(pageH, sheetH, playFoot, navBottom) {
+            if (sheetH <= 0) return@LaunchedEffect
+            val full = sheetH >= pageH - topRoom - 1
+            if (playFoot < 0 && !full) return@LaunchedEffect
+            val open = (pageH - sheetH).toFloat()
+            val peek = (pageH - playFoot - margin - navBottom).toFloat()
+            val withPeek = playFoot > 0 && peek - open > 1f
+            state.updateAnchors(DraggableAnchors {
+                StashAt.Hidden at pageH.toFloat()
+                if (withPeek) StashAt.Peek at peek
+                StashAt.Open at open
+            }, state.targetValue.takeIf { it != StashAt.Peek || withPeek } ?: StashAt.Open)
+        }
+        // In, once it knows where it rests.
+        LaunchedEffect(state) {
+            snapshotFlow { state.anchors.hasPositionFor(StashAt.Open) }.first { it }
+            if (!closing) state.animateTo(if (state.anchors.hasPositionFor(StashAt.Peek)) StashAt.Peek else StashAt.Open, spec)
+        }
+        /** How far in the drawer is, 0 hidden to 1 at its first rest. */
+        fun shown(): Float {
+            val at = state.offset
+            if (at.isNaN() || pageH <= 0) return 0f
+            val rest = StashAt.entries.filter { it != StashAt.Hidden && state.anchors.hasPositionFor(it) }.maxOfOrNull { state.anchors.positionOf(it) } ?: return 0f
+            if (pageH - rest < 1f) return 1f
+            return ((pageH - at) / (pageH - rest)).coerceIn(0f, 1f)
+        }
+        // The scrim: tapping it closes the stash.
+        Box(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer { alpha = shown() }
+                .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.32f))
+                .pointerInput(Unit) { detectTapGestures { close() } }
+                .semantics { contentDescription = closeLabel; onClick { close(); true } }
+                .testTag("stash.scrim"),
+        )
+        Surface(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .widthIn(max = 640.dp)
+                .fillMaxWidth()
+                .heightIn(max = with(density) { (pageH - topRoom).coerceAtLeast(0).toDp() })
+                // Until it is laid out and anchored, below the page.
+                .offset { IntOffset(0, state.offset.takeUnless { it.isNaN() }?.roundToInt() ?: pageH) }
+                .onSizeChanged { sheetH = it.height }
+                .onGloballyPositioned { sheetAt[0] = it }
+                .nestedScroll(followDrag)
+                .anchoredDraggable(state, Orientation.Vertical, enabled = !closing, flingBehavior = fling)
+                .testTag("stash.sheet"),
+            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            shadowElevation = 8.dp,
+        ) {
+        Column {
+            val isOpen = state.targetValue == StashAt.Open
+            DrawerHandle(isOpen, hasPeek, tag = "stash.sheetHandle") { settleTo(if (isOpen) StashAt.Peek else StashAt.Open) }
             StashList(
+                state = listState,
+                bottomPadding = 16.dp + with(density) { navBottom.toDp() },
                 header = {
                 Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 12.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -384,13 +558,31 @@ fun StashSheet(onDismiss: () -> Unit, navigator: DetailNavigator? = LocalDetailN
                         embedded = true,
                         showHeader = false,
                         onPlay = ::playAction,
+                        playGroupModifier = Modifier.onGloballyPositioned { c ->
+                            val sheet = sheetAt[0]
+                            if (sheet != null && sheet.isAttached && c.isAttached && listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0) {
+                                playFoot = (sheet.localPositionOf(c, Offset.Zero).y + c.size.height).roundToInt()
+                            }
+                        },
                     )
                 }
             }
         }
-        SnackbarHost(sheetSnackbars, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(8.dp))
         }
-        }
+        // Its snackbars ride just above the drawer, so they never cover the buttons at its foot
+        // (under the status bar when it is open all the way).
+        var snackH by remember { mutableIntStateOf(0) }
+        SnackbarHost(
+            sheetSnackbars,
+            Modifier
+                .align(Alignment.TopCenter)
+                .widthIn(max = 640.dp)
+                .offset { IntOffset(0, ((state.offset.takeUnless { it.isNaN() } ?: pageH.toFloat()).roundToInt() - snackH).coerceAtLeast(topRoom - margin)) }
+                .onSizeChanged { snackH = it.height }
+                .padding(8.dp),
+        )
+    }
+    }
         songInfo?.let { t ->
             ModalBottomSheet(onDismissRequest = { songInfo = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), modifier = Modifier.testTag("stash.menu.infoSheet")) {
                 app.hocket.ui.player.PlayerAbout(
@@ -400,11 +592,12 @@ fun StashSheet(onDismiss: () -> Unit, navigator: DetailNavigator? = LocalDetailN
                 )
             }
         }
-    }
 }
 
 @Composable
 private fun StashList(
+    state: LazyListState,
+    bottomPadding: Dp,
     items: List<StashItem>,
     picked: Set<String>,
     onToggle: (String) -> Unit,
@@ -421,7 +614,7 @@ private fun StashList(
     var dragging by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(items, dragging) { if (dragging == null) shown = items }
     val current by rememberUpdatedState(items)
-    val listState = rememberLazyListState()
+    val listState = state
     val reorder = rememberReorderableLazyListState(listState) { from, to ->
         // Only song rows move (the menu after them is no row of the list).
         val a = shown.indexOfFirst { it.entryId == from.key }
@@ -435,7 +628,7 @@ private fun StashList(
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp).testTag("stash.list"),
-        contentPadding = PaddingValues(bottom = 16.dp),
+        contentPadding = PaddingValues(bottom = bottomPadding),
     ) {
         item(key = "stash.header") { header() }
         itemsIndexed(shown, key = { _, it -> it.entryId }) { index, item ->
@@ -496,3 +689,6 @@ private fun StashList(
         item(key = "stash.menu") { footer() }
     }
 }
+
+/** Where the stash drawer rests: below the screen's edge, with the play buttons at its foot, or open. */
+private enum class StashAt { Hidden, Peek, Open }

@@ -150,18 +150,27 @@ class StashTest {
 
     @Test
     @Config(qualifiers = "w411dp-h960dp")
-    fun aShortStashSheetIsAsTallAsItsSongsAndMenu() {
+    fun aShortStashRestsWithItsButtonsAtTheFootAndOpensToTheRest() {
         val core = start()
         stashSome(core, 2)
         compose.onNodeWithTag("stash.chip").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithTag("stash.menu.action.play", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
         compose.waitForIdle()
-        // Two songs and the menu fit: the sheet stops short of the top, the menu runs to its foot.
-        val list = compose.onNodeWithTag("stash.list").getBoundsInRoot()
-        assertTrue("list ${list.top}..${list.bottom}", list.top > 80.dp)
+        val screen = compose.onAllNodes(androidx.compose.ui.test.isRoot())[0].getBoundsInRoot()
+        // At rest: the songs, then the play buttons at the screen's foot; the rest of the menu below it.
         compose.onAllNodesWithTag("stash.row").assertCountEquals(2)
         compose.onNodeWithTag("stash.summary").assertIsDisplayed()
-        compose.onNodeWithTag("stash.menu.action.play", useUnmergedTree = true).assertIsDisplayed()
+        val playGroup = compose.onNodeWithTag("stash.menu.action.playLater", useUnmergedTree = true).getBoundsInRoot()
+        assertTrue("buttons end ${playGroup.bottom} on a ${screen.bottom} screen", playGroup.bottom <= screen.bottom - 8.dp && playGroup.bottom >= screen.bottom - 40.dp)
+        val sheetTop = compose.onNodeWithTag("stash.sheet").getBoundsInRoot().top
+        assertTrue("sheet top $sheetTop", sheetTop > 80.dp)
+        compose.onNodeWithTag("stash.menu.action.addToPlaylist", useUnmergedTree = true).assertIsNotDisplayed()
+        // The handle opens it the rest of the way: as tall as it all is, the menu's end in view.
+        compose.onNodeWithTag("stash.sheetHandle").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("stash.menu.action.addToPlaylist", useUnmergedTree = true).assertIsDisplayed()
+        val openTop = compose.onNodeWithTag("stash.sheet").getBoundsInRoot().top
+        assertTrue("open top $openTop above rest top $sheetTop", openTop < sheetTop)
     }
 
     @Test

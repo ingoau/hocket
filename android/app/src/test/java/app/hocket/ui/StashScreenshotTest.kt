@@ -73,6 +73,14 @@ class StashScreenshotTest {
         compose.waitUntil(5_000) { exists("stash.row") }
         settle()
         shot(dir, "stash-0-short")
+        compose.onNodeWithTag("stash.menu.action.playNext", useUnmergedTree = true).performSemanticsAction(SemanticsActions.OnClick)
+        compose.mainClock.advanceTimeBy(700)
+        compose.waitForIdle()
+        shot(dir, "stash-0a-queued")
+        settle(); settle(); settle(); settle()
+        record(dir, "rec-0-expand", frames = 30) { compose.onNodeWithTag("stash.sheetHandle").performSemanticsAction(SemanticsActions.OnClick) }
+        settle()
+        shot(dir, "stash-0b-short-open")
     }
 
     @Test
