@@ -258,7 +258,7 @@
 .page-stats .bar-labels { gap: 4px; font-size: var(--fs-md); margin-top: 8px; color: var(--fg-muted); }
 /* Top tracks, albums and artists, in three columns. */
 .page-stats .stat-tops { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; align-items: start; }
-.page-stats .stat-tops-title { margin: 0 0 12px; font-size: 18px; font-weight: 700; }
+.page-stats .stat-tops-title { margin: 0 0 12px var(--page-title-inset); font-size: 18px; font-weight: 700; }
 .page-stats .stat-rows { display: flex; flex-direction: column; gap: 2px; }
 .page-stats .stat-row { all: unset; box-sizing: border-box; width: 100%; display: flex; align-items: center; gap: 14px; min-height: 54px; padding: 6px 14px 6px 10px; background: var(--surface-tonal-sunken); border-radius: var(--shape-xs); }
 .page-stats .stat-rows > li:first-child, .page-stats .stat-rows > li:first-child > .stat-row { border-top-left-radius: var(--shape-lg); border-top-right-radius: var(--shape-lg); }
@@ -649,8 +649,9 @@ button.m3-switch { border: 0; padding: 0; background: none; }
 .dl-header:has(.dl-back) .dl-summary { grid-column: 2; }
 .dl-summary { margin: 0; font-size: 16px; color: var(--fg-muted); }
 .downloads-body { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 24px; align-items: start; }
-.dl-count { margin: 4px 0 8px; font-size: 16px; font-weight: 700; }
-.dl-waiting { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; }
+/* Headings line up with the page title (the table's cells and the cards keep the gutter). */
+.dl-count { margin: 4px 0 8px var(--page-title-inset); font-size: 16px; font-weight: 700; }
+.dl-waiting { display: flex; align-items: center; gap: 6px; margin: 0 0 8px var(--page-title-inset); }
 .dl-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 14px; }
 .dl-table th { text-align: left; font-size: var(--fs-md); font-weight: 500; color: var(--fg-muted); padding: 8px 12px; border-bottom: 1px solid var(--border); }
 .dl-table td { padding: 8px 12px; vertical-align: middle; }
@@ -753,6 +754,10 @@ button.m3-switch { border: 0; padding: 0; background: none; }
 .filter-row:hover .filter-hover, .filter-row:focus-within .filter-hover, .filter-row.selected .filter-hover { opacity: 1; }
 @media (hover: none) { .filter-hover { opacity: 1; } }
 .filters-detail { min-height: 0; overflow-y: auto; }
+/* A medium pane (the side panel open): a narrower list leaves the editor room for the filter's name. */
+@container (max-width: 960px) {
+  .filters-split { grid-template-columns: 280px minmax(0, 1fr); }
+}
 @container (max-width: 780px) {
   /* (The container can't restyle itself: its grid becomes the one scroller.) */
   .filters-split { display: block; overflow-y: auto; }

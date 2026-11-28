@@ -30,6 +30,9 @@
 .view-header .count-chip:empty { display: none; }
 .view-header .actions .btn:not(.icon) { height: var(--btn-h-lg); padding: 0 20px 0 16px; font-size: var(--fs-md); font-weight: 600; }
 .view-header .actions .btn.tonal { color: var(--fg); }
+/* The source chips (with a second account) sit at the header's end, centred on the title like its
+   actions; not padded as they are under Search's heading. */
+.view-header .source-chips { padding: 0; align-self: center; }
 
 /* ---- Library lists: Pinned, Recent, then the whole list ------------------------
    Each group is a titled single row (tiles, genre cards or compact song rows) that scrolls sideways
@@ -55,8 +58,15 @@
 .group-row .tile { width: 148px; flex: 0 0 auto; scroll-snap-align: start; }
 .genre-row { gap: 12px; }
 .genre-row > li { width: 200px; flex: 0 0 auto; scroll-snap-align: start; }
-.genre-row .genre-tile { width: 100%; min-height: 92px; }
+.genre-row .genre-tile { width: 100%; }
 .group-songs > li { flex: 0 0 auto; width: 260px; scroll-snap-align: start; }
+/* Over a grid (components/AlbumGrid.tsx, the Genres page) the groups' tiles take the grid's column
+   width and gap: Pinned and Recent line up with the columns below, every tile one size, and a row
+   shows whole tiles only, the next one starting just past the edge. */
+.sized-cols .list-groups { column-gap: var(--grid-gap); }
+.sized-cols .list-groups > .recent { flex-basis: calc(2 * var(--grid-col-w) + var(--grid-gap)); }
+.sized-cols :is(.group-row, .genre-row) { gap: var(--grid-gap); }
+.sized-cols :is(.group-row .tile, .genre-row > li) { width: var(--grid-col-w); }
 .group-song-main {
   width: 100%; display: flex; align-items: center; gap: 12px; height: 60px; padding: 0 10px 0 8px; border: 0; border-radius: var(--shape-md);
   background: var(--surface-tonal-sunken); color: var(--fg); text-align: left; font: inherit;
@@ -130,7 +140,7 @@
   width: 48px; height: 48px; right: 18px; top: calc(100cqw - 50px); border-radius: 50%;
   transform: scale(0.5) translateY(8px);
 }
-.tile:hover .play, .tile:focus-within .play { transform: none; }
+.tile:hover .play, .tile:is(:focus-visible, :has(:focus-visible)) .play { transform: none; }
 .tile .play:hover { box-shadow: var(--shadow); }
 .tile-badge { top: 14px !important; left: 14px !important; padding: 5px; }
 
@@ -288,6 +298,10 @@
   .genre-row { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
   .group-songs { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
   :is(.group-row .tile, .genre-row > li, .group-songs > li) { width: auto; }
+  /* Over a grid, each group takes the width and the grid's columns. */
+  .sized-cols .list-groups > * { flex-basis: 100%; }
+  .sized-cols :is(.group-row, .genre-row) { grid-template-columns: repeat(var(--grid-cols), minmax(0, 1fr)); }
+  .sized-cols :is(.group-row .tile, .genre-row > li) { width: auto; }
   .view-header .actions { margin-left: 0; }
   /* The carousels wrap into the same fluid grid as the library pages, so rows fill the width. */
   .home-section .scroller { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); margin: 0; padding: 0; }

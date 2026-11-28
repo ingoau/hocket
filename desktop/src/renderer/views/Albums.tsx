@@ -28,7 +28,7 @@ export function Albums({ artistId, genre, title }: { artistId?: string; genre?: 
     if (r.type !== "albums") throw new Error("bad result");
     return { items: r.data.items, total: r.data.total };
   }, [source, artistId, genre, sort, desc]);
-  const { rows, total, onNeedRange } = usePagedGrid<Album>(fetchPage, [source, artistId, genre, sort, desc], ALBUM_DEPS, 120);
+  const { rows, total, loaded, onNeedRange } = usePagedGrid<Album>(fetchPage, [source, artistId, genre, sort, desc], ALBUM_DEPS, 120);
   const items: (GridItem | undefined)[] = rows.map((a) => (a ? { id: a.id, title: a.name, subtitle: [a.artist, a.year].filter(Boolean).join(" · "), coverArt: a.coverArt, badge: a.offline === "downloaded" ? "download" : undefined } : undefined));
   const playAlbum = (id: string, label: string) => bridge().dispatch({ type: "playContext", data: { args: { context: { source: serverId, kind: { type: "album", data: { id } }, label, sort: "default", tracks: [] }, shuffle: false, saveOutgoing: true } } });
   const sorter = <SortMenu list="albums" value={order} onChange={(v) => { setOrder(v); saveListSort("albums", v); }} testId="albums-sort" />;
@@ -42,7 +42,7 @@ export function Albums({ artistId, genre, title }: { artistId?: string; genre?: 
         {library ? <SourceChips /> : null}
         {library ? null : <div className="actions">{sorter}</div>}
       </div>
-      <AlbumGrid items={items} total={total} scope={`albums:${artistId ?? ""}:${genre ?? ""}`} targetKind="albums" onOpen={(it) => navigate({ view: "album", id: it.id })} onPlay={(it) => playAlbum(it.id, it.title)} onNeedRange={onNeedRange} emptyMessage={t("albums.empty")} testId="albums-grid" label={title ?? t("albums.title")}
+      <AlbumGrid items={items} total={total} scope={`albums:${artistId ?? ""}:${genre ?? ""}`} targetKind="albums" onOpen={(it) => navigate({ view: "album", id: it.id })} onPlay={(it) => playAlbum(it.id, it.title)} onNeedRange={onNeedRange} emptyMessage={t("albums.empty")} loading={!loaded} testId="albums-grid" label={title ?? t("albums.title")}
         header={library ? <><AlbumGroups play={playAlbum} /><ListHeader id="albums-all" title={t("albums.all")} actions={sorter} className="list-all" /></> : undefined} />
     </div>
   );
