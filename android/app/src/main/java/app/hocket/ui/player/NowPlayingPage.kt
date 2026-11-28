@@ -1376,7 +1376,8 @@ internal fun deviceIcon(platform: Platform): ImageVector = when (platform) {
 }
 
 /**
- * The song's details (the old About mode) in a sheet, from a tap on the title: the rating, then
+ * The song's details (the old About mode) in a sheet, from a tap on the title or the artist line:
+ * the rating, then
  * what the library knows of the track. Album and artist rows go to their pages.
  */
 @Composable

@@ -95,9 +95,9 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * The song's details, the info sheet's content (from a tap on the player's title, or a song menu's
- * "Song info"): a header (the cover, the title, the artist and album, which go to their pages; with
- * several artists the artist string opens a menu of them), then three tabs as a connected button
+ * The song's details, the info sheet's content (from a tap on the player's title or artist line,
+ * or a song menu's "Song info"): a header (the cover, the title, the artist and album, which go to
+ * their pages; with several artists the artist string opens a menu of them), then three tabs as a connected button
  * group. Song: plays and last played, the rating (one adjustable control, tag `rating`), length,
  * track, year and genre as tiles, the album and each of the song's artists as links, the comment. About: what the server adds from Last.fm and MusicBrainz (the album's
  * notes, the artist's biography, similar songs and artists, the two sites). File: format, quality,
@@ -204,7 +204,7 @@ internal data class TrackArtist(val id: String?, val name: String)
  * list the one artist the summary names (its `artistId` and its artist string).
  */
 internal fun TrackSummary.trackArtists(): List<TrackArtist> =
-    artists?.filter { it.name.isNotBlank() }?.takeIf { it.isNotEmpty() }?.map { TrackArtist(it.id, it.name) }
+    artists?.filter { it.name.isNotBlank() }?.takeIf { it.isNotEmpty() }?.map { TrackArtist(it.id?.takeIf { id -> id.isNotBlank() }, it.name) }
         ?: listOfNotNull(artist?.takeIf { it.isNotBlank() }?.let { TrackArtist(artistId, it) })
 
 /**
@@ -214,13 +214,14 @@ internal fun TrackSummary.trackArtists(): List<TrackArtist> =
 @Composable
 private fun HeaderArtists(text: String, artists: List<TrackArtist>, onOpenArtist: ((String) -> Unit)?, modifier: Modifier = Modifier) {
     val linked = if (onOpenArtist == null) emptyList() else artists.filter { it.id != null }
-    var menu by remember { mutableStateOf(false) }
+    // Closed again with a new song (the header item outlives the track).
+    var menu by remember(artists) { mutableStateOf(false) }
     Box(modifier) {
         Text(text, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.heightIn(min = 36.dp).wrapContentHeight().then(when (linked.size) {
                 0 -> Modifier
                 1 -> Modifier.clickable(onClickLabel = stringResource(R.string.action_go_to_artist)) { onOpenArtist!!(linked[0].id!!) }
-                else -> Modifier.clickable(onClickLabel = stringResource(R.string.action_go_to_artist)) { menu = true }
+                else -> Modifier.clickable(onClickLabel = stringResource(R.string.player_about_choose_artist), role = Role.DropdownList) { menu = true }
             }).testTag("player.about.artist"))
         if (linked.size > 1) DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, shape = RoundedCornerShape(16.dp)) {
             linked.forEachIndexed { i, a ->
